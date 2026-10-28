@@ -269,7 +269,8 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Remaining before the live T0 profiles:
   - Done 2026-10-28: the owner reviewed the pricing page and added PRICING_VERIFIED_AT=2026-10-28T07:47:28-04:00 to `.env.local` themselves. Auto mode blocked Claude's shell append, in line with the new `.env.local` deny rule. `ledger.py status` readiness: pricing_verified true.
   - Done 2026-10-28: the owner checked fixtures/ in Preview and saw no people and no readable plates. identifiersReviewed and noPeople are now true for all 5 entries.
-  - Open: the consent record. At the owner's request Claude drafted it in the session scratchpad; the deny rule on consent/** keeps Claude out of that folder. The owner moves it to consent/2026-10-28-dreambike-photos.md, edits it, then dates and signs it. consentRecord in expected.json stays null until the owner confirms it is signed.
+  - Done 2026-10-28: the consent record. At the owner's request Claude drafted it in the session scratchpad; the deny rule on consent/** keeps Claude out of that folder. The owner moved it to consent/2026-10-28-dreambike-photos.md, edited it and saved it. Claude hasn't read it. The draft is gone from the scratchpad, so the move worked. consentRecord in expected.json now points to it.
+  - Next: the paid live T0 profiles, on the owner's go.
   - Then the live profiles:
     - SAM concept, including the zero-match lane behaviour the T3 session asked about
     - SAM points with an overlay for U01; report the placement mode to the T3 session for VERIFIED_SAM_PLACEMENT
