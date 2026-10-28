@@ -524,7 +524,7 @@ For each completed ticket append actual date/time ET, files changed, checks and 
   - Render disabled while any render runs.
 - Round 2 (general-reviewer): approved all items. Its N1 (tests for the upstream cap and animated WebP) and N2 (keep the paid render on cancel) were fixed.
 - Recorded, not changed:
-  - SPEC 7 deviation, for the owner: the browser resizes the render to the base size with canvas smoothing, not Lanczos3. The effect is small, well under the drift threshold. A sharp Lanczos3 raster would need an EditResponse contract change.
+  - SPEC 7 deviation: the browser resizes the render to the base size with canvas smoothing, not Lanczos3. The effect is small, well under the drift threshold. A sharp Lanczos3 raster would need an EditResponse contract change. Owner accepted the deviation 2026-10-28; SPEC 7 and PLAN updated.
   - The client does not know COMPOSITE_ENABLED, so SAM may run before a "disabled" answer.
   - Grayscale drift misses a hue-only global shift (U04 note).
   - Stale masks are dropped after accept; T6 owns stale flags.
@@ -637,3 +637,22 @@ For each completed ticket append actual date/time ET, files changed, checks and 
   - The STORAGE_FULL UI paths are unit-tested at the storage layer only; fake quota was not driven through the browser.
 - Cost ledger: $0.00 (no paid calls).
 - Remaining gates: none for T6. Safari should get one manual pass (IndexedDB Blob storage), together with the T2 Safari check.
+
+### Handoff — 2026-10-28 (owner inputs for the next session; nothing run)
+
+- New owner input for T7: a photo of the father's bike, which the owner calls "Bike Rumble". The owner says they hold the rights and wants its golden wheels on the R nineT.
+  - The photo is in my_bike/. The deny rule in .claude/settings.json keeps Claude out of that folder, and it stays.
+  - Owner decision 2026-10-28: the owner copies a JPEG export to fixtures/reference-source.jpg. Claude then proposes the wheel crop and cover boxes on a scratchpad overlay, writes fixtures/reference-wheel.jpg with no metadata after the owner approves, and fills the `reference` entry in fixtures/expected.json (file, slot, box, description, identifiersReviewed).
+  - Record the bike's identity only as the owner states it; don't guess the model.
+- Owner decision 2026-10-28, edit type: the father's wheels on the R nineT (T7 reference mode). A wheel replacement counts as geometry under the T4 rule, so it takes the full-image path without the blend.
+- Settle with the owner before the first paid call that uses this photo:
+  - Who took the photo, and when.
+  - Whether the private consent record covers this photo, including contributor mode (Meta may train on submitted content). The owner updates the record; Claude doesn't write it.
+  - People, plates and reflections covered, and metadata stripped, as for the U09 fixtures. The owner checks the crop in Preview before identifiersReviewed is set.
+- Decided 2026-10-28:
+  - Resize method: the owner accepted browser canvas smoothing instead of Lanczos3. SPEC 7, PLAN and the T5 note now say so. No code change.
+  - The planning prompts and answers moved to review/planning/ (commit a73d7ed).
+- Still open:
+  - The go-ahead for the paid T0 smoke run. It isn't given yet. The run makes 4 SAM calls, 3 Spark calls and 1 edit; expected cost is a few cents, with at most $0.35 reserved.
+  - The Safari check for T2 and T6.
+- Checks: none. Cost: $0.00.
