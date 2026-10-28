@@ -24,6 +24,8 @@
     "deny": [
       "Read(./.env)",
       "Edit(./.env)",
+      "Read(./.env.local)",
+      "Edit(./.env.local)",
       "Read(./consent/**)",
       "Read(./secrets/**)",
       "Edit(./.claude/settings.json)",
