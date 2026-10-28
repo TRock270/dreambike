@@ -22,6 +22,13 @@ const RULES = [
   { reviewer: 'security-reviewer', re: /^(src\/lib\/(contracts|errors)\.ts$|\.claude\/(agents\/|workflows\/)|package(-lock)?\.json$|vercel\.json$|vitest\.config\.ts$|eslint\.config\.mjs$|tests\/(http|deployment)[^/]*\.test\.ts$)/ },
   { reviewer: 'release-reviewer', re: /^(docs\/api-evidence\.md$|\.gitignore$|src\/components\/ModeBanner\.tsx$)|\.(png|jpe?g|webp|heic|svg|pdf|ttf|woff2?|mp4|mov)$/i },
   { reviewer: 'security-reviewer', re: /^src\/components\/(BudgetBanner|ErrorNotice|DemoBanner|ModeBanner)\.tsx$/ },
+  // Files added after the Codex review base: the paid-call wrapper, SSE parser,
+  // edit policy, part rules, project session and bike form.
+  // Paid-call spike scripts: their --dry-run short-circuit keeps the allowlisted smoke dry run free.
+  { reviewer: 'security-reviewer', re: /^(src\/lib\/server\/paid\.ts$|tests\/paid[^/]*\.test\.ts$|spike\/(run_all|responses_sam|responses_spark|images_edits|asr_transcribe|files)\.py$|spike\/requirements\.txt$)/ },
+  { reviewer: 'models-reviewer', re: /^(src\/lib\/server\/(paid|sse)\.ts$|src\/lib\/(editPolicy|queue)\.ts$|src\/lib\/browser\/(renderFlow|renderClient|sparkClient|segmentClient)\.ts$|src\/components\/InstructionPreview\.tsx$|tests\/(paid|renderflow|masks)[^/]*\.test\.ts$)/ },
+  { reviewer: 'imaging-reviewer', re: /^(src\/lib\/parts\.ts$|tests\/(partmap|renderflow)[^/]*\.test\.ts$)/ },
+  { reviewer: 'shop-reviewer', re: /^(src\/lib\/browser\/projectSession\.ts$|src\/lib\/bikeForm\.ts$|tests\/(projectsession|bikeform)[^/]*\.test\.ts$)/ },
 ]
 const MAX_REFUTES = 12
 

@@ -169,9 +169,41 @@ test('null fixer may have written files and must stop with diagnostics', async (
 test('fixers receive explicit ownership and report mode', async () => {
   const { calls } = await fg()
   const prompt = calls.find((c) => c.label.startsWith('fix ')).prompt
-  assert.ok(prompt.includes('create or edit only these'))
+  assert.ok(prompt.includes('Failing files you own'))
   assert.ok(prompt.includes('notFixed'))
 })
+// A test-file failure whose cause may be in the module under test.
+const testFailure = (failing, fixed) => {
+  let attempts = 0
+  return async (p, o) => {
+    if (o.label.startsWith('check')) return ++attempts === 1 ? { checks: [check('npm test', 'fail')], failures: [{ check: 'npm test', file: failing, message: 'expected 41650' }] } : { checks: [check()], failures: [] }
+    if (o.label.startsWith('fix ')) return { filesChanged: fixed, fixed: ['math'], notFixed: [] }
+  }
+}
+test('a fixer may fix the module under test in its own domain', async () => {
+  const { result, calls } = await fg(testFailure('tests/quote.test.ts', ['src/lib/quote.ts']))
+  assert.equal(result.status, 'green')
+  assert.ok(calls.some((c) => c.label === 'review fixes' && c.prompt.includes('src/lib/quote.ts')))
+})
+test('general-builder may edit its located failing file', async () => {
+  assert.equal((await fg(testFailure('tests/contracts.test.ts', ['tests/contracts.test.ts']))).result.status, 'green')
+})
+for (const [failing, edited] of [
+  ['tests/quote.test.ts', 'src/lib/server/budget.ts'], // another domain
+  ['tests/quote.test.ts', 'package.json'],
+  ['tests/quote.test.ts', 'vitest.config.ts'],
+  ['tests/quote.test.ts', '.claude/workflows/build-ticket.js'],
+  ['tests/paid.test.ts', 'budget/prices.json'], // own-domain data, owner-reviewed prices
+  ['tests/paid.test.ts', 'budget/reserve.lua'],
+  ['tests/edit.test.ts', 'prompts/schemas/edit_instruction_v1.json'],
+  ['tests/edit.test.ts', 'spike/run_all.py'], // paid-call script
+  ['tests/contracts.test.ts', 'src/middleware.ts'], // general-builder fallback owns nothing extra
+  ['tests/contracts.test.ts', 'spike/requirements.txt'],
+]) {
+  test('fixing ' + failing + ' by editing ' + edited + ' needs the lead', async () => {
+    assert.equal((await fg(testFailure(failing, [failing, edited]))).result.status, 'needs_lead')
+  })
+}
 test('scope failure is distinguishable from an empty diff', async () => {
   const { result } = await rc(async (p, o) => o.label === 'list changes' ? null : undefined, {})
   assert.equal(result.status, 'needs_lead')
@@ -227,6 +259,23 @@ const routes = [
   ['.env.example', ['security-reviewer'], 'platform-builder'],
   ['tests/instruction.test.ts', ['models-reviewer'], 'models-builder'],
   ['tests/http.test.ts', ['security-reviewer'], 'platform-builder'],
+  ['src/lib/server/paid.ts', ['security-reviewer', 'models-reviewer'], 'platform-builder'],
+  ['tests/paid.test.ts', ['security-reviewer', 'models-reviewer'], 'platform-builder'],
+  ['src/lib/server/sse.ts', ['models-reviewer'], 'models-builder'],
+  ['src/lib/editPolicy.ts', ['models-reviewer'], 'models-builder'],
+  ['src/lib/parts.ts', ['imaging-reviewer'], 'imaging-builder'],
+  ['tests/partmap.test.ts', ['imaging-reviewer'], 'imaging-builder'],
+  ['tests/renderflow.test.ts', ['imaging-reviewer', 'models-reviewer'], 'imaging-builder'],
+  ['src/lib/browser/projectSession.ts', ['shop-reviewer', 'imaging-reviewer'], 'shop-builder'],
+  ['tests/projectsession.test.ts', ['shop-reviewer'], 'shop-builder'],
+  ['src/lib/bikeForm.ts', ['shop-reviewer'], 'shop-builder'],
+  ['spike/run_all.py', ['security-reviewer', 'models-reviewer'], 'models-builder'],
+  ['spike/images_edits.py', ['security-reviewer', 'models-reviewer'], 'models-builder'],
+  ['src/lib/browser/sparkClient.ts', ['models-reviewer', 'imaging-reviewer'], 'imaging-builder'],
+  ['src/lib/browser/segmentClient.ts', ['models-reviewer', 'imaging-reviewer'], 'imaging-builder'],
+  ['src/lib/queue.ts', ['models-reviewer'], 'general-builder'],
+  ['tests/masks.test.ts', ['models-reviewer', 'imaging-reviewer'], 'imaging-builder'],
+  ['spike/requirements.txt', ['security-reviewer'], 'general-builder'],
 ]
 for (const [file, reviewers, builder] of routes) test('routes ' + file, async () => {
   const { result } = await rc(undefined, { paths: [file] })

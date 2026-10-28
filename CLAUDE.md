@@ -158,9 +158,16 @@ The shop exports an English EUR estimate with before/after images and 19% VAT.
     changed ticket path before committing. Without paths it discovers the
     tracked diff and untracked files; a failed scope is needs_lead, not empty.
   - `/fix-until-green`, or args {checks?, maxRounds?}: run checks, fix with the
-    matching builder in the explicitly located files, stop when green or
-    after two rounds without progress. A fix needing any other file returns
-    to the lead. Its green result still needs specialist /review-changes.
+    matching builder in the located files plus TypeScript under src/ and
+    tests/ that a routing rule gives that builder (none for general-builder),
+    stop when green or after two rounds without progress. A fix needing any
+    other file returns to the lead. Its green result still needs specialist
+    /review-changes.
+- Routing and the allowlist are path lists. A new source file outside the
+  routed paths needs a rule in review-changes.js RULES and fix-until-green.js
+  BUILDERS; a new test file needs an exact allow line in .claude/settings.json
+  (the owner edits that file). Until then general-reviewer and npm test still
+  cover it.
 - Work inline for one-file changes under about 50 lines, planning-doc edits,
   and paid smoke runs; the lead still runs checks and /review-changes before
   committing. Paid smoke runs remain lead-only and obey the spending gates.

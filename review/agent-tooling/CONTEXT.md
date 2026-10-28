@@ -146,7 +146,10 @@ Rejected, with reason:
 - `npx vitest run *` executes arbitrary JS: running tests always executes repo
   code; the safeguards are the review loop and the Billing spend cap.
 - git commands can print secrets: secret files are gitignored; transcripts
-  are local.
+  are local. Later shown wrong (review after the Codex merge, SEC-1): git
+  switches to no-index mode when a path lies outside the repo, so
+  `git diff /dev/null .env.local` prints the file. settings.proposed.json adds
+  path and name denies; only the Bash sandbox is a real boundary.
 - Raise post-round-1 misses only as non-blocking notes: real late misses must
   reach the lead; the 3-round cap bounds the loop.
 - needsLead triggers 3 futile rounds: runUnit already returns on needsLead.

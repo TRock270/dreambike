@@ -9,12 +9,14 @@ export const meta = {
   ],
 }
 
-// Path rules: which builder fixes which files. First match wins.
+// Path rules: which builder fixes which files. First match wins, so the
+// single-file shop rule comes before imaging's src/lib/browser/ rule.
 const BUILDERS = [
-  { builder: 'models-builder', re: /^(src\/lib\/server\/meta\.ts|prompts\/|src\/lib\/mocks\/|src\/app\/api\/(segment|identify|instruction|edit|check|search-parts|transcribe)\/|spike\/(responses_sam|responses_spark|images_edits|asr_transcribe|files|run_all)\.py|tests\/(meta|sam|spark|sse|instruction|identify|edit|check|search|transcribe))/ },
-  { builder: 'imaging-builder', re: /^(src\/lib\/server\/images\.ts|src\/lib\/(coordinates|slots)\.ts|src\/app\/api\/(normalize|composite)\/|spike\/(imaging|local_images)\.py|src\/lib\/browser\/|src\/lib\/imageFormat\.ts|tests\/(images|coordinates|masks|composite|slots|preflight|imageFormat|browser))/ },
+  { builder: 'shop-builder', re: /^(src\/lib\/browser\/projectSession\.ts|src\/lib\/bikeForm\.ts|tests\/(projectsession|bikeform))/ },
+  { builder: 'models-builder', re: /^(src\/lib\/server\/(meta|sse)\.ts|src\/lib\/editPolicy\.ts|prompts\/|src\/lib\/mocks\/|src\/app\/api\/(segment|identify|instruction|edit|check|search-parts|transcribe)\/|spike\/(responses_sam|responses_spark|images_edits|asr_transcribe|files|run_all)\.py|tests\/(meta|sam|spark|sse|instruction|identify|edit|check|search|transcribe))/ },
+  { builder: 'imaging-builder', re: /^(src\/lib\/server\/images\.ts|src\/lib\/(coordinates|slots|parts)\.ts|src\/app\/api\/(normalize|composite)\/|spike\/(imaging|local_images)\.py|src\/lib\/browser\/|src\/lib\/imageFormat\.ts|tests\/(images|coordinates|masks|composite|slots|preflight|imageFormat|browser|partmap|renderflow))/ },
   { builder: 'shop-builder', re: /^(src\/lib\/(db|project|cache|quote|pdf)\.ts|src\/lib\/server\/fit[^/]*\.ts|tests\/(db|project|cache|quote|pdf|fit))/ },
-  { builder: 'platform-builder', re: /^(budget\/|src\/lib\/server\/(budget|config|fetch-product|http)\.ts|src\/app\/api\/(budget|health|product-image)\/|spike\/(ledger|common|deployment)\.py|next\.config\.ts|vercel\.json$|\.env\.example$|tests\/(budget|config|fetch-product|http|deployment))/ },
+  { builder: 'platform-builder', re: /^(budget\/|src\/lib\/server\/(budget|config|fetch-product|http|paid)\.ts|src\/app\/api\/(budget|health|product-image)\/|spike\/(ledger|common|deployment)\.py|next\.config\.ts|vercel\.json$|\.env\.example$|tests\/(budget|config|fetch-product|http|deployment|paid))/ },
   { builder: 'ui-builder', re: /^(src\/components\/|src\/styles\/|src\/app\/(layout|page)\.tsx|src\/app\/globals\.css)/ },
 ]
 const builderFor = (file) => (BUILDERS.find((b) => b.re.test(file)) || { builder: 'general-builder' }).builder
@@ -39,6 +41,13 @@ const completeChecks = (reported) => reported.length === checks.length
 const writablePath = (file) => file && !file.startsWith('/') && !file.includes('\\')
   && !/[\s*?]/.test(file) && file.split('/').every((p) => p && p !== '.' && p !== '..')
   && !/^(\.env(?!\.example$)|consent\/|secrets\/|fixtures\/|my_bike\/|RULES\.md$|PLAN\.md$|SPEC\.md$|TASKS\.md$|CLAUDE\.md$|HACKATHON_GUIDELINES\.md$|docs\/api-evidence\.md$|\.claude\/settings\.json$)/.test(file)
+// A failing assertion usually points at the test file while the fix belongs in
+// the module under test, so a fixer may also edit TypeScript under src/ and
+// tests/ that an explicit rule routes to it (never via the general-builder
+// fallback). Data, schema, price, prompt, spike, budget and config files count
+// only when they are the located failure.
+const domainFile = (file, builder) => writablePath(file) && /^(src|tests)\/.*\.tsx?$/.test(file)
+  && BUILDERS.some((b) => b.re.test(file)) && builderFor(file) === builder
 
 const str = { type: 'string' }
 const CHECK_RESULT = {
@@ -98,21 +107,24 @@ rounds: for (let round = 1; round <= maxRounds; round++) {
   // Sequential on purpose: fixes in different groups can touch the same shared file.
   for (const builder of Object.keys(groups)) {
     const owned = [...new Set(groups[builder].map((f) => f.file))]
+    const scope = builder === 'general-builder'
+      ? 'Edit only the failing files.'
+      : `Beyond them, create or edit only TypeScript files under src/ or tests/ that belong to ${builder} and that the fix strictly requires.`
     const result = await agent([
       `Fix these check failures (round ${round}):\n${JSON.stringify(groups[builder], null, 1)}`,
       'Fix the cause in source, not the symptom. Never weaken, skip, or delete a test, and never add ts-ignore, eslint-disable, or an any cast to silence an error.',
-      `Files you own (create or edit only these):\n${owned.join('\n')}`,
-      'If the source fix requires another file, stop that part and describe the needed file and reason in notFixed. Run the affected check again before reporting.',
+      `Failing files you own:\n${owned.join('\n')}`,
+      `${scope} If the fix needs any other file, stop that part and describe the needed file and reason in notFixed. Run the affected check again before reporting.`,
       'Report mode for this workflow: return filesChanged (every edited path), fixed (strings), notFixed (strings, including blockers needing the lead). This schema replaces your usual report for this call.',
     ].join('\n\n'), { label: `fix ${builder} r${round}`, phase: 'Fix', agentType: builder, schema: FIX })
     if (!result) {
       // A failed agent can have edited files before losing its report.
-      fixes.push({ round, builder, filesChanged: owned, fixed: [], notFixed: ['fixer returned nothing; inspect its file scope'], failed: true })
+      fixes.push({ round, builder, filesChanged: owned, fixed: [], notFixed: ['fixer returned nothing; inspect its failing files and its domain code for partial edits'], failed: true })
       status = 'needs_lead'
       break rounds
     }
     fixes.push({ round, builder, ownedFiles: owned, ...result })
-    if (result.notFixed.length || result.filesChanged.some((f) => !owned.includes(f))) {
+    if (result.notFixed.length || result.filesChanged.some((f) => !owned.includes(f) && !domainFile(f, builder))) {
       status = 'needs_lead'
       break rounds
     }

@@ -44,6 +44,19 @@ private files (.env, fixtures, my_bike, consent, RULES.md) are not there.
    - merges only the tooling paths into main,
    - removes the worktree with `git worktree remove ../dreambike-codex-review`.
 
+6. Apply the permission settings yourself, because Claude tools may not edit
+   `.claude/settings.json`. From the repo root:
+
+   ```
+   cp review/agent-tooling/settings.proposed.json .claude/settings.json
+   node review/agent-tooling/sim/permissions.mjs
+   ```
+
+   The second command should end with "permission assertions passed". Then
+   tell Claude Code "settings applied": the lead commits the file and deletes
+   `settings.proposed.json`. Start new sessions afterwards, since agents and
+   settings load at session start.
+
 ## Package contents
 
 | File | Purpose |
