@@ -3,8 +3,8 @@
   "currency": "USD",
   "unit": "microdollars",
   "source": "https://dev.meta.ai/docs/pricing-rate-limits",
-  "documentedAt": "2026-10-27",
-  "note": "Documentation values copied during the planning handoff. Paid calls stay disabled until the owner checks the page and sets PRICING_VERIFIED_AT.",
+  "documentedAt": "2026-10-28",
+  "note": "Claude compared every value with the live page on 2026-10-28; all match (docs/api-evidence.md, Pricing check). Owner review pending: paid calls stay disabled until the owner checks the page and sets PRICING_VERIFIED_AT.",
   "prices": {
     "sam-3.1": { "perImageMicroUsd": 2500 },
     "muse-image-1.0": { "perReturnedImageMicroUsd": 10000 },

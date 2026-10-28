@@ -24,7 +24,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 
 ## T0 — Day 0 API and image spike
 
-- Status: IN PROGRESS. Offline part done 2026-10-27; live profiles blocked on U09 fixtures/consent and U06 ledger (see log).
+- Status: IN PROGRESS. Offline part done 2026-10-27. Shared ledger verified and owner fixtures built 2026-10-28. Live profiles wait for the owner's pricing review, fixture sign-off and consent record (see log, T0 session 3).
 - Priority: MVP. Estimate: 3h, split Oct 27/28. Depends on: none.
 - Files: budget/reserve.lua/settle.lua, spike/requirements.txt, common.py, run_all.py, responses_sam.py, responses_spark.py, images_edits.py, asr_transcribe.py, files.py, local_images.py, deployment.py; docs/api-evidence.md; fixtures/expected.json locally; .gitignore; PLAN.md 7.2 status references.
 - Work: inspect installed Python/Node and package availability; record package sizes before installing >1MB packages; obtain owner fixture/consent/Billing inputs; implement the command contracts in SPEC 12; create the shared atomic reserve/settle policy and connect the cost ledger before paid dispatch. Start with one owned baseline. Test concept, off-origin point, identify JSON, text edit, and owned reference. Visit all five fixture input cases with local tests. Grounded checks wait for U06 billing bounds. Files and ASR remain opt-in.
@@ -232,6 +232,50 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Owner reports setting a $50 Meta Billing spend limit on 2026-10-28 ("for now"). Claude can't see the Billing page. The ledger caps are still the defaults ($5/ticket, $5/day, $50 development, $100 project), so the ledger stops before Billing would. The $100 project cap can't be reached until the owner raises the Billing limit.
 - Owner checked the Meta Billing page: $0.01 spent since the start, from calls made before the ledger existed (none from T0). `ledger.py init --spent-usd 0.01 --confirm-reconciled`: ok. Status shows lifetime spent=10000 µ$, reserved=0.
 - Still open for U06: PRICING_VERIFIED_AT and the per-request search bound before grounded calls.
+
+### T0 session 3 — 2026-10-28, ended 07:39 ET (pricing check and owner fixtures, about 1 h active)
+
+- Status: in progress. The fixtures are built. Live profiles wait for owner sign-offs.
+- Files committed:
+  - budget/prices.json: documentedAt and note only; values unchanged.
+  - docs/api-evidence.md: Pricing check section, U06 and U09 rows, ledger rows. Part of this landed in the T2 commit b70a0f7, staged by the T2 session.
+- Files gitignored, not committed: fixtures/plain-wall-right.jpg, plain-wall-left.jpg, cluttered.jpg, exif-rotated.jpg, heic.heic, expected.json.
+- Pricing: every value in budget/prices.json matches the live page (table in docs/api-evidence.md). The owner chose to review the page before PRICING_VERIFIED_AT is set, so it stays blank.
+- Source photos in my_bike/:
+  - 5 iPhone 14 HEIC files, taken 2025-05-26 at 17:10 +02:00 (EXIF), all with GPS.
+  - IMG_1570 and IMG_1572 are portrait (Orientation 6).
+- Roles:
+  - right ← IMG_1568
+  - left ← IMG_1574
+  - cluttered ← IMG_1575
+  - exif-rotated ← IMG_1572
+  - heic ← IMG_1572.HEIC
+  - IMG_1570 not used (5 or more readable third-party plates).
+- Covered with solid fills (owner approved boxes A–F):
+  - IMG_1568: two identifiable people in the garage, and the photographer's reflection on the tank.
+  - Three third-party plates: IMG_1568 once, IMG_1574 twice.
+  - IMG_1572: a possible reflection on the tank.
+  - The bike's own plate holder is empty in every photo.
+  - The owner kept the shop logo and dealer signs.
+- Metadata: the JPEG fixtures have no EXIF, XMP or GPS (checked with Pillow and mdls). exif-rotated keeps only Orientation=6.
+- Bike truth (owner): BMW R nineT base model, 2014–2016, 1170 cc air/oil-cooled boxer, ABS yes. Photographer: Tom.
+- expected.json holds:
+  - the owner facts above
+  - facing, visibleSlots, pointTest (rear hub), paint box (tank) and text box (seat), measured by Claude and checked on an overlay
+  - paint and text requests, which are Claude's test proposals
+  - identifiersReviewed and noPeople set to false, consentRecord set to null
+- Checks: `python spike/local_images.py --fixture-set all`: 40 passed, 0 failed, 0 skipped (before: 35 passed, 5 skipped).
+- Cost: $0.00. No paid calls.
+- Remaining before the live T0 profiles:
+  - Owner reviews the pricing page, then Claude appends PRICING_VERIFIED_AT.
+  - Owner opens fixtures/ in Preview and confirms no people and no readable plates, then identifiersReviewed and noPeople become true.
+  - Owner writes the dated consent record in consent/. It must cover Meta analysis, contributor-mode training and the public demo. Its path goes into expected.json.
+  - Then the live profiles:
+    - SAM concept, including the zero-match lane behaviour the T3 session asked about
+    - SAM points with an overlay for U01; report the placement mode to the T3 session for VERIFIED_SAM_PLACEMENT
+    - Spark identify and instruction (U02)
+    - image edit (U04)
+    - compose
 
 ### T1 — 2026-10-28, 00:00–00:25 ET (about 0.5 h)
 
