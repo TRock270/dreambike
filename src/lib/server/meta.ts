@@ -293,13 +293,19 @@ export function renderTemplate(file: "paint.v1.md" | "edit.v1.md" | "compose.v1.
 }
 
 /** The server picks the template from the request mode, never from client-sent intent. */
-export function templateFor(mode: "text" | "paint"): "paint.v1.md" | "edit.v1.md" {
+export function templateFor(mode: "text" | "paint" | "reference"): "paint.v1.md" | "edit.v1.md" | "compose.v1.md" {
+  if (mode === "reference") return "compose.v1.md";
   return mode === "paint" ? "paint.v1.md" : "edit.v1.md";
 }
 
-export function imageEditBody(prompt: string, imageUrl: string, width: number, height: number, quality: "high" | "low") {
+/**
+ * Edit body. imageUrls is ordered: the base photo first, and in compose mode the
+ * reference second ("image 1" and "image 2" in compose.v1.md). Tools are always off.
+ */
+export function imageEditBody(prompt: string, imageUrls: string | readonly string[], width: number, height: number, quality: "high" | "low") {
+  const urls = typeof imageUrls === "string" ? [imageUrls] : imageUrls;
   return {
-    model: "muse-image-1.0", prompt, images: [{ image_url: imageUrl }], n: 1, size: `${width}x${height}`,
+    model: "muse-image-1.0", prompt, images: urls.map((image_url) => ({ image_url })), n: 1, size: `${width}x${height}`,
     response_format: "b64_json", output_format: "webp", reasoning_strength: quality,
     tool_enablement: { enable_image_search: false, enable_web_search: false, enable_shell: false },
   };

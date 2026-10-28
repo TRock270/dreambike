@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { requestEdit } from "@/lib/browser/renderClient";
+import { requestInstruction, type InstructionRequest } from "@/lib/browser/sparkClient";
+import { unknownBike } from "@/lib/bikeForm";
 import { derive, emptyPartMap, partMapAfterEdit, refreshedPart } from "@/lib/browser/partMap";
 import { FALLBACK_TEXT, willSkipBlend } from "@/lib/browser/renderFlow";
 import { boxIoU, chooseCandidate, interiorPoint } from "@/lib/parts";
@@ -58,5 +61,48 @@ describe("bike outline after an accepted same-size edit", () => {
     const before = { ...emptyPartMap("old"), bikeCandidates: [{ mask, box: [2, 0, 8, 10] as [number, number, number, number], confidence: 0.9 }], bikeChoice: 0 as const, bikeStatus: "found" as const };
     expect(derive(partMapAfterEdit(before, "new", null, true)).bike?.box).toEqual([2, 0, 8, 10]);
     expect(derive(partMapAfterEdit(before, "new", null, false)).bike).toBeNull();
+  });
+});
+
+describe("reference part in the request forms", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** Stub fetch, run the call (it fails on the fake answer, which is fine), and return the form that was sent. */
+  async function sentForm(call: () => Promise<unknown>): Promise<FormData | null> {
+    let sent: FormData | null = null;
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init: RequestInit) => {
+      sent = init.body as FormData;
+      return new Response("{}", { status: 500 });
+    }));
+    await call().catch(() => undefined);
+    return sent;
+  }
+  const base = { blob: new Blob(["base"]), width: 400, height: 300, hash: "h" };
+  const ref = new Blob(["ref"], { type: "image/webp" });
+  const edit = (mode: "text" | "paint" | "reference", r: Blob | null) => requestEdit(base,
+    { slot: "wheel_front", prompt: "p", mode, intent: "geometry", quality: "high" }, "id", undefined, r);
+  const instr = (mode: "text" | "paint" | "reference", r: Blob | null) => requestInstruction(
+    { slot: "wheel_front", box: [0, 0, 10, 10], bike: unknownBike(), mode, text: "t", width: 400, height: 300 } satisfies InstructionRequest,
+    undefined, r);
+
+  it("edit sends exactly one reference part after the base, only in reference mode", async () => {
+    const form = (await sentForm(() => edit("reference", ref)))!;
+    expect([...form.keys()]).toEqual(["payload", "base", "reference"]);
+    expect(form.getAll("reference")).toHaveLength(1);
+    for (const mode of ["text", "paint"] as const) {
+      expect([...(await sentForm(() => edit(mode, ref)))!.keys()]).toEqual(["payload", "base"]);
+    }
+  });
+
+  it("instruction sends exactly one reference part only in reference mode", async () => {
+    expect((await sentForm(() => instr("reference", ref)))!.getAll("reference")).toHaveLength(1);
+    for (const mode of ["text", "paint"] as const) {
+      expect((await sentForm(() => instr(mode, ref)))!.has("reference")).toBe(false);
+    }
+  });
+
+  it("reference mode without a reference never reaches the network", async () => {
+    expect(await sentForm(() => edit("reference", null))).toBeNull();
+    expect(await sentForm(() => instr("reference", null))).toBeNull();
   });
 });

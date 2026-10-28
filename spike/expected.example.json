@@ -7,7 +7,11 @@
     "Boxes are [left, top, right, bottom) with right/bottom exclusive. Points are [x, y].",
     "pointTest.positive must be on a part away from the image origin (for example the rear wheel hub);",
     "pointTest.negative must be off that part. consentRecord is the path of your private consent file;",
-    "scripts only check that it exists and never read it."
+    "scripts only check that it exists and never read it.",
+    "Optional per fixture or reference: covers = [{box, kind}], kind bike, vin or plate, boxes in the",
+    "same normalized pixels. Edit and compose runs refill kind bike boxes from their edge pixels on a",
+    "copy before upload; vin and plate covers stay. referenceRear is the rear-wheel reference for",
+    "`images_edits.py --mode compose --reference rear`."
   ],
   "consentRecord": null,
   "fixtures": {
@@ -20,6 +24,7 @@
       "bike": { "make": null, "model": null, "yearFrom": null, "yearTo": null, "engine": null,
                 "abs": "unknown", "facing": "unknown" },
       "visibleSlots": [],
+      "covers": [],
       "pointTest": { "slot": null, "positive": null, "negative": null, "targetBox": null },
       "paintTest": { "slot": null, "box": null, "request": null },
       "textTest": { "slot": null, "box": null, "request": null }
@@ -54,6 +59,15 @@
     "identifiersReviewed": false,
     "slot": null,
     "box": null,
-    "description": null
+    "description": null,
+    "covers": []
+  },
+  "referenceRear": {
+    "file": null,
+    "identifiersReviewed": false,
+    "slot": null,
+    "box": null,
+    "description": null,
+    "covers": []
   }
 }

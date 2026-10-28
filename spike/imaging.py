@@ -183,6 +183,81 @@ def decode_rgb(data: bytes) -> np.ndarray:
     return np.asarray(Image.open(io.BytesIO(data)).convert("RGB"), dtype=np.uint8)
 
 
+# ------------------------------------------------------------- cover refill
+
+REFILL_MAX_ITERATIONS = 4000
+REFILL_TOLERANCE = 0.01
+
+
+def _check_refill_box(box, width: int, height: int) -> tuple[int, int, int, int]:
+    if len(box) != 4:
+        raise ValueError(f"box must have 4 values, got {len(box)}")
+    left, top, right, bottom = (int(v) for v in box)
+    if right <= left or bottom <= top:
+        raise ValueError(f"empty or reversed box {list(box)}")
+    if left < 0 or top < 0 or right > width or bottom > height:
+        raise ValueError(f"box {list(box)} outside the {width}x{height} image")
+    if left == 0 and top == 0 and right == width and bottom == height:
+        raise ValueError("box covers the whole image; there is no outside ring")
+    return left, top, right, bottom
+
+
+def _refill_one(src: np.ndarray, out: np.ndarray, box: tuple[int, int, int, int]) -> None:
+    """Harmonic fill of one box from the one-pixel ring just outside it.
+
+    Only src pixels outside the box are read. Sides clipped by the image edge have
+    no ring; there the fill repeats its own edge value (zero gradient). Jacobi
+    iteration on the 4-neighbour Laplace equation, fixed start, so it is
+    deterministic.
+    """
+    left, top, right, bottom = box
+    h, w = bottom - top, right - left
+    ring: dict[str, np.ndarray | None] = {
+        "left": src[top:bottom, left - 1].astype(np.float64) if left > 0 else None,
+        "right": src[top:bottom, right].astype(np.float64) if right < src.shape[1] else None,
+        "top": src[top - 1, left:right].astype(np.float64) if top > 0 else None,
+        "bottom": src[bottom, left:right].astype(np.float64) if bottom < src.shape[0] else None,
+    }
+    present = [v for v in ring.values() if v is not None]
+    start = np.mean(np.concatenate(present, axis=0), axis=0)  # mean ring colour
+    cur = np.broadcast_to(start, (h, w, 3)).copy()
+    for _ in range(REFILL_MAX_ITERATIONS):
+        pad = np.pad(cur, ((1, 1), (1, 1), (0, 0)), mode="edge")  # edge repeat = zero gradient
+        if ring["left"] is not None:
+            pad[1:-1, 0] = ring["left"]
+        if ring["right"] is not None:
+            pad[1:-1, -1] = ring["right"]
+        if ring["top"] is not None:
+            pad[0, 1:-1] = ring["top"]
+        if ring["bottom"] is not None:
+            pad[-1, 1:-1] = ring["bottom"]
+        new = (pad[:-2, 1:-1] + pad[2:, 1:-1] + pad[1:-1, :-2] + pad[1:-1, 2:]) / 4.0
+        delta = float(np.abs(new - cur).max())
+        cur = new
+        if delta < REFILL_TOLERANCE:
+            break
+    out[top:bottom, left:right] = np.clip(np.floor(cur + 0.5), 0, 255).astype(np.uint8)
+
+
+def refill_boxes(rgb: np.ndarray, boxes) -> np.ndarray:
+    """Return a copy of rgb (H x W x 3 uint8) with each [left, top, right, bottom) box
+    refilled from its outside ring. Inside pixels are never read, so hidden content
+    never comes back. Boxes whose rings would touch another box (overlap or
+    adjacent) raise, because that ring would be old cover pixels."""
+    if rgb.ndim != 3 or rgb.shape[2] != 3 or rgb.dtype != np.uint8:
+        raise ValueError("rgb must be an H x W x 3 uint8 array")
+    height, width = rgb.shape[:2]
+    checked = [_check_refill_box(b, width, height) for b in boxes]
+    for i, a in enumerate(checked):
+        for b in checked[i + 1:]:
+            if a[0] - 1 < b[2] and b[0] - 1 < a[2] and a[1] - 1 < b[3] and b[1] - 1 < a[3]:
+                raise ValueError(f"boxes {list(a)} and {list(b)} overlap or touch")
+    out = rgb.copy()
+    for box in checked:
+        _refill_one(rgb, out, box)
+    return out
+
+
 # ------------------------------------------------------------- masks
 
 def place_mask(raster: bytes, mask_w: int, mask_h: int, bounds: tuple[int, int, int, int],

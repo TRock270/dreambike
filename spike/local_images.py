@@ -335,6 +335,128 @@ def sam_doc_checks() -> list[Check]:
 
 # ---------------------------------------------------------------- fixtures
 
+def orig_gradient(img: np.ndarray, l: int, t: int, r: int, b: int) -> np.ndarray:
+    """The linear field x + 40, y + 60, 100 over a box (the unpainted background)."""
+    yy, xx = np.mgrid[t:b, l:r]
+    return np.stack([40 + xx, 60 + yy, np.full_like(xx, 100)], axis=-1)
+
+
+def _with_fill(img: np.ndarray, box: tuple[int, int, int, int], color: tuple[int, int, int]) -> np.ndarray:
+    out = img.copy()
+    out[box[1]:box[3], box[0]:box[2]] = color
+    return out
+
+
+def refill_kind_checks() -> list[Check]:
+    """images_edits.refill_bike_covers must touch kind 'bike' only."""
+    import images_edits
+    w, h = 320, 240
+    yy, xx = np.mgrid[0:h, 0:w]
+    base = np.stack([40 + xx, 60 + yy, np.full_like(xx, 100)], axis=-1).astype(np.uint8)
+    boxes = {"bike": (20, 20, 80, 80), "vin": (120, 20, 180, 80), "plate": (20, 120, 80, 180)}
+    for l, t, r, b in boxes.values():
+        base[t:b, l:r] = (255, 0, 255)
+    buf = io.BytesIO()
+    Image.fromarray(base).save(buf, "PNG")
+    norm = imaging.normalize(buf.getvalue())
+    covers = [{"box": list(v), "kind": k} for k, v in boxes.items()]
+    out, url = images_edits.refill_bike_covers(norm, covers)
+    rgb = imaging.decode_rgb(out.data).astype(int)
+
+    def magenta_share(k: str) -> float:
+        l, t, r, b = boxes[k]
+        px = rgb[t + 2:b - 2, l + 2:r - 2]   # skip edge pixels blurred by the lossy re-encode
+        return float((np.abs(px - (255, 0, 255)).sum(axis=-1) < 90).mean())
+
+    checks: list[Check] = []
+    add = lambda n, ok, d="": checks.append((n, "passed" if ok else "failed", d))
+    add("refill kinds: bike box refilled", magenta_share("bike") == 0.0, f"{magenta_share('bike')}")
+    add("refill kinds: vin cover stays (magenta dominates, lossy tolerance)",
+        magenta_share("vin") > 0.9, f"{magenta_share('vin')}")
+    add("refill kinds: plate cover stays (magenta dominates, lossy tolerance)",
+        magenta_share("plate") > 0.9, f"{magenta_share('plate')}")
+    add("refill kinds: dimensions unchanged", (out.width, out.height) == (norm.width, norm.height))
+    same, _ = images_edits.refill_bike_covers(norm, covers[1:])
+    add("refill kinds: only vin and plate gives the input back", same is norm)
+    return checks
+
+
+def refill_checks() -> list[Check]:
+    rng = np.random.default_rng(7)
+    img = rng.integers(0, 256, (60, 80, 3), dtype=np.uint8)
+    # Smooth gradient background so the ring differs from the cover fill.
+    yy, xx = np.mgrid[0:60, 0:80]
+    img[..., 0] = 40 + xx
+    img[..., 1] = 60 + yy
+    img[..., 2] = 100
+    cover = (20, 10, 40, 30)      # bike cover, off origin
+    vin = (50, 40, 70, 55)
+    plate = (5, 40, 15, 50)
+    for l, t, r, b in (cover, vin, plate):
+        img[t:b, l:r] = (255, 0, 255)   # old inside fill
+    original = img.copy()
+    out = imaging.refill_boxes(img, [list(cover)])
+    mask = np.ones(img.shape[:2], dtype=bool)
+    mask[cover[1]:cover[3], cover[0]:cover[2]] = False
+    inside = out[cover[1]:cover[3], cover[0]:cover[2]]
+    magenta = np.all(inside == (255, 0, 255), axis=-1).any()
+    lo = np.minimum(img[9, 20:40], img[30, 20:40]).min()
+    checks: list[Check] = []
+
+    def add(name: str, ok: bool, detail: str = "") -> None:
+        checks.append((name, "passed" if ok else "failed", detail))
+
+    add("refill: input not mutated", np.array_equal(img, original))
+    add("refill: outside pixels byte-identical", np.array_equal(out[mask], original[mask]))
+    add("refill: vin and plate boxes untouched (not passed in)",
+        np.array_equal(out[40:55, 50:70], original[40:55, 50:70])
+        and np.array_equal(out[40:50, 5:15], original[40:50, 5:15]))
+    add("refill: old inside fill does not come back", not magenta, f"magenta present={magenta}")
+    # Harmonic fill of a linear field reproduces it (ring is linear: x + 40, y + 60).
+    expect = np.stack([40 + xx, 60 + yy, np.full_like(xx, 100)], axis=-1)[
+        cover[1]:cover[3], cover[0]:cover[2]]
+    err = int(np.abs(inside.astype(int) - expect).max())
+    add("refill: linear ring reproduced within 1", err <= 1, f"max error {err}")
+    add("refill: deterministic", np.array_equal(out, imaging.refill_boxes(img, [list(cover)])))
+    add("refill: empty list is a no-op",
+        np.array_equal(imaging.refill_boxes(img, []), original))
+    # Box at image corner: only right and bottom rings exist.
+    img2 = img.copy()
+    img2[0:8, 0:10] = (255, 0, 255)
+    img2[20:30, 70:80] = (255, 0, 255)
+    orig2 = img2.copy()
+    corner = imaging.refill_boxes(img2, [[0, 0, 10, 8]])
+    ok = (not np.all(corner[0:8, 0:10] == (255, 0, 255), axis=-1).any()
+          and int(np.abs(corner[0:8, 0:10].astype(int) - orig_gradient(img, 0, 0, 10, 8)).max()) <= 8
+          and np.array_equal(corner[8:], orig2[8:]) and np.array_equal(corner[:, 10:], orig2[:, 10:]))
+    add("refill: box at the image corner works", ok)
+    edge = imaging.refill_boxes(img2, [[70, 20, 80, 30]])
+    add("refill: box at the right edge works",
+        np.array_equal(edge[:, :70], orig2[:, :70])
+        and not np.all(edge[20:30, 70:] == (255, 0, 255), axis=-1).any()
+        and int(np.abs(edge[20:30, 70:].astype(int) - orig_gradient(img, 70, 20, 80, 30)).max()) <= 8)  # one-sided ring: measured 6 and 4
+    edge_b = imaging.refill_boxes(_with_fill(img2, (70, 20, 80, 30), (0, 255, 0)),
+                              [[70, 20, 80, 30]])
+    add("refill: edge result independent of inside pixels", np.array_equal(edge_b, edge))
+    for label, bad in (("empty", [[10, 10, 10, 20]]), ("reversed", [[30, 10, 20, 20]]),
+                       ("negative", [[-1, 0, 5, 5]]), ("beyond right", [[70, 10, 81, 20]]),
+                       ("beyond bottom", [[10, 50, 20, 61]]),
+                       ("whole image, no ring", [[0, 0, 80, 60]]),
+                       ("touching boxes", [[10, 10, 20, 20], [20, 10, 30, 20]]),
+                       ("wrong length", [[1, 2, 3]])):
+        try:
+            imaging.refill_boxes(img, bad)
+            add(f"refill: {label} box raises", False, "accepted")
+        except ValueError:
+            add(f"refill: {label} box raises", True)
+    # Ring pixels are the only source: a different inside gives the same result.
+    other = original.copy()
+    other[cover[1]:cover[3], cover[0]:cover[2]] = (0, 255, 0)
+    add("refill: result independent of inside pixels",
+        np.array_equal(imaging.refill_boxes(other, [list(cover)]), out))
+    return checks
+
+
 def fixture_checks(names: list[str]) -> list[Check]:
     out: list[Check] = []
     norm_dir = common.OUT / "normalized"
@@ -371,7 +493,7 @@ def fixture_checks(names: list[str]) -> list[Check]:
 def main() -> int:
     args = common.base_parser(__doc__.splitlines()[0]).parse_args()
     checks = (format_checks() + bound_checks() + exif_checks() + alpha_checks() + mask_checks()
-              + composite_checks() + click_checks() + sam_doc_checks()
+              + composite_checks() + refill_checks() + refill_kind_checks() + click_checks() + sam_doc_checks()
               + fixture_checks(common.FIXTURE_SETS[args.fixture_set]))
     width = max(len(c[0]) for c in checks)
     for name, status, detail in checks:

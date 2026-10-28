@@ -23,6 +23,7 @@ export const maxDuration = 120;
 const DEADLINE_MS = 100_000;
 /** Time kept back after the model answers: settle, decode, and bounded encoding. */
 const POST_PROCESS_MS = 12_000;
+const REFERENCE_OFF = "Reference photos are switched off on this server. Describe the part in text instead.";
 const BODY_LIMIT = 2 * 1_250_000 + 50_000;
 
 export async function POST(req: Request): Promise<Response> {
@@ -38,10 +39,18 @@ export async function POST(req: Request): Promise<Response> {
     if (!parsed.success || !base.success) throw new AppError("INVALID_REQUEST");
     const p = parsed.data;
     if ((p.mode === "reference") !== Boolean(files.reference)) throw new AppError("INVALID_REQUEST");
-    if (p.mode === "reference") throw new AppError("FEATURE_DISABLED", "Reference photos arrive with ticket T7.");
     if (!modeAllowed(p.slot, p.mode)) throw new AppError("INVALID_REQUEST", `${slotInfo(p.slot).label}: paint changes only.`);
+    if (p.mode === "reference" && !config.features.reference) throw new AppError("FEATURE_DISABLED", REFERENCE_OFF);
     const bytes = new Uint8Array(await base.data.arrayBuffer());
     await assertWebpSize(bytes, p.width, p.height);
+    // The reference photo is validated and normalized here; it is never stored or returned.
+    let reference: { bytes: Uint8Array; dataUrl: string } | null = null;
+    if (p.mode === "reference") {
+      const file = ImageFile.safeParse(files.reference);
+      if (!file.success) throw new AppError("INVALID_REQUEST");
+      const normalized = await normalize(new Uint8Array(await file.data.arrayBuffer()));
+      reference = { bytes: normalized.bytes, dataUrl: toDataUrl("image/webp", normalized.bytes) };
+    }
 
     let generated: Uint8Array;
     const warnings: string[] = [];
@@ -49,7 +58,9 @@ export async function POST(req: Request): Promise<Response> {
       // A labeled stand-in: the whole photo hue-shifted. Grayscale drift barely sees a hue shift,
       // so this usually composites (drift is a heuristic: see U04 notes).
       generated = new Uint8Array(await sharp(bytes).modulate({ hue: 35, saturation: 1.3 }).webp({ quality: 90 }).toBuffer());
-      warnings.push(`${MOCK_LABEL}: the whole photo is tinted; no real edit was made.`);
+      warnings.push(reference
+        ? `${MOCK_LABEL}: reference mode; the whole photo is tinted and the reference photo was not used.`
+        : `${MOCK_LABEL}: the whole photo is tinted; no real edit was made.`);
     } else {
       if (config.mode !== "live") throw new AppError("LIVE_DISABLED");
       const prices = loadPrices();
@@ -57,11 +68,13 @@ export async function POST(req: Request): Promise<Response> {
       if (perImage === undefined) throw new AppError("LIVE_DISABLED", "Pricing for the image model is not verified.");
       // Template chosen by the server from the mode; the approved prompt is untrusted text inside it.
       const prompt = renderTemplate(templateFor(p.mode), p.prompt);
-      const body = imageEditBody(prompt, toDataUrl("image/webp", bytes), p.width, p.height, p.quality);
+      // Compose: base first, reference second, one request, tools off.
+      const imageUrls = [toDataUrl("image/webp", bytes), ...(reference ? [reference.dataUrl] : [])];
+      const body = imageEditBody(prompt, imageUrls, p.width, p.height, p.quality);
       const raw = await withReservation({
         route: "/api/edit", model: "muse-image-1.0", amountMicroUsd: prices.reservations["muse-image-1.0"]!,
         requestId, deadlineMs: Math.max(1_000, DEADLINE_MS - POST_PROCESS_MS - (Date.now() - startedAt)),
-        payloadDigest: createHash("sha256").update(JSON.stringify(p)).update(bytes).digest("hex"),
+        payloadDigest: createHash("sha256").update(JSON.stringify(p)).update(bytes).update(reference?.bytes ?? "").digest("hex"),
       }, async (signal) => {
         const answer = await fetchImageEdit(body, signal);
         const count = returnedImages(answer);

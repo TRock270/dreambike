@@ -87,11 +87,11 @@ describe("POST /api/edit", () => {
     return editPOST(new Request("http://localhost:3000/api/edit", { method: "POST", body: form, headers: headers() }));
   }
 
-  it("mock is labeled; demo is LIVE_DISABLED; reference waits for T7; frame text is refused; no network", async () => {
+  it("mock is labeled; demo is LIVE_DISABLED (also for reference); frame text is refused; no network", async () => {
     const spy = vi.spyOn(globalThis, "fetch");
     expect(await errorOf(await edit(p))).toEqual([503, "LIVE_DISABLED"]);
     expect(await errorOf(await edit({ ...p, slot: "frame", mode: "text", intent: "replace" }))).toEqual([400, "INVALID_REQUEST"]);
-    expect(await errorOf(await edit({ ...p, mode: "reference" }, { reference: await webp(solid(64, 64, { r: 1, g: 1, b: 1 })) }))).toEqual([503, "FEATURE_DISABLED"]);
+    expect(await errorOf(await edit({ ...p, mode: "reference" }, { reference: await webp(solid(400, 300, { r: 1, g: 1, b: 1 })) }))).toEqual([503, "LIVE_DISABLED"]);
     vi.stubEnv("MOCK", "1");
     const mock = EditResponse.parse(await (await edit(p)).json());
     expect([mock.generatedWidth, mock.generatedHeight]).toEqual([400, 300]);
@@ -137,6 +137,89 @@ describe("POST /api/edit", () => {
     expect(await errorOf(await edit(p))).toEqual([422, "NO_RESULT"]);
     expect(settles[2]).toEqual(["unknown", "0"]);
   });
+  describe("reference mode", () => {
+    const rp = { slot: "wheel_front", prompt: "Gold multi-spoke wheel with chrome hub on the front wheel.", mode: "reference", intent: "geometry", quality: "high", width: 400, height: 300 };
+    const refBytes = () => webp(solid(400, 300, { r: 200, g: 20, b: 20 }));
+    // Several named parts, so the helper can send duplicates too.
+    async function send(payload: object, parts: [string, Uint8Array, string?][]) {
+      const form = new FormData();
+      form.append("payload", JSON.stringify(payload));
+      form.append("base", new File([new Uint8Array(await webp(solid(400, 300, { r: 80, g: 80, b: 80 })))], "b.webp", { type: "image/webp" }));
+      for (const [n, b, type] of parts) form.append(n, new File([new Uint8Array(b)], n, { type: type ?? "image/webp" }));
+      return editPOST(new Request("http://localhost:3000/api/edit", { method: "POST", body: form, headers: headers() }));
+    }
+    const pixel = async (dataUrl: string) => {
+      const { data } = await sharp(Buffer.from(dataUrl.split(",")[1]!, "base64")).resize(1, 1).raw().toBuffer({ resolveWithObject: true });
+      return Array.from(data);
+    };
+    const REDIS = "https://redis.invalid";
+    function live() {
+      for (const [k, v] of Object.entries({ LIVE_API_ENABLED: "true", MODEL_API_KEY: "k", UPSTASH_REDIS_REST_URL: REDIS,
+        UPSTASH_REDIS_REST_TOKEN: "t", PRICING_VERIFIED_AT: "2026-10-28", VISITOR_HASH_SECRET: "s".repeat(32), BUDGET_TICKET: "T7", MOCK: "0", VERCEL_ENV: "" })) vi.stubEnv(k, v);
+      const redis: string[] = []; const metaBodies: Record<string, unknown>[] = [];
+      let answer: unknown = {};
+      const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+        if (String(url) === REDIS) {
+          const a = JSON.parse(String(init!.body)) as string[];
+          const settle = a[1]!.includes("budget settlement");
+          redis.push(settle ? "settle" : "reserve");
+          return Response.json({ result: settle ? ["OK"] : ["OK", "10000"] });
+        }
+        metaBodies.push(JSON.parse(String(init!.body)));
+        return Response.json(answer);
+      });
+      return { redis, metaBodies, spy, answer: (a: unknown) => { answer = a; } };
+    }
+
+    it("sends [base, reference] in one request with tools off and the compose template", async () => {
+      const env = live();
+      const out = Buffer.from(await solid(400, 300, { r: 5, g: 5, b: 5 }).webp().toBuffer()).toString("base64");
+      env.answer({ data: [{ b64_json: out }] });
+      const res = await send(rp, [["reference", await refBytes()]]);
+      expect(res.status).toBe(200);
+      EditResponse.parse(await res.json());
+      expect(env.metaBodies).toHaveLength(1);
+      expect(env.redis).toEqual(["reserve", "settle"]);
+      const b = env.metaBodies[0] as { images: { image_url: string }[]; prompt: string; tool_enablement: unknown };
+      expect(b.images).toHaveLength(2);
+      const [basePx, refPx] = [await pixel(b.images[0]!.image_url), await pixel(b.images[1]!.image_url)];
+      expect(Math.abs(basePx[0]! - 80)).toBeLessThan(6);   // grey base first
+      expect(refPx[0]!).toBeGreaterThan(150);              // red reference second
+      expect(b.tool_enablement).toEqual({ enable_image_search: false, enable_web_search: false, enable_shell: false });
+      expect(b.prompt).toBe(rt("compose.v1.md", rp.prompt));
+      expect(b.prompt).toContain("brake discs");
+    });
+
+    it("refuses bad reference sets before any fetch", async () => {
+      const spy = vi.spyOn(globalThis, "fetch");
+      const ref = await refBytes();
+      expect(await errorOf(await send(rp, []))).toEqual([400, "INVALID_REQUEST"]);
+      expect(await errorOf(await send({ ...rp, mode: "text", intent: "replace" }, [["reference", ref]]))).toEqual([400, "INVALID_REQUEST"]);
+      expect(await errorOf(await send({ ...p }, [["reference", ref]]))).toEqual([400, "INVALID_REQUEST"]);
+      expect(await errorOf(await send(rp, [["reference", ref], ["reference", ref]]))).toEqual([400, "INVALID_REQUEST"]);
+      const png = new Uint8Array(await solid(400, 300, { r: 1, g: 1, b: 1 }).png().toBuffer());
+      expect(await errorOf(await send(rp, [["reference", png, "image/png"]]))).toEqual([400, "INVALID_REQUEST"]);
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it("REFERENCE_MODE_ENABLED=false gives FEATURE_DISABLED, live or mock, with no fetch", async () => {
+      vi.stubEnv("REFERENCE_MODE_ENABLED", "false");
+      const spy = vi.spyOn(globalThis, "fetch");
+      const ref = await refBytes();
+      expect(await errorOf(await send(rp, [["reference", ref]]))).toEqual([503, "FEATURE_DISABLED"]);
+      vi.stubEnv("MOCK", "1");
+      expect(await errorOf(await send(rp, [["reference", ref]]))).toEqual([503, "FEATURE_DISABLED"]);
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it("mock reference render is labeled and offline", async () => {
+      vi.stubEnv("MOCK", "1");
+      const spy = vi.spyOn(globalThis, "fetch");
+      const res = EditResponse.parse(await (await send(rp, [["reference", await refBytes()]])).json());
+      expect(res.warnings.join(" ")).toMatch(/Mock.*reference mode/);
+      expect(spy).not.toHaveBeenCalled();
+    });
+  });
 });
 
 it("templates drop their header and insert the prompt", () => {
@@ -146,6 +229,7 @@ it("templates drop their header and insert the prompt", () => {
   expect(t.endsWith("Red tank")).toBe(true);
   expect(t).not.toContain("{{editPrompt}}");
   // Untrusted text is inserted verbatim: no special "$" replacement patterns.
+  expect(rt("compose.v1.md", "Gold wheel").endsWith("Gold wheel")).toBe(true);
   expect(rt("edit.v1.md", "x $` y $$ z $&").endsWith("x $` y $$ z $&")).toBe(true);
 });
 

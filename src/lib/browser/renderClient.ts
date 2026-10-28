@@ -25,12 +25,20 @@ const blobOf = async (dataUrl: string) => (await fetch(dataUrl)).blob();
 export type Generated = { blob: Blob; width: number; height: number; hash: string; generatedWidth: number;
   generatedHeight: number; warnings: string[] };
 
-/** One paid render. The caller passes a fresh request ID per explicit click. */
-export async function requestEdit(base: PhotoRef, input: { slot: SlotId; prompt: string; mode: "text" | "paint";
-  intent: "paint" | "replace" | "geometry"; quality: "high" | "low" }, requestId: string, signal?: AbortSignal): Promise<Generated> {
+/**
+ * One paid render. The caller passes a fresh request ID per explicit click.
+ * `reference` is appended after the base, and only in reference mode (order matters: base first).
+ */
+export async function requestEdit(base: PhotoRef, input: { slot: SlotId; prompt: string; mode: "text" | "paint" | "reference";
+  intent: "paint" | "replace" | "geometry"; quality: "high" | "low" }, requestId: string, signal?: AbortSignal,
+  reference?: Blob | null): Promise<Generated> {
   const form = new FormData();
   form.append("payload", JSON.stringify({ ...input, width: base.width, height: base.height }));
   form.append("base", base.blob, "base.webp");
+  if (input.mode === "reference") {
+    if (!reference) throw new PreflightError("INVALID_REQUEST", "Add a reference photo first.");
+    form.append("reference", reference, "reference.webp");
+  }
   const parsed = EditResponse.safeParse(await post("/api/edit", form, signal, requestId));
   if (!parsed.success) throw new PreflightError("SCHEMA_INVALID", "The render answer had an unexpected shape.");
   const { image, generatedWidth, generatedHeight, warnings } = parsed.data;

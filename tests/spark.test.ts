@@ -177,11 +177,33 @@ describe("identify and instruction routes", () => {
     expect(errorOf(await instruction({ ...base, slot: "frame" }))).toEqual([400, "INVALID_REQUEST"]);
     expect(errorOf(await instruction({ ...base, mode: "reference" }))).toEqual([400, "INVALID_REQUEST"]);
     expect(errorOf(await instruction(base, await webp()))).toEqual([400, "INVALID_REQUEST"]);
+    expect(errorOf(await instruction({ ...base, mode: "reference" }, await webp()))).toEqual([503, "LIVE_DISABLED"]);
+    vi.stubEnv("REFERENCE_MODE_ENABLED", "false");
     expect(errorOf(await instruction({ ...base, mode: "reference" }, await webp()))).toEqual([503, "FEATURE_DISABLED"]);
+    vi.stubEnv("MOCK", "1");
+    expect(errorOf(await instruction({ ...base, mode: "reference" }, await webp()))).toEqual([503, "FEATURE_DISABLED"]);
+    vi.unstubAllEnvs();
     expect(errorOf(await instruction({ ...base, box: [100, 100, 500, 160] }))).toEqual([400, "INVALID_REQUEST"]);
     expect(errorOf(await identify({ width: 400, height: 300 }, await webp()))).toEqual([503, "LIVE_DISABLED"]);
     expect(errorOf(await instruction(base))).toEqual([503, "LIVE_DISABLED"]);
     expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe("reference mode intent and wire body", () => {
+  it("enforceIntent never leaves a reference result as paint", () => {
+    const text = "Gold multi-spoke wheel with chrome hub";
+    expect(enforceIntent("wheel_front", "reference", text, ins("paint")).intent).toBe("geometry");
+    expect(enforceIntent("wheel_rear", "reference", text, ins("replace")).intent).toBe("geometry");
+    expect(enforceIntent("fork", "reference", text, ins("paint")).intent).toBe("geometry");
+    expect(enforceIntent("tank", "reference", text, ins("paint")).intent).toBe("replace");
+    expect(enforceIntent("tank", "reference", text, ins("geometry")).intent).toBe("geometry");
+    expect(enforceIntent("tank", "reference", text, ins("replace")).intent).toBe("replace");
+    // A model "geometry" survives for a handlebar even when the text has no height keyword.
+    expect(enforceIntent("handlebar", "reference", "Black handlebar from the reference photo", ins("geometry")).intent).toBe("geometry");
+  });
+  it("the instruction prompt keeps the brakes for wheels", () => {
+    expect(promptText("instruction.v1.md")).toMatch(/brake discs, brake calipers, fork, and fender/);
   });
 });
 
@@ -228,6 +250,24 @@ describe("live route path (fake Upstash + fake Meta, no network)", () => {
     const res = await identifyPOST(req("http://localhost:3000/api/identify", form({ width: 400, height: 300 }, img)));
     expect([res.status, ErrorResponse.parse(await res.json()).error.code]).toEqual([502, "SCHEMA_INVALID"]);
     expect(env.settles).toEqual([["settled", "400"]]); // 2000 × 0.1 + 1000 × 0.2 µ$
+  });
+
+  it("instruction: the reference image goes in only for reference mode, after the input_text", async () => {
+    const env = live();
+    const instr = { title: "Gold wheel", editPrompt: "p", spec: [], intent: "paint", warnings: [] };
+    env.answer({ status: "completed", usage, output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify({ instruction: instr }) }] }] });
+    const refImg = new Uint8Array(await sharp({ create: { width: 400, height: 300, channels: 3, background: { r: 200, g: 20, b: 20 } } }).webp().toBuffer());
+    const payload = { slot: "wheel_front", box: [10, 10, 100, 80], bike: unknownBike(), mode: "reference", text: "Gold multi-spoke wheel with chrome hub", width: 400, height: 300 };
+    const f = form(payload); f.append("reference", new File([new Uint8Array(refImg)], "r.webp", { type: "image/webp" }));
+    const res = await instructionPOST(req("http://localhost:3000/api/instruction", f));
+    expect(res.status).toBe(200);
+    expect(InstructionResponse.parse(await res.json()).instruction.intent).toBe("geometry"); // model said paint
+    const content = (env.metaBodies[0] as { input: { content: { type: string; image_url?: string }[] }[] }).input[0]!.content;
+    expect(content.map((c) => c.type)).toEqual(["input_text", "input_image"]);
+    expect(content[1]!.image_url).toMatch(/^data:image\/webp;base64,/);
+    // Text mode sends no image.
+    await instructionPOST(req("http://localhost:3000/api/instruction", form({ ...payload, mode: "text", slot: "tank" })));
+    expect((env.metaBodies[1] as { input: { content: unknown[] }[] }).input[0]!.content).toHaveLength(1);
   });
 
   it("instruction: a refusal settles the real charge; bike limitation text is not sent to the model", async () => {

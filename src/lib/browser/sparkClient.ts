@@ -29,13 +29,22 @@ export async function requestIdentify(photo: PhotoRef, signal?: AbortSignal): Pr
 }
 
 export type InstructionRequest = {
-  slot: SlotId; box: [number, number, number, number]; bike: BikeData; mode: "text" | "paint";
+  slot: SlotId; box: [number, number, number, number]; bike: BikeData; mode: "text" | "paint" | "reference";
+  /** In reference mode this is the mechanic's description of what the reference photo shows. */
   text: string; width: number; height: number;
 };
 
-export async function requestInstruction(input: InstructionRequest, signal?: AbortSignal): Promise<InstructionData> {
+/**
+ * `reference` is the normalized reference photo. It is sent only in reference mode (SPEC 5: exactly one
+ * reference there, none elsewhere), so a leftover blob can never ride along with a text or paint request.
+ */
+export async function requestInstruction(input: InstructionRequest, signal?: AbortSignal, reference?: Blob | null): Promise<InstructionData> {
   const form = new FormData();
   form.append("payload", JSON.stringify(input));
+  if (input.mode === "reference") {
+    if (!reference) throw new PreflightError("INVALID_REQUEST", "Add a reference photo first.");
+    form.append("reference", reference, "reference.webp");
+  }
   const parsed = InstructionResponse.safeParse(await post("/api/instruction", form, signal));
   if (!parsed.success) throw new PreflightError("SCHEMA_INVALID", "The instruction answer had an unexpected shape.");
   return parsed.data.instruction;

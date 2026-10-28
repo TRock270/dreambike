@@ -27,10 +27,12 @@ type Props = {
   unsaved?: boolean;
   /** Storage is read-only: the accept stays in this tab and says so; no retry is offered. */
   readOnly?: boolean;
+  /** The preview was made from a reference photo (reference mode). */
+  fromReference?: boolean;
 };
 
 /** One render's progress and preview. Nothing changes until Accept; Accept saves a new version. */
-export function EditReview({ base, state, onAccept, onReject, onRetryBlend, onRenderAgain, onCancel, saving = false, saveError = null, unsaved = false, readOnly = false }: Props) {
+export function EditReview({ base, state, onAccept, onReject, onRetryBlend, onRenderAgain, onCancel, saving = false, saveError = null, unsaved = false, readOnly = false, fromReference = false }: Props) {
   if (state.kind === "running") return <ProgressStatus stage={state.stage} onCancel={onCancel} />;
   if (state.kind === "error") {
     return (
@@ -57,6 +59,11 @@ export function EditReview({ base, state, onAccept, onReject, onRetryBlend, onRe
   return (
     <section aria-label="Preview" className="flex flex-col gap-2 text-[13px]">
       <p className="text-text-muted text-[12px]">Preview: nothing changes until you accept it</p>
+      {fromReference && (
+        <p className="rounded-chip bg-neutral-soft px-3 py-2 text-neutral-soft-text">
+          <span aria-hidden="true" className="mr-1 font-semibold">ⓘ</span>Made from your reference photo. The AI redraws the whole image, so check the rest of the bike, such as brakes, fork, and fender, against your photo.
+        </p>
+      )}
       <BeforeAfter before={base} after={result} aligned={result.aligned} />
       {fallback && (
         <p className="rounded-chip bg-warning-soft px-3 py-2 text-warning-soft-text">

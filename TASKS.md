@@ -692,3 +692,37 @@ For each completed ticket append actual date/time ET, files changed, checks and 
   - Result (spike/out/edits/image_edit_nosquare-high.webp): candy red tank, no square, roundel, silver tank area and lower panels kept, rest of the scene unchanged. The "nineT" lettering is slightly garbled.
   - For T5/T7: removing cover squares before upload beats filling them afterwards, and naming the parts to keep fixed the painted-over silver area. Owner check open.
 - Owner decision 2026-10-28 (result approved: "perfect"): from now on, cover squares on the motorcycle itself (such as the tank reflection) are refilled from their edge pixels before a photo is sent for an edit. Covers over VINs and number plates stay. The hidden content is never uncovered.
+
+### T7 — 2026-10-28, offline part done; live render pending (build-ticket workflow)
+
+- Owner decisions this session: swap both wheels in two steps (front reference, accept, then rear reference, accept), so SPEC 5 "exactly one reference" stays. Cover refill lives in fixtures and the spike only: on-bike cover boxes are refilled before upload, VIN and plate covers stay, and there is no in-app touch-up tool.
+- Paused 2026-10-28 by the owner (usage limit). Run wf_84e34d8b-817 was stopped in round 2: the models round-2 reviews and the spike round-2 build were still running, so spike files may hold partial edits. The ui unit is not built yet. Nothing is committed. The workflow path fix (absolute builder paths falsely flagged as outside ownership) is in .claude/workflows/build-ticket.js and fix-until-green.js. To continue: resume the run from this session, or start /build-ticket T7 with the units again in a new session.
+- Resumed 2026-10-28: spike files checked first (syntax ok, local_images.py 58 passed, compose dry-run exit 0); run wf_84e34d8b-817 resumed from cache.
+- Run result: needs_lead with no blocking items. All three units approved: models (2 rounds), spike (2 rounds), ui (1 round). The resumed run took 13 min with 27 agents. Paid cost this run: $0.
+- Files: src/lib/server/meta.ts, src/lib/editPolicy.ts, src/app/api/edit/route.ts, src/app/api/instruction/route.ts, src/app/page.tsx, src/components/ReferenceDropzone.tsx (new), src/components/Workspace.tsx, src/components/EditReview.tsx, src/lib/browser/renderClient.ts, src/lib/browser/sparkClient.ts, prompts/compose.v1.md, prompts/edit.v1.md, prompts/instruction.v1.md, spike/imaging.py, spike/images_edits.py, spike/expected.example.json, spike/local_images.py, tests/edit.test.ts, tests/spark.test.ts, tests/renderflow.test.ts, tests/projectsession.test.ts. projectSession.ts needed no change.
+- Checks (Verify phase, rerun by the gate): npm run typecheck pass; npm run lint pass; npm test 225/225 in 18 files; npm run build pass; local_images.py --fixture-set all 64 passed; images_edits.py compose dry-run exit 0. The lead reran local_images.py after filling covers: 64 passed.
+- Done-when: met: missing or extra reference files fail validation; disabled reference mode is explained; base and reference roles are not swapped; the reference is absent from public assets and the PDF export (reference kept in React state only, change record keys unchanged, no public/ dir, PDF export not built yet: T11 must keep a regression check); contract and build checks run; fallback not needed and mocks are labeled. OPEN: "an owner's own part crop can render a reference edit" and "inspect one result". The only live evidence is the 2026-10-28 spike compose run (front wheel, owner: "great"), made through spike/images_edits.py before the brake sentence was added to compose.v1.md. The app's live reference path has not rendered yet and needs a paid run with the owner's go.
+- Lead decisions:
+  - enforceIntent in reference mode: wheels and fork are forced to geometry; elsewhere only a model "paint" becomes "replace" and a model "geometry" is kept. This is narrower than the task text ("other slots become replace") and follows SPEC 6.2: geometry is enforced for fork/wheel replacements only. Accepted.
+  - The change record stays {slot, itemId, instruction, mode}, with no referenceImageId (plan-check correction). Adding it would change the contract and the DB schema, and the owner ruled out a contract change. This also keeps the reference out of the export by design.
+  - The spike does not append its own KEEP_BRAKES text; it sends only the versioned compose.v1.md, which holds the brake sentence.
+  - The magic-byte question on reference uploads is settled: the server re-encodes every reference through normalize(), so a mislabeled PNG or JPEG cannot pass undecoded.
+- Fixture covers (lead): fixtures/expected.json plain-wall-right.jpg gets covers [{box [1189,597,1255,673), kind bike}]. This is the tank-reflection fill, converted from the source JPEG box [2345,1180,2465,1320) by the scale 2048/4032, rounded outward, plus 2 px for resampling bleed. The other fills listed in derivedFrom (two people, the red car's plate) are off the bike and are not refilled. No other fixture is used for edits.
+- Consultants: Nemotron 3 (nim-nemotron) returned 404 "function not found", so PAL codereview ran on the fallback nim-nemotron35. Gemini (agy) went idle for 300 s and timed out; no retry. The first Gemini call was lost to a lead error: the code placeholder was not filled in. Codereview points, all checked and rejected:
+  - reservation not released on throw: by design, an ambiguous paid call settles "unknown" (paid.ts:62-67);
+  - duplicate reference parts: rejected at http.ts:90 and tested;
+  - reference size unchecked: ImageFile max 1.25 MB and normalize bounds the output;
+  - base/reference order relies on the client: the server builds it at route.ts:72;
+  - reference must match the base size: a crop is meant to differ;
+  - other points were SPEC-intended or predate T7.
+  Precommit (nim-nemotron35) points, also rejected:
+  - "refill must not change interior pixels": refilling the interior is the purpose; the rule is that it never READS them, and local_images.py tests that;
+  - stale instruction after a reference swap: prepKey includes reference.hash, so current is null;
+  - client should pre-check every 400/503: server rejections happen before any reservation, so no paid call is made;
+  - empty SAM mask crash at images_edits.py:138: pre-existing code from before T7.
+- Follow-ups (minor, not blocking):
+  - /api/instruction lacks route tests for a duplicate or PNG reference and for the reference-mode mock label (models-reviewer m1).
+  - There is no DOM test for the dropzone gating (no DOM test setup in the repo).
+  - The Reference tab was not checked in a browser.
+  - T8/T9: flag brake-disc fit as "verify" on wheel references.
+  - The workflow path fix in .claude/workflows/*.js is not in this commit; it needs its own /review-changes.

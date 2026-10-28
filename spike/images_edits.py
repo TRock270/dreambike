@@ -3,6 +3,11 @@
 python spike/images_edits.py --fixture-set plain --mode edit
 python spike/images_edits.py --fixture-set plain --mode compose
 python spike/images_edits.py --fixture-set plain --mode compare
+python spike/images_edits.py --fixture-set plain --mode compose --reference rear
+
+On-bike cover boxes (expected.json "covers", kind "bike") are refilled from their edge
+pixels on a copy before upload. vin and plate covers are never touched, and nothing
+is written to fixtures/.
 
 Raw JSON body, one image per call, no mask field. Outputs are private files in
 spike/out/edits/. Drift is measured against the SAM target mask from the points
@@ -41,6 +46,25 @@ def body_for(prompt: str, images: list[str], width: int, height: int, quality: s
         "size": f"{width}x{height}", "response_format": "b64_json", "output_format": "webp",
         "reasoning_strength": quality, "tool_enablement": dict(NO_TOOLS),
     }
+
+
+def refill_bike_covers(norm: Any, covers: list[dict[str, Any]] | None) -> tuple[Any, str]:
+    """Refill kind 'bike' covers on a copy; return (Normalized, data URL).
+
+    Works on the normalized RGB, then re-encodes through imaging.normalize. Dimensions
+    must not change, because every box and mask uses this bitmap.
+    """
+    boxes = [c["box"] for c in covers or [] if c.get("kind") == "bike"]
+    if not boxes:
+        return norm, common.data_url("image/webp", norm.data)
+    rgb = imaging.refill_boxes(imaging.decode_rgb(norm.data), boxes)
+    buf = io.BytesIO()
+    Image.fromarray(rgb).save(buf, "PNG")
+    out = imaging.normalize(buf.getvalue())
+    if (out.width, out.height) != (norm.width, norm.height):
+        raise common.SpikeExit(common.EXIT_ASSERTION,
+                               "Cover refill changed the image size; refusing to upload.")
+    return out, common.data_url("image/webp", out.data)
 
 
 def cached_edit_prompt(fixture: str, profile: str) -> str | None:
@@ -124,28 +148,40 @@ def run_edit(config, budget, profile: str, prompt: str, images: list[str], base:
 def main() -> int:
     parser = common.base_parser(__doc__.splitlines()[0])
     parser.add_argument("--mode", choices=["edit", "compose", "compare"], required=True)
+    parser.add_argument("--reference", choices=["front", "rear"], default="front",
+                        help="compose only: use expected.json reference (front) or referenceRear.")
     args = parser.parse_args()
     config = common.Config.load()
     fixture = common.FIXTURE_SETS[args.fixture_set][0]
     entry = {} if args.dry_run else common.require_rights(fixture)
     budget = None if args.dry_run else common.Budget(config, args.ticket)
-    base, base_url, placeholder = common.fixture_image(fixture, allow_placeholder=args.dry_run)
+    # Dry runs use a name that never exists, so fixtures/ is never read.
+    base, base_url, placeholder = common.fixture_image(
+        "base-placeholder" if args.dry_run else fixture, allow_placeholder=args.dry_run)
+    if args.reference == "rear" and args.mode != "compose":
+        raise common.SpikeExit(common.EXIT_CONFIG, "--reference rear works with --mode compose only.")
+    if not args.dry_run:  # dry runs never read expected.json or fixtures
+        base, base_url = refill_bike_covers(base, entry.get("covers"))
 
     if args.mode == "compose":
-        ref = {} if args.dry_run else (common.load_expected().get("reference") or {})
+        ref_key = "referenceRear" if args.reference == "rear" else "reference"
+        ref = {} if args.dry_run else (common.load_expected().get(ref_key) or {})
         if not args.dry_run and not (ref.get("file") and ref.get("identifiersReviewed") is True
                                      and ref.get("description")):
             raise common.SpikeExit(common.EXIT_CONFIG, "Owned reference part not configured in "
-                                   "expected.json (file, identifiersReviewed, description).")
+                                   f"expected.json ({ref_key}: file, identifiersReviewed, description).")
         if args.dry_run:
             _, ref_url, _ = common.fixture_image("reference-placeholder", allow_placeholder=True)
             edit_prompt = "<approved edit prompt>"
         else:
-            _, ref_url, _ = common.fixture_image(ref["file"])
-            edit_prompt = (cached_edit_prompt(fixture, "spark_instruction_reference")
-                           or ref["description"])
-        runs = [("image_compose", template("compose.v1.md", edit_prompt), [base_url, ref_url],
-                 "high")]
+            ref_norm, _, _ = common.fixture_image(ref["file"])
+            _, ref_url = refill_bike_covers(ref_norm, ref.get("covers"))
+            # The cached Spark instruction describes the front reference only.
+            cached = (cached_edit_prompt(fixture, "spark_instruction_reference")
+                      if args.reference == "front" else None)
+            edit_prompt = cached or ref["description"]
+        profile = "image_compose_rear" if args.reference == "rear" else "image_compose"
+        runs = [(profile, template("compose.v1.md", edit_prompt), [base_url, ref_url], "high")]
     else:
         test = entry.get("paintTest") or {}
         if args.dry_run:

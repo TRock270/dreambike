@@ -32,6 +32,7 @@ import { ImageCanvas } from "./ImageCanvas";
 import { InstructionPreview } from "./InstructionPreview";
 import { PaintForm } from "./PaintForm";
 import { PartSelector, type PointTarget } from "./PartSelector";
+import { ReferenceDropzone } from "./ReferenceDropzone";
 import { ProjectList, type ProjectListState } from "./ProjectList";
 import { UploadDropzone } from "./UploadDropzone";
 import { UploadNotice } from "./UploadNotice";
@@ -43,14 +44,15 @@ const PREVIEW_DISCARDED = "The preview was discarded because the version shown c
 
 /** Header, photo area, edit panel and history. Projects are saved in this browser (SPEC 9). */
 /** What a pending render remembers: which project and head it was made for, and the IDs an accept will use. */
-type RenderEntry = { key: string; state: RenderState; newMask: BinaryMask | null; ref: PendingRef | null; ids: AcceptIds };
+type RenderEntry = { key: string; state: RenderState; newMask: BinaryMask | null; ref: PendingRef | null; ids: AcceptIds;
+  /** Hash of the reference photo this render used (memory only), or null for text and paint. */ referenceHash: string | null };
 
 /** Facing only changes the derived parts when a front/rear phrase was actually detected on this photo. */
 function facingChangesParts(m: PartMapState): boolean {
   return Object.keys(PAIRED_SLOTS).some((phrase) => m.requests[phrase] === "done");
 }
 
-export function Workspace() {
+export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
   const [noticeAccepted, setNoticeAccepted] = useState(false);
   const [photo, setPhoto] = useState<NormalizedPhoto | null>(null);
   const [map, setMap] = useState<PartMapState>(() => emptyPartMap());
@@ -63,7 +65,12 @@ export function Workspace() {
   const [bikeForm, setBikeForm] = useState<BikeFormState>(emptyBikeForm);
   const [identify, setIdentify] = useState<{ status: "pending" | "done" | "error" | "off"; message: string | null }>({ status: "off", message: null });
   const [identifyCachedAt, setIdentifyCachedAt] = useState<number | null>(null);
-  const [editMode, setEditMode] = useState<"text" | "paint">("text");
+  const [editMode, setEditMode] = useState<"text" | "paint" | "reference">("text");
+  // The reference photo lives in browser memory only: never in IndexedDB, never in the project, never in an export.
+  // It is tied to the part it was added for, so a front-wheel crop can never be sent for the rear wheel.
+  const [refState, setRefState] = useState<{ key: string; photo: NormalizedPhoto } | null>(null);
+  // Set when a route answers FEATURE_DISABLED: the server's own message, shown instead of the tab.
+  const [referenceOff, setReferenceOff] = useState<string | null>(null);
   // A prepared instruction belongs to one part of one photo; anything else is stale.
   const [prepared, setPrepared] = useState<{ key: string; state: "busy" } | { key: string; state: "error"; message: string }
     | { key: string; state: "done"; instruction: InstructionData } | null>(null);
@@ -219,6 +226,7 @@ export function Workspace() {
     runAbort.current?.abort();
     setRender(null);
     setPrepared(null);
+    setRefState(null);
     setSelectedId(null);
     setPointMode(null);
     setNotice(null);
@@ -442,17 +450,28 @@ export function Workspace() {
   const selected = view.parts.find((p) => p.id === selectedId && !p.stale) ?? null;
   const selectionKey = photo && selected ? `${photo.hash}:${selected.id}` : null;
   const paintOnly = selected ? !modeAllowed(selected.slot, "text") : false;
-  const mode = paintOnly ? "paint" : editMode;
+  // Paint-only slots (frame, engine) never offer reference mode; a server that said "off" hides it too.
+  const referenceOffered = referenceEnabled && referenceOff === null && !paintOnly;
+  const mode = paintOnly ? "paint" : editMode === "reference" && !referenceOffered ? "text" : editMode;
+  const reference = mode === "reference" && refState && refState.key === selectionKey ? refState.photo : null;
   // The key includes the bike as sent, so editing the bike makes an older preview stale.
   // It also includes the shown version, so a preview never carries over to another head.
-  const prepKey = `${session?.project.headVersionId ?? "unsaved"}:${selectionKey}:${mode}:${JSON.stringify(bikeForm.bike)}`;
+  // The reference hash is part of the key too: swapping the reference makes an instruction prepared for the
+  // old one stale, so a rear crop can never render with an instruction prepared for the front crop.
+  const prepKey = `${session?.project.headVersionId ?? "unsaved"}:${selectionKey}:${mode}:${reference?.hash ?? "-"}:${JSON.stringify(bikeForm.bike)}`;
   const current = prepared && prepared.key === prepKey ? prepared : null;
+
+  // Selecting another part drops the reference from memory (the key check above already ignores it).
+  useEffect(() => {
+    setRefState((r) => (r && r.key !== selectionKey ? null : r));
+  }, [selectionKey]);
 
   const renderEntry = render && render.key === prepKey ? render : null;
 
   /** One explicit click = one paid render; `reuse` blends the cached render again without paying. */
   async function runRender(reuse: boolean) {
     if (!photo || !selected || current?.state !== "done" || renderBusy.current) return;
+    if (mode === "reference" && !reference) return; // reference mode never renders without its reference
     const cached = renderEntry && renderEntry.state.kind !== "review" ? renderEntry.state.generated : null;
     if (reuse && !cached) return; // "Retry blend" never turns into a paid render
     renderBusy.current = true;
@@ -462,19 +481,20 @@ export function Workspace() {
     const controller = new AbortController();
     renderAbort.current = controller;
     const key = prepKey, base = photo, part = selected, instruction = current.instruction;
+    const refPhoto = mode === "reference" ? reference : null;
     // Every preview is tied to the project and head it was made for, with fresh IDs for its accept.
     const ref: PendingRef | null = session ? { projectId: session.project.id, expectedHeadId: session.project.headVersionId } : null;
     const ids = newAcceptIds();
     const bikeBox = view.bike?.box ?? null;
     let generated: Generated | null = reuse ? cached : null;
     const put = (state: RenderState, newMask: BinaryMask | null = null) => {
-      if (!controller.signal.aborted) setRender({ key, state, newMask, ref, ids });
+      if (!controller.signal.aborted) setRender({ key, state, newMask, ref, ids, referenceHash: refPhoto?.hash ?? null });
     };
     try {
       if (!generated) {
         put({ kind: "running", stage: "generating", generated: null });
         generated = await requestEdit(base, { slot: part.slot, prompt: instruction.editPrompt, mode,
-          intent: instruction.intent, quality: "high" }, crypto.randomUUID(), controller.signal);
+          intent: instruction.intent, quality: "high" }, crypto.randomUUID(), controller.signal, refPhoto?.blob ?? null);
       }
       const g = generated;
       const { result, newMask } = await blend(base, g, part, bikeBox, instruction.intent,
@@ -482,6 +502,7 @@ export function Workspace() {
       put({ kind: "review", generated: g, result }, newMask);
     } catch (error) {
       const known = error instanceof PreflightError;
+      if (known && error.code === "FEATURE_DISABLED") setReferenceOff(error.message);
       put({ kind: "error", message: known ? error.message : "The render failed.", retryable: known ? error.retryable : true, generated });
     } finally {
       renderBusy.current = false;
@@ -556,6 +577,7 @@ export function Workspace() {
     setSelectedId(part?.id ?? null);
     setPrepared(null);
     setRender(null);
+    setRefState(null); // one reference per render: the next part starts without one
     const controller = new AbortController();
     runAbort.current = controller;
     recutPending.current = true;
@@ -578,13 +600,15 @@ export function Workspace() {
 
   async function prepare(text: string) {
     if (!photo || !selected || !selectionKey) return;
+    if (mode === "reference" && !reference) return;
     const key = prepKey;
     setPrepared({ key, state: "busy" });
     try {
       const instruction = await requestInstruction({ slot: selected.slot, box: selected.box, bike: bikeForm.bike,
-        mode, text, width: photo.width, height: photo.height });
+        mode, text, width: photo.width, height: photo.height }, undefined, mode === "reference" ? reference?.blob ?? null : null);
       setPrepared((p) => (p?.key === key ? { key, state: "done", instruction } : p));
     } catch (error) {
+      if (error instanceof PreflightError && error.code === "FEATURE_DISABLED") setReferenceOff(error.message);
       setPrepared((p) => (p?.key === key ? { key, state: "error",
         message: error instanceof PreflightError ? error.message : "Preparing the change failed." } : p));
     }
@@ -682,17 +706,26 @@ export function Workspace() {
                     <p className="text-text-muted text-[12px]">{slotInfo(selected.slot).label} allows paint changes only.</p>
                   ) : (
                     <div role="tablist" aria-label="Kind of change" className="flex gap-1">
-                      {(["text", "paint"] as const).map((m) => (
+                      {(referenceOffered ? ["text", "paint", "reference"] as const : ["text", "paint"] as const).map((m) => (
                         <button key={m} type="button" role="tab" aria-selected={mode === m} onClick={() => setEditMode(m)}
                           className={`rounded-full px-3 py-1 text-[13px] ${mode === m ? "bg-primary text-on-fill" : "border border-hairline"}`}>
-                          {m === "text" ? "Describe" : "Paint"}
+                          {m === "text" ? "Describe" : m === "paint" ? "Paint" : "Reference photo"}
                         </button>
                       ))}
                     </div>
                   )}
-                  {mode === "text"
-                    ? <DescribeForm key={`d-${selectionKey}`} partLabel={selected.label} busy={current?.state === "busy"} onPrepare={prepare} />
-                    : <PaintForm key={`p-${selectionKey}`} partLabel={selected.label} busy={current?.state === "busy"} onPrepare={prepare} />}
+                  {!paintOnly && !referenceOffered && (
+                    <p className="text-text-muted text-[12px]">
+                      {referenceOff ?? "Reference photos are switched off on this server. Describe the part in text instead."}
+                    </p>
+                  )}
+                  {mode === "text" && <DescribeForm key={`d-${selectionKey}`} partLabel={selected.label} busy={current?.state === "busy"} onPrepare={prepare} />}
+                  {mode === "paint" && <PaintForm key={`p-${selectionKey}`} partLabel={selected.label} busy={current?.state === "busy"} onPrepare={prepare} />}
+                  {mode === "reference" && (
+                    <ReferenceDropzone key={`r-${selectionKey}`} partLabel={selected.label} reference={reference}
+                      busy={current?.state === "busy"} onPrepare={prepare}
+                      onReference={(p) => setRefState(p && selectionKey ? { key: selectionKey, photo: p } : null)} />
+                  )}
                   {current?.state === "busy" && <p role="status" className="text-text-secondary text-[13px]">Preparing the change…</p>}
                   {current?.state === "error" && (
                     <p role="alert" className="rounded-chip bg-danger-soft px-3 py-2 text-danger-soft-text text-[13px]">
@@ -704,7 +737,7 @@ export function Workspace() {
                       rendering={renderRunning} onRender={() => void runRender(false)} />
                   )}
                   {current?.state === "done" && renderEntry && (
-                    <EditReview base={photo} state={renderEntry.state} onAccept={() => void acceptRender()}
+                    <EditReview base={photo} state={renderEntry.state} fromReference={renderEntry.referenceHash !== null} onAccept={() => void acceptRender()}
                       onReject={() => { setRender(null); setAccept({ saving: false, error: null }); setStorageFull((f) => (f === "accept" ? null : f)); }}
                       onRetryBlend={() => void runRender(true)} onRenderAgain={() => void runRender(false)} onCancel={cancelRender}
                       saving={accept.saving} saveError={accept.error} unsaved={!session || readOnly} readOnly={readOnly && !!session} />

@@ -172,6 +172,51 @@ describe("history through the session", () => {
   });
 });
 
+describe("reference mode accepts", () => {
+  /** A geometry result: a wheel swap is a full-image render, so there is no refreshed part. */
+  const wheelInput = (s: ProjectSession, slot: SlotId, title: string, c: string): AcceptInput => ({
+    ...inputFor(s, slot, title, c), mode: "reference", refreshed: null,
+    result: result(c, false),
+  });
+  async function acceptWheel(s: ProjectSession, slot: SlotId, title: string, c: string): Promise<ProjectSession> {
+    const out = await acceptEdit(h, s, wheelInput(s, slot, title, c));
+    if (out.status !== "accepted") throw new Error(`refused: ${out.message}`);
+    return out.session;
+  }
+
+  it("adds exactly one build item and one version with the plain change record, and stores only the result image", async () => {
+    const s = await start();
+    const before = { versions: await h.db.count("versions"), images: await h.db.count("images") };
+    const next = await acceptWheel(s, "wheel_front", "Gold wheel", "b");
+    expect(await h.db.count("versions")).toBe(before.versions + 1);
+    expect(await h.db.count("images")).toBe(before.images + 1); // the result; no reference image
+    const head = headVersion(next);
+    expect(activeItems(head)).toHaveLength(1);
+    // Exactly the SPEC 4 record: no reference id or hash is persisted.
+    expect(Object.keys(head.change!).sort()).toEqual(["instruction", "itemId", "mode", "slot"]);
+    expect(head.change).toMatchObject({ slot: "wheel_front", mode: "reference", instruction: "Gold wheel" });
+    const stored = await h.db.getAll("images");
+    expect(stored.map((i) => i.hash).sort()).toEqual([hash("a"), hash("b")].sort());
+  });
+
+  it("two wheels in two steps give two sheet lines and two undo steps; undo restores image and sheet together", async () => {
+    let s = await start();
+    s = await acceptWheel(s, "wheel_front", "Gold front wheel", "b");
+    s = await acceptWheel(s, "wheel_rear", "Gold rear wheel", "c");
+    expect(activeItems(headVersion(s)).map((i) => i.slot).sort()).toEqual(["wheel_front", "wheel_rear"]);
+    expect(pathFromRoot(s.versions, s.project.headVersionId)).toHaveLength(3);
+    const one = await undoHead(h, s);
+    if (one.status !== "moved") throw new Error("undo failed");
+    expect(one.view.photo.hash).toBe(hash("b"));
+    expect(activeItems(headVersion(one.session)).map((i) => i.slot)).toEqual(["wheel_front"]);
+    const two = await undoHead(h, one.session);
+    if (two.status !== "moved") throw new Error("undo failed");
+    expect(two.view.photo.hash).toBe(hash("a"));
+    expect(activeItems(headVersion(two.session))).toHaveLength(0);
+    expect((await undoHead(h, two.session)).status).toBe("nothing");
+  });
+});
+
 describe("accept guard", () => {
   it("a preview made for an older head is refused, writes nothing, and the head stays", async () => {
     let s = await start();

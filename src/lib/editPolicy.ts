@@ -26,7 +26,11 @@ const FINISH_WORDS = /\b(paint|painted|black|chrome|powder|coat(ed)?|colou?r|glo
 export function enforceIntent(slot: SlotId, mode: Mode, requestText: string, instruction: InstructionData): InstructionData {
   if (mode === "paint") return instruction.intent === "paint" ? instruction : { ...instruction, intent: "paint" };
   let intent = instruction.intent;
-  if (GEOMETRY_SLOTS.has(slot)) {
+  if (mode === "reference") {
+    // A reference part is rendered over the whole image, so it is never a blend into the old mask:
+    // wheels and fork are geometry; other slots never stay paint, but a model "geometry" is kept.
+    intent = GEOMETRY_SLOTS.has(slot) ? "geometry" : intent === "paint" ? "replace" : intent;
+  } else if (GEOMETRY_SLOTS.has(slot)) {
     if (intent === "replace") intent = "geometry";
     // A size or replacement request stays geometry even if the model answers "paint".
     const replaced = FORK_WHEEL_REPLACEMENT.test(requestText)
