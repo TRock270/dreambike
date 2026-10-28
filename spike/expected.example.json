@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "_readme": [
+    "Copy to fixtures/expected.json (gitignored) and fill in real values only. Leave unknowns null.",
+    "Coordinates are pixels in the NORMALIZED image. Run `python spike/local_images.py --fixture-set all`",
+    "first; it writes spike/out/normalized/<name>.webp and prints each normalized width x height.",
+    "Boxes are [left, top, right, bottom) with right/bottom exclusive. Points are [x, y].",
+    "pointTest.positive must be on a part away from the image origin (for example the rear wheel hub);",
+    "pointTest.negative must be off that part. consentRecord is the path of your private consent file;",
+    "scripts only check that it exists and never read it."
+  ],
+  "consentRecord": null,
+  "fixtures": {
+    "plain-wall-right.jpg": {
+      "photographer": null,
+      "dateTaken": null,
+      "derivedFrom": null,
+      "identifiersReviewed": false,
+      "noPeople": false,
+      "bike": { "make": null, "model": null, "yearFrom": null, "yearTo": null, "engine": null,
+                "abs": "unknown", "facing": "unknown" },
+      "visibleSlots": [],
+      "pointTest": { "slot": null, "positive": null, "negative": null, "targetBox": null },
+      "paintTest": { "slot": null, "box": null, "request": null },
+      "textTest": { "slot": null, "box": null, "request": null }
+    },
+    "plain-wall-left.jpg": {
+      "photographer": null, "dateTaken": null, "derivedFrom": null,
+      "identifiersReviewed": false, "noPeople": false,
+      "bike": { "make": null, "model": null, "yearFrom": null, "yearTo": null, "engine": null,
+                "abs": "unknown", "facing": "unknown" },
+      "visibleSlots": []
+    },
+    "cluttered.jpg": {
+      "photographer": null, "dateTaken": null, "derivedFrom": null,
+      "identifiersReviewed": false, "noPeople": false,
+      "bike": { "make": null, "model": null, "yearFrom": null, "yearTo": null, "engine": null,
+                "abs": "unknown", "facing": "unknown" },
+      "visibleSlots": []
+    },
+    "exif-rotated.jpg": {
+      "photographer": null, "dateTaken": null,
+      "derivedFrom": "Owned duplicate of another fixture with Orientation=6; record how it was made.",
+      "identifiersReviewed": false, "noPeople": false,
+      "markerPoint": null
+    },
+    "heic.heic": {
+      "photographer": null, "dateTaken": null, "derivedFrom": null,
+      "identifiersReviewed": false, "noPeople": false
+    }
+  },
+  "reference": {
+    "file": null,
+    "identifiersReviewed": false,
+    "slot": null,
+    "box": null,
+    "description": null
+  }
+}

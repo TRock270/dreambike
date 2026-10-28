@@ -1,0 +1,141 @@
+{
+  "type": "object",
+  "properties": {
+    "bike": {
+      "type": "object",
+      "properties": {
+        "make": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "family": {
+          "type": "string",
+          "enum": [
+            "sportster",
+            "softail",
+            "dyna",
+            "touring",
+            "street",
+            "other",
+            "unknown"
+          ]
+        },
+        "engine": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "yearFrom": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1900,
+              "maximum": 2100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "yearTo": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1900,
+              "maximum": 2100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "abs": {
+          "type": "string",
+          "enum": [
+            "yes",
+            "no",
+            "unknown"
+          ]
+        },
+        "style": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "facing": {
+          "type": "string",
+          "enum": [
+            "left",
+            "right",
+            "unknown"
+          ]
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "maxItems": 12
+        }
+      },
+      "required": [
+        "make",
+        "model",
+        "family",
+        "engine",
+        "yearFrom",
+        "yearTo",
+        "abs",
+        "style",
+        "facing",
+        "confidence",
+        "limitations"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "bike"
+  ],
+  "additionalProperties": false
+}

@@ -101,6 +101,8 @@ Spark Contributor can use submitted content for training. Meta documents Contrib
 
 ### 7.2 UNVERIFIED register
 
+Current gate status and evidence: docs/api-evidence.md (status summary table), updated per ticket.
+
 SPEC.md section 14 owns ten numbered gates, U01 through U10. Ticket 0 records documentation URLs, installed versions, sanitized response fields, timings, costs, and pass/fail results. Do not mark them resolved just because this plan specifies a test.
 
 The gates cover mask placement; Spark schema/search composition; account models and quotas; edit latency and geometry; practical payloads; billable search bounds and durable accounting; product source/fetch quality; Vercel configuration; fixture rights and bike truth; and shop/legal/submission confirmations. A failing gate uses its documented fallback. No paid calls are authorized by this documentation handoff.

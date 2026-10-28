@@ -1,0 +1,72 @@
+{
+  "type": "object",
+  "properties": {
+    "instruction": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "editPrompt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "spec": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "value": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "key",
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 20
+        },
+        "intent": {
+          "type": "string",
+          "enum": [
+            "paint",
+            "replace",
+            "geometry"
+          ]
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "maxItems": 8
+        }
+      },
+      "required": [
+        "title",
+        "editPrompt",
+        "spec",
+        "intent",
+        "warnings"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "instruction"
+  ],
+  "additionalProperties": false
+}

@@ -24,6 +24,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 
 ## T0 — Day 0 API and image spike
 
+- Status: IN PROGRESS. Offline part done 2026-10-27; live profiles blocked on U09 fixtures/consent and U06 ledger (see log).
 - Priority: MVP. Estimate: 3h, split Oct 27/28. Depends on: none.
 - Files: budget/reserve.lua/settle.lua, spike/requirements.txt, common.py, run_all.py, responses_sam.py, responses_spark.py, images_edits.py, asr_transcribe.py, files.py, local_images.py, deployment.py; docs/api-evidence.md; fixtures/expected.json locally; .gitignore; PLAN.md 7.2 status references.
 - Work: inspect installed Python/Node and package availability; record package sizes before installing >1MB packages; obtain owner fixture/consent/Billing inputs; implement the command contracts in SPEC 12; create the shared atomic reserve/settle policy and connect the cost ledger before paid dispatch. Start with one owned baseline. Test concept, off-origin point, identify JSON, text edit, and owned reference. Visit all five fixture input cases with local tests. Grounded checks wait for U06 billing bounds. Files and ASR remain opt-in.
@@ -179,3 +180,39 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 ## Completion log template
 
 For each completed ticket append actual date/time ET, files changed, checks and observations, cost ledger total, remaining U-gates, actual hours, and commit hash. For a cut/blocked ticket record the concrete fallback or missing input. A checkbox alone is not evidence. The final README and video use this actual log, not the estimates above.
+
+## Progress log
+
+### T0 session 1 — 2026-10-27, about 23:15–23:58 ET (about 0.75 h)
+
+- Status: in progress. Offline scope done. Live scope blocked.
+- Files: budget/prices.json, budget/reserve.lua, budget/settle.lua; spike/requirements.txt, common.py, imaging.py, local_images.py, responses_sam.py, responses_spark.py, images_edits.py, asr_transcribe.py, files.py, deployment.py, run_all.py, ledger.py, expected.example.json; prompts/identify.v1.md, instruction.v1.md, paint.v1.md, compose.v1.md, prompts/schemas/bike_identification_v1.json, edit_instruction_v1.json; docs/api-evidence.md; SPEC.md notes (sharp 0.35.5, click floor, Redis hash tag); PLAN.md 7.2 pointer.
+- Checks run:
+  - `.venv` setup with Python 3.11.16: ok.
+  - `python spike/local_images.py --fixture-set all`: 32 passed, 0 failed, 5 skipped. The skips are the missing owned fixtures (U09).
+  - `python spike/run_all.py --mode smoke --dry-run`: all request shapes built, no HTTP.
+  - Gates fail closed. Paid scripts exit 3 without a ledger. Grounded exits 3 (U06). Files exits 3 (pricing unknown). ASR exits 5. deployment.py exits 2 because the app isn't built yet.
+- Not run: any live profile, `ledger.py selftest` (needs Redis), and the TypeScript parser and placement repeat (T1/T3).
+- Cost ledger: $0.00. No paid calls were made.
+- Owner decisions recorded: npm set approved with sharp 0.35.5; Pillow and numpy approved; charset-normalizer approved after the fact; node@22 installed via Homebrew.
+- Remaining before T0 can complete:
+  - U09: five owned photos, fixtures/expected.json, and the consent record.
+  - U06: Upstash REST URL and token, Billing spend limit, `ledger.py init` after reconciliation, PRICING_VERIFIED_AT.
+  - Then the live profiles: SAM concept and points, Spark identify and instruction, image edit, compose; owner overlay review for U01.
+- Consultant review (2026-10-28):
+  - Nemotron 3 Super returned 404; the fallback Nemotron 3.5 reviewed the Lua files and common.py; Gemini reviewed imaging.py.
+  - Adopted:
+    - An exception in charge() or dispatch now settles "unknown" instead of leaving the reservation stuck.
+    - load_prices fails closed.
+    - Dilation no longer crashes when the radius exceeds the mask height.
+    - Palette transparency and CMYK/ICC handling fixed.
+    - A 200 MP decompression bomb now maps to TOO_LARGE.
+    - Integer resize steps; APNG `is_animated` check; zero-size click guard; no dithering in mask PNGs.
+  - Rejected:
+    - Coercing corrupt Redis numbers to 0 (that would fail open).
+    - Retrying paid calls on 5xx, and retrying Redis (the spec forbids both).
+    - Per-write TTL refresh (harmless).
+    - Memory and performance concerns about transient numpy arrays (fine for the spike).
+    - A symmetric aspect formula (SPEC fixes the formula).
+    - The claimed upstream body leak (only the error code and type are kept).
+  - Rechecked: local_images 35 passed, 0 failed, 5 skipped; smoke dry run shapes ok.

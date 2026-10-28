@@ -1,0 +1,5 @@
+requests>=2.32.5,<3
+Pillow>=11.3,<13
+numpy>=2.2,<3
+meta-sam-parser>=0.1.0,<0.2
+python-dotenv>=1.1,<2
