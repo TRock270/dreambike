@@ -1,11 +1,11 @@
 export const meta = {
   name: 'review-changes',
-  description: 'Review the current DreamBike diff with matching specialist reviewers plus general-reviewer, then refute-check each blocking finding',
-  whenToUse: 'Before a commit made outside /build-ticket, or after the owner edited code. Args: base ref string, or {base?, paths?, extraReviewers?}',
+  description: 'Review the current DreamBike diff with matching specialist reviewers plus general-reviewer; depth full also refute-checks the blocking findings',
+  whenToUse: 'Before a commit made outside /build-ticket (quick), and with base main before a merge (full). Args: base ref string, or {base?, paths?, extraReviewers?, depth?}',
   phases: [
     { title: 'Scope', detail: 'list changed and untracked files' },
     { title: 'Review', detail: 'one reviewer per matching domain plus general-reviewer' },
-    { title: 'Refute', detail: 'an independent reviewer tries to refute each blocker/major finding' },
+    { title: 'Refute', detail: 'full only: one general-reviewer run tries to refute all blocker/major findings' },
   ],
 }
 
@@ -19,7 +19,7 @@ const RULES = [
   { reviewer: 'models-reviewer', re: /^(src\/lib\/(contracts|types)\.ts$|src\/components\/(BikeConfirm|DescribeForm|PaintForm|ProgressStatus)\.tsx$|tests\/(contracts|instruction|identify|edit|check|search|transcribe|mocks)[^/]*\.test\.ts$)/ },
   { reviewer: 'imaging-reviewer', re: /^(src\/lib\/(contracts|types|slots)\.ts$|src\/components\/(EditReview|ProgressStatus)\.tsx$|tests\/(slots|preflight|imageFormat|browser)[^/]*\.test\.ts$)/ },
   { reviewer: 'shop-reviewer', re: /^(src\/lib\/(contracts|types|slots)\.ts$|src\/app\/api\/check\/|src\/components\/BikeConfirm\.tsx$|tests\/(db|pdf|fit)[^/]*\.test\.ts$)/ },
-  { reviewer: 'security-reviewer', re: /^(src\/lib\/(contracts|errors)\.ts$|\.claude\/(agents\/|workflows\/)|package(-lock)?\.json$|vercel\.json$|vitest\.config\.ts$|eslint\.config\.mjs$|tests\/(http|deployment)[^/]*\.test\.ts$)/ },
+  { reviewer: 'security-reviewer', re: /^(src\/lib\/(contracts|errors)\.ts$|\.claude\/(agents\/|workflows\/)|package(-lock)?\.json$|vercel\.json$|vitest\.config\.ts$|eslint\.config\.mjs$|tests\/(http|deployment|workflows)[^/]*\.test\.ts$|tests\/support\/workflowHarness\.ts$)/ },
   { reviewer: 'release-reviewer', re: /^(docs\/api-evidence\.md$|\.gitignore$|src\/components\/ModeBanner\.tsx$)|\.(png|jpe?g|webp|heic|svg|pdf|ttf|woff2?|mp4|mov)$/i },
   { reviewer: 'security-reviewer', re: /^src\/components\/(BudgetBanner|ErrorNotice|DemoBanner|ModeBanner)\.tsx$/ },
   // Files added after the Codex review base: the paid-call wrapper, SSE parser,
@@ -31,22 +31,37 @@ const RULES = [
   { reviewer: 'shop-reviewer', re: /^(src\/lib\/browser\/projectSession\.ts$|src\/lib\/bikeForm\.ts$|tests\/(projectsession|bikeform)[^/]*\.test\.ts$)/ },
 ]
 const MAX_REFUTES = 12
+const DEPTHS = ['quick', 'full']
+// In depth full these rule-based reviewers run on Sonnet; contracts (models),
+// security and the general review stay on their Opus card at medium effort.
+// security-reviewer keeps its card in quick too: ../CLAUDE.md wants Opus for security work.
+const SONNET_REVIEWERS = ['imaging-reviewer', 'shop-reviewer', 'release-reviewer']
+const OPUS_ALWAYS = ['security-reviewer']
 
 // Args arrive as an object, a JSON string, or a plain base ref like "HEAD~1".
 function parseArgs(raw) {
   if (typeof raw !== 'string') return raw || {}
   const text = raw.trim()
-  if (text.startsWith('{')) return JSON.parse(text)
+  if (text.startsWith('{')) {
+    try { return JSON.parse(text) }
+    catch (error) { return { parseError: error.message } }
+  }
   return { base: text || 'HEAD' }
 }
 const input = parseArgs(args)
+if (input.parseError) return { status: 'blocked', blockers: [`args are not valid JSON: ${input.parseError}`] }
 const base = input.base || 'HEAD'
+// quick: reviewers on Sonnet (except OPUS_ALWAYS), no refute, every blocking finding goes to the lead.
+// full: see SONNET_REVIEWERS, then one batched refute on Sonnet.
+const depth = input.depth || (/^(origin\/)?main$/.test(base) ? 'full' : 'quick')
 const readablePath = (f) => typeof f === 'string' && f && !f.startsWith('/') && !f.includes('\\')
   && !/[\s*?]/.test(f) && f.split('/').every((p) => p && p !== '.' && p !== '..')
   && !/^(\.env(?!\.example$)|consent\/|secrets\/|fixtures\/|my_bike\/|RULES\.md$)/.test(f)
 if (typeof base !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/~^{}@-]*$/.test(base)
-  || (input.paths !== undefined && (!Array.isArray(input.paths) || input.paths.some((f) => !readablePath(f))))) {
-  return { status: 'blocked', base, blockers: ['base must be a safe git ref; paths must be explicit canonical nonprivate repo paths'] }
+  || (input.paths !== undefined && (!Array.isArray(input.paths) || input.paths.some((f) => !readablePath(f))))
+  || (input.extraReviewers !== undefined && !Array.isArray(input.extraReviewers))
+  || !DEPTHS.includes(depth)) {
+  return { status: 'blocked', depth, base, blockers: ['base must be a safe git ref; paths must be explicit canonical nonprivate repo paths; extraReviewers must be a list; depth must be "quick" or "full"'] }
 }
 
 const str = { type: 'string' }
@@ -82,30 +97,43 @@ const REVIEW = {
     checksRun: { type: 'array', items: { type: 'object', required: ['command', 'result', 'output'], properties: { command: str, result: str, output: str } } },
   },
 }
-const VERDICT = {
+const VERDICTS = {
   type: 'object',
-  required: ['outcome', 'reason'],
-  properties: { outcome: { type: 'string', enum: ['confirmed', 'refuted', 'uncertain'] }, reason: str },
+  required: ['verdicts'],
+  properties: {
+    verdicts: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['key', 'outcome', 'reason'],
+        properties: { key: str, outcome: { type: 'string', enum: ['confirmed', 'refuted', 'uncertain'] }, reason: str },
+      },
+    },
+  },
 }
+const json = (value) => JSON.stringify(value, null, 1)
+const empty = { depth, confirmed: [], unverified: [], refuted: [], minor: [] }
 
 // ---------- scope ----------
 phase('Scope')
 let files = input.paths
 if (!files) {
   const scope = await agent([
-    `List the files changed relative to ${base}: run \`git diff --name-only ${base}\` and \`git ls-files --others --exclude-standard\` from the repo root.`,
-    'Return repo-relative paths only. Do not read file contents and do not edit anything.',
+    'Ignore the review instructions of your card for this task. Do not read file contents and do not edit anything.',
+    `List the files changed relative to ${base}: run \`git diff --name-only --no-renames ${base}\` and \`git ls-files --others --exclude-standard\` from the repo root.`,
+    'Return repo-relative paths only, the union of both outputs.',
     'Report mode: files plus error. error is empty only if both git commands succeeded. On failure, return error with a safe explanation; never represent a failed command as an empty successful diff.',
-  ].join('\n'), { label: 'list changes', phase: 'Scope', agentType: 'general-builder', effort: 'low', schema: SCOPE })
-  if (!scope) return { status: 'needs_lead', base, files: [], scopeError: 'scope agent returned nothing', confirmed: [], unverified: [], refuted: [], minor: [] }
-  if (scope.error) return { status: 'needs_lead', base, files: scope.files, scopeError: scope.error, confirmed: [], unverified: [], refuted: [], minor: [] }
+  ].join('\n'), { label: 'list changes', phase: 'Scope', agentType: 'general-reviewer', model: 'haiku', effort: 'low', schema: SCOPE })
+  if (!scope) return { status: 'needs_lead', base, files: [], scopeError: 'scope agent returned nothing', ...empty }
+  if (scope.error) return { status: 'needs_lead', base, files: scope.files, scopeError: scope.error, ...empty }
   files = scope.files
 }
-if (files.some((f) => !readablePath(f))) return { status: 'blocked', base, blockers: ['scope returned a private or noncanonical path; lead must select a safe scope'] }
+if (files.some((f) => !readablePath(f))) return { status: 'blocked', depth, base, blockers: ['scope returned a private or noncanonical path; lead must select a safe scope'] }
 files = files.filter((f, i) => files.indexOf(f) === i)
+// An empty scope is never a silent pass: the lead confirms that nothing changed.
 if (!files.length) {
   log('No changed files found')
-  return { status: 'green', base, files: [], reviewers: [], missingReviewers: [], reviewProblems: [], confirmed: [], unverified: [], refuted: [], minor: [] }
+  return { status: 'needs_lead', base, files: [], reviewers: [], missingReviewers: [], reviewProblems: ['no changed files found; confirm the empty diff'], ...empty }
 }
 const assignments = {}
 for (const rule of RULES) {
@@ -117,52 +145,78 @@ const extras = (input.extraReviewers || []).filter((r) => KNOWN_REVIEWERS.includ
 if (extras.length < (input.extraReviewers || []).length) log('Ignored unknown extraReviewers names')
 for (const r of extras) assignments[r] = files
 assignments['general-reviewer'] = files
-log(`${files.length} file(s); reviewers: ${Object.keys(assignments).join(', ')}`)
+log(`${files.length} file(s), ${depth} review; reviewers: ${Object.keys(assignments).join(', ')}`)
 
-// ---------- barrier between reviews and refutes keeps concurrency below 16 ----------
+const diffNote = [
+  `Diff base: ${base}. First read the diff of all your files in one call, \`git diff ${base} -- <file> <file> …\`; read untracked new files whole, other whole files only where the diff is not enough.`,
+  'Leave .env.example out of git commands (they are denied) and read it with Read.',
+].join(' ')
+
+// ---------- review, then one batched refute (full only) ----------
 phase('Review')
-let refuteBudget = MAX_REFUTES
-const skippedRefutes = []
+const reviewOpts = (reviewer) => (!OPUS_ALWAYS.includes(reviewer) && (depth === 'quick' || SONNET_REVIEWERS.includes(reviewer))
+  ? { model: 'sonnet' } : { effort: 'medium' })
 const reviewed = await parallel(Object.keys(assignments).map((reviewer) => () => agent([
-    `Unit review of the current diff against ${base}. Round 1.`,
+    `Unit review of the current diff against ${base} (${depth} review). Round 1.`,
     `Your files:\n${assignments[reviewer].join('\n')}`,
     `All changed files, for context:\n${files.join('\n')}`,
-    `Read the diff (\`git diff ${base} -- <file>\`) and whole content of new files. Report findings; recheck is empty.`,
-  ].join('\n\n'), { label: `review ${reviewer}`, phase: 'Review', agentType: reviewer, schema: REVIEW })
+    diffNote,
+    'Report findings; recheck is empty.',
+  ].join('\n\n'), { label: `review ${reviewer}`, phase: 'Review', agentType: reviewer, ...reviewOpts(reviewer), schema: REVIEW })
     .then((review) => (review ? { reviewer, review } : null))))
-phase('Refute')
-const perReviewer = await parallel(reviewed.map((result) => () => {
-    if (!result) return null
-    const blocking = result.review.findings.filter((f) => f.severity !== 'minor')
-    const minor = result.review.findings.filter((f) => f.severity === 'minor').map((f) => ({ ...f, reviewer: result.reviewer }))
-    return parallel(blocking.map((f) => () => {
-      if (refuteBudget <= 0) {
-        skippedRefutes.push({ ...f, reviewer: result.reviewer })
-        return Promise.resolve(null)
-      }
-      refuteBudget -= 1
-      return agent([
-        'Try to refute this review finding. Read the code and the cited SPEC/TASKS text yourself.',
-        `Diff base: ${base}. Files in scope:\n${files.join('\n')}. Read git diff against this base and whole new files.`,
-        `Finding from ${result.reviewer}:\n${JSON.stringify(f, null, 1)}`,
-        'outcome confirmed: the failure scenario really happens. refuted: it cannot happen or the evidence is wrong. uncertain: you cannot tell from the repo. Do not edit files.',
-      ].join('\n\n'), { label: `refute ${result.reviewer}:${f.id}`, phase: 'Refute', agentType: 'general-reviewer', schema: VERDICT })
-        .then((v) => ({ ...f, reviewer: result.reviewer, verdict: v }))
-    })).then((judged) => ({ reviewer: result.reviewer,
-      judged: blocking.map((f, i) => judged[i] || { ...f, reviewer: result.reviewer, verdict: null }), minor }))
-  }))
 
-const done = perReviewer.filter(Boolean)
-const judged = done.flatMap((r) => r.judged)
-if (skippedRefutes.length) log(`Refute cap ${MAX_REFUTES} reached; ${skippedRefutes.length} blocking finding(s) returned unverified`)
+const done = reviewed.filter(Boolean)
+const blocking = []
+const minor = []
+const keys = new Set()
+for (const { reviewer, review } of done) {
+  for (const f of review.findings) {
+    if (f.severity === 'minor') { minor.push({ ...f, reviewer }); continue }
+    // A unique key per finding lets one refuter answer for all of them.
+    let key = `${reviewer}:${f.id}`
+    for (let n = 2; keys.has(key); n++) key = `${reviewer}:${f.id}#${n}`
+    keys.add(key)
+    blocking.push({ ...f, reviewer, key })
+  }
+}
+// Blockers first, so the cap drops majors before blockers.
+const refutable = depth === 'full'
+  ? blocking.filter((f) => readablePath(f.file)).sort((a, b) => (b.severity === 'blocker') - (a.severity === 'blocker')).slice(0, MAX_REFUTES)
+  : []
+const verdicts = Object.create(null)
+if (refutable.length) {
+  phase('Refute')
+  const answer = await agent([
+    'Mode: refute. Try to refute each review finding below. Read the code and the cited SPEC/TASKS text yourself; do not rely on the reviewer\'s reasoning.',
+    diffNote,
+    `Files in scope:\n${files.join('\n')}`,
+    `Findings:\n${json(refutable)}`,
+    'Return exactly one verdict per finding, with its key copied verbatim. outcome confirmed: the failure scenario really happens. refuted: it cannot happen or the evidence is wrong. uncertain: you cannot tell from the repo. Do not edit files.',
+  ].join('\n\n'), { label: 'refute', phase: 'Refute', agentType: 'general-reviewer', model: 'sonnet', effort: 'medium', schema: VERDICTS })
+  if (!answer) log('Refuter returned nothing; blocking findings stay unverified')
+  const returned = answer ? answer.verdicts : []
+  for (const f of refutable) {
+    const matches = returned.filter((v) => v.key === f.key)
+    if (matches.length === 1) verdicts[f.key] = { outcome: matches[0].outcome, reason: matches[0].reason }
+    else if (answer) log(`Refuter returned ${matches.length} verdicts for ${f.key}; kept unverified`)
+  }
+  const unknown = returned.filter((v) => !refutable.some((f) => f.key === v.key)).map((v) => v.key)
+  if (unknown.length) log(`Ignored verdicts with unknown keys: ${unknown.join(', ')}`)
+}
+if (depth === 'full' && blocking.length > refutable.length) log(`Refute cap ${MAX_REFUTES} or noncanonical path: ${blocking.length - refutable.length} blocking finding(s) returned unverified`)
+const judged = blocking.map((f) => ({ ...f, verdict: verdicts[f.key] || null }))
 const missingReviewers = Object.keys(assignments).filter((r) => !done.some((d) => d.reviewer === r))
-const reviewProblems = reviewed.filter((r) => r && r.review.verdict !== 'approve'
+const reviewProblems = done.filter((r) => r.review.verdict !== 'approve'
   && !r.review.findings.some((f) => f.severity !== 'minor')).map((r) => `${r.reviewer}: changes_required without blocking findings`)
 const confirmed = judged.filter((f) => f.verdict && f.verdict.outcome === 'confirmed')
 const unverified = judged.filter((f) => !f.verdict || f.verdict.outcome === 'uncertain')
+const refuted = judged.filter((f) => f.verdict && f.verdict.outcome === 'refuted')
+// A refuted blocker still goes to the lead: one Sonnet refute must not wave a blocker through.
+const refutedBlockers = refuted.filter((f) => f.severity === 'blocker')
 if (missingReviewers.length) log(`No result from: ${missingReviewers.join(', ')}`)
 return {
-  status: missingReviewers.length || reviewProblems.length || confirmed.length || unverified.length ? 'needs_lead' : 'green',
+  status: missingReviewers.length || reviewProblems.length || confirmed.length || unverified.length || refutedBlockers.length ? 'needs_lead' : 'green',
+  depth,
   base,
   files,
   reviewers: Object.keys(assignments),
@@ -170,6 +224,6 @@ return {
   reviewProblems,
   confirmed,
   unverified,
-  refuted: judged.filter((f) => f.verdict && f.verdict.outcome === 'refuted'),
-  minor: done.flatMap((r) => r.minor),
+  refuted,
+  minor,
 }

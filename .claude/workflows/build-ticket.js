@@ -22,6 +22,9 @@ const DOMAINS = {
 }
 const EXTRA_REVIEWERS = ['security-reviewer', 'release-reviewer', 'models-reviewer', 'imaging-reviewer', 'shop-reviewer']
 const MAX_UNITS = 4
+// Agents sometimes report absolute paths; compare everything repo-relative.
+// The optional part strips a session worktree under .claude/worktrees/<name>/.
+const repoPath = (f) => f.replace(/^\/.*?\/dreambike\/(\.claude\/worktrees\/[^/]+\/)?/, '').replace(/^\.\//, '')
 const MAX_REVIEWERS_PER_UNIT = 3
 
 // Args arrive as an object, a JSON string, or plain text like "T2 focus on preflight".
@@ -242,8 +245,9 @@ function builderPrompt(unit, round, open) {
   ].filter(Boolean).join('\n\n')
 }
 
-function reviewPrompt(unit, reviewer, round, build, mine) {
-  const recheckPart = round === 1
+// firstLook: the reviewer has not returned a review for this unit yet, so it gets the round-1 task.
+function reviewPrompt(unit, reviewer, round, build, mine, firstLook) {
+  const recheckPart = round === 1 || firstLook
     ? 'Report your findings.'
     : (mine.length
       ? `Recheck these findings you raised earlier, using the builder's responses in its report. Use these exact findingIds in recheck:\n${json(mine)}`
@@ -256,7 +260,7 @@ function reviewPrompt(unit, reviewer, round, build, mine) {
     'Read the files themselves (git diff for tracked files, whole content for new ones). Do not trust the report over the code.',
     'Other reviewers and units run in parallel: do not run npm run build.',
     recheckPart,
-    round === 1 ? '' : 'Raise new findings only if blocker or major, and only if the fix caused them or you missed something real.',
+    round === 1 || firstLook ? '' : 'Raise new findings only if blocker or major, and only if the fix caused them or you missed something real.',
   ].filter(Boolean).join('\n\n')
 }
 
@@ -279,7 +283,7 @@ async function runUnit(unit) {
     if (!attempted) return { unit, status: 'failed', reason: 'builder returned nothing; inspect owned files for partial edits', lastBuild: build, rounds, openFindings: open, disputes: currentDisputes(), minor }
     build = attempted
     const editedNow = build.filesChanged.length > 0
-    changedFiles.push(...build.filesChanged)
+    changedFiles.push(...build.filesChanged.map(repoPath))
     build = { ...build, filesChanged: unique(changedFiles) }
     build.responses.filter((r) => r.action === 'disputed').forEach((r) => { disputeEvidence[r.findingId] = r.evidence })
     if (build.filesChanged.some((f) => !unit.files.includes(f))) {
@@ -297,11 +301,16 @@ async function runUnit(unit) {
     const reviews = []
     // Four units times three reviewers is at most 12 simultaneous agents.
     // Additional specialists run in the next batch rather than being discarded.
+    // A first review runs on the card model (Opus); rechecks from round 2 on run on Sonnet.
+    // security-reviewer rechecks on its card at medium effort: ../CLAUDE.md wants Opus for security work.
     for (let offset = 0; offset < active.length; offset += MAX_REVIEWERS_PER_UNIT) {
-      reviews.push(...await parallel(active.slice(offset, offset + MAX_REVIEWERS_PER_UNIT).map((reviewer) => () =>
-      agent(reviewPrompt(unit, reviewer, round, build, open.filter((f) => f.reviewer === reviewer)), {
-        label: `${unit.id} ${reviewer} r${round}`, phase: 'Build and review', agentType: reviewer, schema: REVIEW,
-      }).then((r) => (r ? { reviewer, ...r } : null)))))
+      reviews.push(...await parallel(active.slice(offset, offset + MAX_REVIEWERS_PER_UNIT).map((reviewer) => () => {
+        const firstLook = notYetReviewed.includes(reviewer)
+        const recheckModel = reviewer === 'security-reviewer' ? { effort: 'medium' } : { model: 'sonnet' }
+        return agent(reviewPrompt(unit, reviewer, round, build, open.filter((f) => f.reviewer === reviewer), firstLook), {
+          label: `${unit.id} ${reviewer} r${round}`, phase: 'Build and review', agentType: reviewer, ...(firstLook ? {} : recheckModel), schema: REVIEW,
+        }).then((r) => (r ? { reviewer, ...r } : null))
+      })))
     }
 
     const next = []
@@ -391,12 +400,14 @@ const ticketFiles = unique(units.flatMap((u) => u.files).concat(Object.values(re
 const touchesPython = ticketFiles.some((f) => f.startsWith('spike/') || f.startsWith('budget/'))
 const checks = input.checks || ['npm run build', 'npm run lint', 'npm run typecheck', 'npm test']
   .concat(touchesPython ? ['.venv/bin/python spike/local_images.py --fixture-set all', '.venv/bin/python spike/run_all.py --mode smoke --dry-run'] : [])
+// Verify runs on general-reviewer, which has no Edit or Write tool; its card's
+// "Mode: verify" section allows npm run build here and forbids repairs.
 const verify = await agent([
-    `Verify ticket ${ticket}.`,
+    `Mode: verify. Ignore the review instructions of your card for this task. Verify ticket ${ticket}.`,
     `Run these offline checks from the repo root, in order:\n${checks.join('\n')}`,
     'Do not edit any file: unit approvals apply to the reviewed code. Return fixes=[]. Locate failures in remainingFailures; the lead will run a reviewed repair separately.',
     'Report exactly one result per requested command, using its exact command string and real output. Report skipped checks as not_run.',
-  ].join('\n\n'), { label: 'verify', phase: 'Verify', agentType: 'general-builder', schema: VERIFY })
+  ].join('\n\n'), { label: 'verify', phase: 'Verify', agentType: 'general-reviewer', model: 'haiku', effort: 'low', schema: VERIFY })
 
 // ---------- phase 4: done-when gate ----------
 phase('Done-when gate')

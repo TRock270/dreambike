@@ -1,6 +1,6 @@
 ---
 name: general-builder
-description: Sonnet builder for DreamBike work that has no specialist, such as scaffold, config, glue code, README and docs, and fixes that cross domains. Takes one unit from the lead with an explicit file list. Also runs the full checks in workflows.
+description: Sonnet builder for DreamBike work that has no specialist, such as scaffold, config, glue code, README and docs, and fixes that cross domains. Takes one unit from the lead with an explicit file list.
 tools: Read, Grep, Glob, Bash, Edit, Write, WebFetch, WebSearch
 model: claude-sonnet-5-5
 permissionMode: acceptEdits

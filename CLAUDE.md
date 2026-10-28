@@ -102,6 +102,16 @@ The shop exports an English EUR estimate with before/after images and 19% VAT.
 - Subagents build or review one unit. Definitions live in .claude/agents/ and
   load at session start; workflows live in .claude/workflows/. Start a new
   session after changing agent definitions.
+- The table gives each card's model. Agent calls do not set model. Workflows
+  override it to save cost: Haiku for scope, Verify and the fix-until-green
+  check (on the read-only general-reviewer card). Sonnet for quick reviews,
+  imaging/shop/release reviewers in a full review, the batched refute,
+  build-ticket rechecks from round 2 by a reviewer who already reviewed the
+  unit, and fix reviews outside security paths. Opus stays for the plan check,
+  each reviewer's first look in build-ticket, general/models reviewers in a
+  full review (effort medium), and the done-when gate. security-reviewer and
+  fix reviews of security paths always keep Opus (effort medium), following
+  ../CLAUDE.md.
 
 | Agent | Model | Topic |
 | --- | --- | --- |
@@ -111,7 +121,7 @@ The shop exports an English EUR estimate with before/after images and 19% VAT.
 | shop-builder | Sonnet 5.5 | History tree, build sheet, fit policy, quote, PDF |
 | platform-builder | Sonnet 5.5 | Budget Lua/Redis, config, fetch, demo, Vercel |
 | ui-builder | Sonnet 5.5 | Components, Nordlicht tokens, UI states |
-| general-reviewer | Opus 5.5 | Every unit, plan check, done-when gate |
+| general-reviewer | Opus 5.5 | Every unit, plan check, done-when gate, refute, Verify |
 | models-reviewer | Opus 5.5 | Wire contracts, parsing, injection, double dispatch |
 | imaging-reviewer | Opus 5.5 | Pixel and coordinate math, Python–TS agreement |
 | shop-reviewer | Opus 5.5 | Head invariants, integer money, conservative fit |
@@ -151,12 +161,17 @@ The shop exports an English EUR estimate with before/after images and 19% VAT.
     plan check, challenge loop per unit (at most 4), read-only full checks,
     done-when gate. Use for code tickets except the inline case below; pass
     units if the split is known. Extra units are deferred and prevent green.
-  - `/review-changes`, or args {base?, paths?, extraReviewers?}: specialists
-    plus general-reviewer on the diff, each blocking finding refute-checked.
-    Use it before any commit made outside /build-ticket, including repairs
-    from /fix-until-green. paths deliberately narrows scope; cover every
-    changed ticket path before committing. Without paths it discovers the
-    tracked diff and untracked files; a failed scope is needs_lead, not empty.
+  - `/review-changes`, or args {base?, paths?, extraReviewers?, depth?}:
+    specialists plus general-reviewer on the diff. depth defaults to full for
+    base main or origin/main, else quick. quick: every reviewer except
+    security-reviewer on Sonnet, no refute, every blocker/major goes to
+    unverified. full: one batched Sonnet
+    refuter checks up to 12 blocking findings, blockers first. Use it before
+    any commit made outside /build-ticket, including repairs from
+    /fix-until-green, and `/review-changes main` before a merge. paths
+    deliberately narrows scope; cover every changed ticket path before
+    committing. Without paths it discovers the tracked diff and untracked
+    files; a failed or empty scope is needs_lead.
   - `/fix-until-green`, or args {checks?, maxRounds?}: run checks, fix with the
     matching builder in the located files plus TypeScript under src/ and
     tests/ that a routing rule gives that builder (none for general-builder),
@@ -165,7 +180,8 @@ The shop exports an English EUR estimate with before/after images and 19% VAT.
     /review-changes.
 - Routing and the allowlist are path lists. A new source file outside the
   routed paths needs a rule in review-changes.js RULES and fix-until-green.js
-  BUILDERS; a new test file needs an exact allow line in .claude/settings.json
+  BUILDERS (a security path also in fix-until-green.js OPUS_REVIEW_RE); a new
+  test file needs an exact allow line in .claude/settings.json
   (the owner edits that file). Until then general-reviewer and npm test still
   cover it.
 - Work inline for one-file changes under about 50 lines, planning-doc edits,
@@ -184,10 +200,10 @@ The shop exports an English EUR estimate with before/after images and 19% VAT.
     and rerun the ticket's outstanding acceptance gate.
   - needs_lead: inspect notApproved (including missing reviewer names),
     openFindings, disputes, needsLead, checks and gate. For review-changes,
-    inspect scopeError, missingReviewers, reviewProblems, confirmed and
-    unverified. Decide each blocking item with evidence; refuted findings
-    retain their reasons for the lead to assess. Missing/null output is
-    incomplete work, never a pass.
+    inspect scopeError, missingReviewers, reviewProblems, confirmed,
+    unverified and refuted findings with severity blocker. Decide each
+    blocking item with evidence; refuted findings retain their reasons for
+    the lead to assess. Missing/null output is incomplete work, never a pass.
   - blocked: correct the arguments/plan or resolve the listed prerequisites
     before rerunning. Do not mark the ticket complete.
   - fix-until-green green_fix_review_failed: checks passed but review failed,
@@ -201,8 +217,9 @@ The shop exports an English EUR estimate with before/after images and 19% VAT.
   capability passed. Conflicting findings go to the lead; use the parent
   consultant procedure if repo evidence cannot settle them.
 - After a run the lead decides disputes and needsLead items, does the
-  consultant review from ../CLAUDE.md (PAL codereview with Nemotron, Gemini,
-  then precommit; internal agents do not count toward those limits), reruns
+  consultant review from ../CLAUDE.md (PAL chat with nim-nemotron35 on
+  explicit files, optional Gemini inline; internal agents do not count
+  toward those limits), reruns
   the checks, and finishes the ticket below.
 
 ### Subagent rules

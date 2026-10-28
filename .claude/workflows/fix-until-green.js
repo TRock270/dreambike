@@ -20,6 +20,10 @@ const BUILDERS = [
   { builder: 'ui-builder', re: /^(src\/components\/|src\/styles\/|src\/app\/(layout|page)\.tsx|src\/app\/globals\.css)/ },
 ]
 const builderFor = (file) => (BUILDERS.find((b) => b.re.test(file)) || { builder: 'general-builder' }).builder
+// ../CLAUDE.md wants an Opus review for security work. These are the spend-cap,
+// secret and route paths of the security-reviewer RULES in review-changes.js;
+// keep both lists in step. Fix reviews of other files run on Sonnet.
+const OPUS_REVIEW_RE = /^(budget\/|src\/lib\/server\/(budget|config|fetch-product|meta|http|paid)\.ts$|src\/app\/api\/|spike\/(ledger|common|deployment|run_all|responses_sam|responses_spark|images_edits|asr_transcribe|files)\.py$|spike\/requirements\.txt$|next\.config\.ts$|vercel\.json$|\.env\.example$|\.gitignore$|\.claude\/|package(-lock)?\.json$|src\/(middleware|proxy)\.ts$|src\/lib\/(contracts|errors)\.ts$|vitest\.config\.ts$|eslint\.config\.mjs$|src\/components\/(BudgetBanner|ErrorNotice|DemoBanner|ModeBanner)\.tsx$|tests\/(budget|config|fetch-product)|tests\/(http|deployment|paid|workflows)[^/]*\.test\.ts$|tests\/support\/workflowHarness\.ts$)/
 
 // Args arrive as an object, a JSON string, or one plain check command like "npm test".
 function parseArgs(raw) {
@@ -46,6 +50,9 @@ const writablePath = (file) => file && !file.startsWith('/') && !file.includes('
 // tests/ that an explicit rule routes to it (never via the general-builder
 // fallback). Data, schema, price, prompt, spike, budget and config files count
 // only when they are the located failure.
+// Agents sometimes report absolute paths; compare everything repo-relative.
+// The optional part strips a session worktree under .claude/worktrees/<name>/.
+const repoPath = (f) => f.replace(/^\/.*?\/dreambike\/(\.claude\/worktrees\/[^/]+\/)?/, '').replace(/^\.\//, '')
 const domainFile = (file, builder) => writablePath(file) && /^(src|tests)\/.*\.tsx?$/.test(file)
   && BUILDERS.some((b) => b.re.test(file)) && builderFor(file) === builder
 
@@ -79,11 +86,13 @@ let stalled = 0
 let status = 'still_failing'
 rounds: for (let round = 1; round <= maxRounds; round++) {
   phase('Check')
+  // The check runs on general-reviewer (no Edit or Write tool) under its "Mode: verify".
   const checked = await agent([
+    'Mode: verify. Ignore the review instructions of your card for this task.',
     `Run these offline checks from the repo root and report each result:\n${checks.join('\n')}`,
     'For every failure give the check, the repo-relative file it points at (the test file if no source file is named), and the key error message. Do not edit anything.',
     'Return exactly one checks entry per requested command with that exact command string. Skipped commands are not_run, never omitted.',
-  ].join('\n\n'), { label: `check r${round}`, phase: 'Check', agentType: 'general-builder', effort: 'low', schema: CHECK_RESULT })
+  ].join('\n\n'), { label: `check r${round}`, phase: 'Check', agentType: 'general-reviewer', model: 'haiku', effort: 'low', schema: CHECK_RESULT })
   if (!checked) { status = 'needs_lead'; break }
   last = checked
   if (!last.failures.length && completeChecks(last.checks)) { status = 'green'; break }
@@ -123,6 +132,7 @@ rounds: for (let round = 1; round <= maxRounds; round++) {
       status = 'needs_lead'
       break rounds
     }
+    result.filesChanged = result.filesChanged.map(repoPath)
     fixes.push({ round, builder, ownedFiles: owned, ...result })
     if (result.notFixed.length || result.filesChanged.some((f) => !owned.includes(f) && !domainFile(f, builder))) {
       status = 'needs_lead'
@@ -133,13 +143,14 @@ rounds: for (let round = 1; round <= maxRounds; round++) {
 
 phase('Review fixes')
 const changed = fixes.flatMap((f) => f.filesChanged.concat(f.ownedFiles || [])).filter((f, i, all) => all.indexOf(f) === i)
+const reviewModel = changed.some((f) => OPUS_REVIEW_RE.test(f)) ? {} : { model: 'sonnet' }
 const review = changed.length
   ? await agent([
     `Review only these fixes made to get the checks green:\n${JSON.stringify(fixes, null, 1)}`,
     `Changed files:\n${changed.join('\n')}`,
     'Look for weakened or skipped tests, loosened assertions, silenced type or lint errors, and behavior that now differs from SPEC.md. Read the diff yourself. Do not edit files.',
     'Report mode: return verdict and findings (severity blocker/major/minor, file, claim, requiredFix) using the supplied schema.',
-  ].join('\n\n'), { label: 'review fixes', phase: 'Review fixes', agentType: 'general-reviewer', schema: REVIEW })
+  ].join('\n\n'), { label: 'review fixes', phase: 'Review fixes', agentType: 'general-reviewer', ...reviewModel, effort: 'medium', schema: REVIEW })
   : null
 
 // Green checks with a rejected fix review still need the lead's eyes.
