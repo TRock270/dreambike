@@ -39,3 +39,6 @@ my_bike/
 
 # Personal Claude Code overrides (project .claude/settings.json is shared)
 .claude/settings.local.json
+
+# Session worktrees; keeps them out of the main checkout's /review-changes scope
+.claude/worktrees/
