@@ -657,6 +657,19 @@ For each completed ticket append actual date/time ET, files changed, checks and 
   - Resize method: the owner accepted browser canvas smoothing instead of Lanczos3. SPEC 7, PLAN and the T5 note now say so. No code change.
   - The planning prompts and answers moved to review/planning/ (commit a73d7ed).
 - Still open:
-  - The go-ahead for the paid T0 smoke run. It isn't given yet. The run makes 4 SAM calls, 3 Spark calls and 1 edit; expected cost is a few cents, with at most $0.35 reserved.
+  - Done 2026-10-28: the paid T0 smoke run (see T0 session 4).
   - The Safari check for T2 and T6.
 - Checks: none. Cost: $0.00.
+
+### T0 session 4 — 2026-10-28, 09:22–09:23 ET run (paid smoke, about 0.3 h with review)
+
+- Owner go-ahead with a hard $1 limit: TICKET_CAP_USD=1 and DAILY_CAP_USD=1 in the process env, enforced by the shared reserve.lua.
+- Command: `python spike/run_all.py --mode smoke --fixture-set plain`, after a dry run (exit 0). Exit 0; all six steps passed.
+- Cost: $0.022121 settled (SAM 4 × 0.0025, Spark 3 calls 0.002121, edit 0.010). Lifetime $0.032121. No halt flag.
+- Results, private files in spike/out/ (gitignored); sanitized evidence in docs/api-evidence.md U01–U04:
+  - SAM concept "wheel": three box-sized masks on the front wheel, the rear wheel (within 1 px of the expected box) and the red car's wheel. "giraffe": zero objects.
+  - SAM point click on the rear hub: the whole bike area at confidence 0.45, not the wheel. Masks larger than 1024 px come back downscaled to fit their bounds (placement "other").
+  - Spark identify: BMW R nineT, 1170 cc boxer, 2014–2023, ABS unknown. Text and paint instructions parsed cleanly.
+  - Paint edit (tank matte olive): 1792×1344 WebP in 11.9 s; the roundel and side panels are kept.
+- For the T3 session (not changed here): VERIFIED_SAM_PLACEMENT stays null until the owner checks the overlays. If set, the adapter must also handle masks downscaled to a 1024 px long edge, and a point click can return the whole bike, so the concept lane is the safer default for wheels.
+- Owner checks open: spike/out/sam/plain-wall-right/overlay-wheel.png and overlay-points.png (U01); fixtures/plain-wall-right.jpg against spike/out/edits/image_edit-high.webp (U04).
