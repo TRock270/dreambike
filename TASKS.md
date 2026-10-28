@@ -644,6 +644,10 @@ For each completed ticket append actual date/time ET, files changed, checks and 
   - The photo is in my_bike/. The deny rule in .claude/settings.json keeps Claude out of that folder, and it stays.
   - Owner decision 2026-10-28: the owner copies a JPEG export to fixtures/reference-source.jpg. Claude then proposes the wheel crop and cover boxes on a scratchpad overlay, writes fixtures/reference-wheel.jpg with no metadata after the owner approves, and fills the `reference` entry in fixtures/expected.json (file, slot, box, description, identifiersReviewed).
   - Record the bike's identity only as the owner states it; don't guess the model.
+  - Done 2026-10-28: the copy is fixtures/Rumble.tiff (1920x1281, no EXIF, GPS or date; a studio shot with a MOTOR Visionen logo). The owner says MOTOR Visionen is the father's shop and the rights are fine. The owner named no photographer and no date; both are null.
+  - Done 2026-10-28: Claude cut two crops without metadata (Pillow and mdls checked), front [1290,560,1905,1160] and rear [70,560,660,1160]. Claude couldn't write into fixtures/ (the image deny rule), so they wait in the session scratchpad for the owner to move them as fixtures/reference-wheel-front.jpg and reference-wheel-rear.jpg. Both are about 600 px, so normalization warns about low resolution.
+  - Done 2026-10-28: expected.json `reference` (front, used by the spike) and `referenceRear` are filled. Description in the owner's words: "Gold multi-spoke wheel with chrome hub, about 20 inch" (the 20 inch is the owner's estimate). identifiersReviewed stays false until the owner checks both crops in Preview.
+  - Checks: `python spike/local_images.py --fixture-set all` 40 passed, 0 failed, 0 skipped; the `images_edits.py --mode compose --dry-run` body puts the base first, the reference second, with search tools off.
 - Owner decision 2026-10-28, edit type: the father's wheels on the R nineT (T7 reference mode). A wheel replacement counts as geometry under the T4 rule, so it takes the full-image path without the blend.
 - Settle with the owner before the first paid call that uses this photo:
   - Who took the photo, and when.
