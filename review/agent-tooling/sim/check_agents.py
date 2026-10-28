@@ -4,7 +4,13 @@ import re
 import sys
 
 ok = True
-for p in sorted(pathlib.Path(".claude/agents").glob("*.md")):
+paths = sorted(pathlib.Path(".claude/agents").glob("*.md"))
+expected = {f"{name}-builder" for name in ("general", "imaging", "models", "platform", "shop", "ui")}
+expected |= {f"{name}-reviewer" for name in ("general", "imaging", "models", "release", "security", "shop")}
+if {p.stem for p in paths} != expected:
+    print("MISSING OR UNEXPECTED AGENTS", sorted(expected ^ {p.stem for p in paths}))
+    ok = False
+for p in paths:
     text = p.read_text()
     m = re.match(r"^---\n(.*?)\n---\n", text, re.S)
     if not m:
@@ -30,9 +36,9 @@ for p in sorted(pathlib.Path(".claude/agents").glob("*.md")):
         errors.append("reviewer can write")
     if role == "builder" and fm.get("permissionMode") != "acceptEdits":
         errors.append("builder permissionMode")
-    if any(t.startswith("mcp__") or t in ("Agent", "Workflow") for t in tools):
+    if any(t.startswith("mcp__") or t in ("Agent", "Workflow", "ToolSearch") for t in tools):
         errors.append("forbidden tool")
-    if "Subagent rules" not in text:
+    if not text[m.end():].lstrip().startswith('You are a subagent. Follow "Subagent rules"'):
         errors.append("no Subagent rules preamble")
     print(f"{p.name:24} {role:8} {fm.get('model'):18} {'OK' if not errors else errors}")
     ok = ok and not errors

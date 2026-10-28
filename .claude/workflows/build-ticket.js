@@ -5,7 +5,7 @@ export const meta = {
   phases: [
     { title: 'Plan check', detail: 'general-reviewer drafts or checks the unit split' },
     { title: 'Build and review', detail: 'builder and reviewers challenge each other per unit' },
-    { title: 'Verify', detail: 'build, lint, typecheck, tests; fix failures' },
+    { title: 'Verify', detail: 'run full checks without changing reviewed code' },
     { title: 'Done-when gate', detail: 'general-reviewer audits the acceptance checks' },
   ],
 }
@@ -37,6 +37,12 @@ if (!input.ticket) throw new Error('build-ticket needs a ticket id, e.g. "T2" or
 const ticket = input.ticket
 const goal = input.goal ? `Lead's goal for this run: ${input.goal}` : ''
 const maxRounds = Math.min(Math.max(input.maxRounds || 3, 1), 3)
+const requestedChecks = input.checks
+if ((input.maxRounds !== undefined && (!Number.isInteger(input.maxRounds) || input.maxRounds < 1))
+  || (requestedChecks !== undefined && (!Array.isArray(requestedChecks) || !requestedChecks.length
+    || requestedChecks.some((c) => typeof c !== 'string' || !c.trim()) || new Set(requestedChecks).size !== requestedChecks.length))) {
+  return { ticket, status: 'blocked', blockers: ['checks must be a nonempty array of unique command strings; maxRounds must be a positive integer'] }
+}
 
 // ---------- schemas ----------
 const str = { type: 'string' }
@@ -148,6 +154,11 @@ const GATE = {
 const json = (value) => JSON.stringify(value, null, 1)
 const isBlocking = (f) => f.severity === 'blocker' || f.severity === 'major'
 const unique = (list) => list.filter((x, i) => list.indexOf(x) === i)
+const completeChecks = (reported, expected) => reported.length === expected.length
+  && expected.every((command) => reported.filter((c) => c.command === command && c.result === 'pass').length === 1)
+const writablePath = (file) => file && !file.startsWith('/') && !file.includes('\\')
+  && !/[\s*?]/.test(file) && file.split('/').every((p) => p && p !== '.' && p !== '..')
+  && !/^(\.env(?!\.example$)|consent\/|secrets\/|fixtures\/|my_bike\/|RULES\.md$|PLAN\.md$|SPEC\.md$|TASKS\.md$|CLAUDE\.md$|HACKATHON_GUIDELINES\.md$|docs\/api-evidence\.md$|\.claude\/settings\.json$)/.test(file)
 
 // ---------- phase 1: plan check ----------
 phase('Plan check')
@@ -159,13 +170,14 @@ const planPrompt = [
     : 'Draft the units yourself from TASKS.md and SPEC.md.',
   `Domains: ${Object.keys(DOMAINS).join(', ')}. models = Meta client, model routes, prompts, mocks, spike profiles; imaging = normalize, coordinates, masks, composite; shop = history, sheet, fit policy, quote, PDF; platform = budget, config, fetch, demo, deploy; ui = components and tokens; release = README, credits, submission docs, public assets; general = scaffold, config, glue.`,
   `At most ${MAX_UNITS} units. files lists every file the builder may create or edit, including tests. Two units share a file only if one dependsOn the other.`,
-  'extraReviewers: security-reviewer when the unit dispatches or guards a paid call or touches config or secrets; release-reviewer when it changes anything public; for ui units, imaging-reviewer when it touches canvas, overlay or click mapping, shop-reviewer when it shows money, history or fit results. At most one extra reviewer per unit.',
+  'Use explicit canonical repo-relative file paths, not directories/globs. Exclude private and lead-only files from Subagent rules; put their proposed updates in notes for the lead.',
+  'extraReviewers: include every relevant specialist: security-reviewer for paid calls/config/secrets, release-reviewer for public assets/disclosures, imaging-reviewer for canvas/overlays/clicks, shop-reviewer for money/history/fit, models-reviewer for model dispatch/parsing. Split units if necessary; never drop a required reviewer to save calls.',
   `doneWhen: copy each done-when item of ${ticket} from TASKS.md as one string.`,
   'ready=false only for real blockers (owner approval, paid call, missing owner input, gate without documented fallback, SPEC conflict). Plan the offline parts that can proceed and name the gated part in notes.',
   'Do not edit files.',
 ].filter(Boolean).join('\n\n')
 const plan = await agent(planPrompt, { label: `plan ${ticket}`, phase: 'Plan check', agentType: 'general-reviewer', schema: PLAN })
-if (!plan) throw new Error('Plan check agent returned nothing')
+if (!plan) return { ticket, status: 'blocked', blockers: ['plan check agent returned nothing'] }
 if (!plan.ready || !plan.units.length || !plan.doneWhen.length) {
   const blockers = plan.blockers
     .concat(plan.units.length ? [] : ['plan check returned no units'])
@@ -175,19 +187,19 @@ if (!plan.ready || !plan.units.length || !plan.doneWhen.length) {
 }
 
 // Validate the unit graph in plain code.
-const byId = {}
+const byId = Object.create(null)
+const planErrors = []
 for (const u of plan.units) {
-  if (byId[u.id]) throw new Error(`Duplicate unit id ${u.id}`)
+  if (!u.id || byId[u.id]) planErrors.push(`empty or duplicate unit id ${u.id}`)
+  if (!u.files.length || u.files.some((f) => !writablePath(f))) planErrors.push(`Unit ${u.id}: files must be explicit, canonical, writable repo paths`)
   byId[u.id] = u
 }
 for (const u of plan.units) {
-  u.dependsOn = u.dependsOn.filter((d) => {
-    if (!byId[d]) log(`Unit ${u.id}: dropped unknown dependency ${d}`)
-    return byId[d] && d !== u.id
-  })
+  for (const d of u.dependsOn) if (!byId[d] || d === u.id) planErrors.push(`Unit ${u.id}: invalid dependency ${d}`)
 }
+if (planErrors.length) return { ticket, status: 'blocked', blockers: planErrors, proposedUnits: plan.units }
 const ordered = []
-const visiting = {}
+const visiting = Object.create(null)
 function visit(u) {
   if (ordered.includes(u)) return
   if (visiting[u.id]) throw new Error(`Dependency cycle at unit ${u.id}`)
@@ -195,7 +207,19 @@ function visit(u) {
   u.dependsOn.forEach((d) => visit(byId[d]))
   ordered.push(u)
 }
-plan.units.forEach(visit)
+try { plan.units.forEach(visit) }
+catch (error) { return { ticket, status: 'blocked', blockers: [error.message], proposedUnits: plan.units } }
+function dependsOn(unit, id) {
+  return unit.dependsOn.some((d) => d === id || dependsOn(byId[d], id))
+}
+for (let i = 0; i < ordered.length; i++) {
+  for (const other of ordered.slice(i + 1)) {
+    if (ordered[i].files.some((f) => other.files.includes(f)) && !dependsOn(other, ordered[i].id)) {
+      planErrors.push(`Units ${ordered[i].id} and ${other.id} share files without a dependency`)
+    }
+  }
+}
+if (planErrors.length) return { ticket, status: 'blocked', blockers: planErrors, proposedUnits: plan.units }
 const units = ordered.slice(0, MAX_UNITS)
 const deferredUnits = ordered.slice(MAX_UNITS)
 if (deferredUnits.length) log(`Deferred ${deferredUnits.length} unit(s) beyond ${MAX_UNITS}: ${deferredUnits.map((u) => u.id).join(', ')}. Run them in a second /build-ticket.`)
@@ -203,13 +227,7 @@ log(`${ticket}: ${units.length} unit(s): ${units.map((u) => `${u.id}[${u.domain}
 
 // ---------- phase 2: build and review ----------
 function reviewersFor(unit) {
-  const list = unique([DOMAINS[unit.domain].reviewer, ...unit.extraReviewers, 'general-reviewer'].filter(Boolean))
-  if (list.length > MAX_REVIEWERS_PER_UNIT) {
-    const kept = [...list.slice(0, MAX_REVIEWERS_PER_UNIT - 1), 'general-reviewer']
-    log(`Unit ${unit.id}: capped reviewers at ${MAX_REVIEWERS_PER_UNIT}, dropped ${list.filter((r) => !kept.includes(r)).join(', ')}`)
-    return kept
-  }
-  return list
+  return unique([DOMAINS[unit.domain].reviewer, ...unit.extraReviewers, 'general-reviewer'].filter(Boolean))
 }
 
 function builderPrompt(unit, round, open) {
@@ -248,26 +266,43 @@ async function runUnit(unit) {
   const rounds = []
   const minor = []
   const notYetReviewed = allReviewers.slice() // a unit is approved only after every reviewer has returned once
+  const reviewProblems = Object.create(null)
+  const changedFiles = []
+  const disputeEvidence = Object.create(null)
   let open = []
   let build = null
+  const currentDisputes = () => open.filter((f) => disputeEvidence[f.id]).map((f) => ({ ...f, builderEvidence: disputeEvidence[f.id] }))
   for (let round = 1; round <= maxRounds; round++) {
-    build = await agent(builderPrompt(unit, round, open), {
+    const attempted = await agent(builderPrompt(unit, round, open), {
       label: `${unit.id} build r${round}`, phase: 'Build and review', agentType: domain.builder, schema: BUILD,
     })
-    if (!build) return { unit, status: 'failed', reason: 'builder returned nothing', rounds, openFindings: open, minor }
+    if (!attempted) return { unit, status: 'failed', reason: 'builder returned nothing; inspect owned files for partial edits', lastBuild: build, rounds, openFindings: open, disputes: currentDisputes(), minor }
+    build = attempted
+    const editedNow = build.filesChanged.length > 0
+    changedFiles.push(...build.filesChanged)
+    build = { ...build, filesChanged: unique(changedFiles) }
+    build.responses.filter((r) => r.action === 'disputed').forEach((r) => { disputeEvidence[r.findingId] = r.evidence })
+    if (build.filesChanged.some((f) => !unit.files.includes(f))) {
+      return { unit, status: 'needs_lead', reason: 'builder changed files outside ownership', lastBuild: build, rounds, openFindings: open, disputes: currentDisputes(), minor }
+    }
     if (build.needsLead.length) {
       rounds.push({ round, build: build.summary, needsLead: build.needsLead })
-      return { unit, status: 'needs_lead', needsLead: build.needsLead, lastBuild: build, rounds, openFindings: open, minor }
+      return { unit, status: 'needs_lead', needsLead: build.needsLead, lastBuild: build, rounds, openFindings: open, disputes: currentDisputes(), minor }
     }
-    // Round 1: every reviewer. Later rounds: reviewers with open findings, reviewers
-    // that have not returned yet, and general-reviewer.
-    const active = round === 1
+    // Every specialist rechecks edited code. For a dispute with no edits, ask
+    // only reviewers with open/incomplete results plus general-reviewer.
+    const active = round === 1 || editedNow
       ? allReviewers
-      : unique([...open.map((f) => f.reviewer), ...notYetReviewed, 'general-reviewer'])
-    const reviews = await parallel(active.map((reviewer) => () =>
+      : unique([...open.map((f) => f.reviewer), ...notYetReviewed, ...Object.keys(reviewProblems), 'general-reviewer'])
+    const reviews = []
+    // Four units times three reviewers is at most 12 simultaneous agents.
+    // Additional specialists run in the next batch rather than being discarded.
+    for (let offset = 0; offset < active.length; offset += MAX_REVIEWERS_PER_UNIT) {
+      reviews.push(...await parallel(active.slice(offset, offset + MAX_REVIEWERS_PER_UNIT).map((reviewer) => () =>
       agent(reviewPrompt(unit, reviewer, round, build, open.filter((f) => f.reviewer === reviewer)), {
         label: `${unit.id} ${reviewer} r${round}`, phase: 'Build and review', agentType: reviewer, schema: REVIEW,
-      }).then((r) => (r ? { reviewer, ...r } : null))))
+      }).then((r) => (r ? { reviewer, ...r } : null)))))
+    }
 
     const next = []
     const missing = []
@@ -276,9 +311,11 @@ async function runUnit(unit) {
       const mine = open.filter((f) => f.reviewer === reviewer)
       if (!review) {
         missing.push(reviewer)
+        reviewProblems[reviewer] = 'returned nothing'
         next.push(...mine) // cannot confirm a fix without the reviewer
         return
       }
+      delete reviewProblems[reviewer]
       if (notYetReviewed.includes(reviewer)) notYetReviewed.splice(notYetReviewed.indexOf(reviewer), 1)
       const recheck = {}
       review.recheck.forEach((r) => { recheck[r.findingId] = r })
@@ -286,12 +323,15 @@ async function runUnit(unit) {
       if (skipped.length) log(`Unit ${unit.id}: ${reviewer} did not recheck ${skipped.map((f) => f.id).join(', ')}; kept open`)
       for (const f of mine) {
         const r = recheck[f.id]
-        if (!r || r.status === 'upheld') next.push({ ...f, upheldReason: r ? r.reason : 'not rechecked' })
+        if (!r || r.status === 'upheld') next.push({ ...f, recheckStatus: r ? r.status : 'missing', upheldReason: r ? r.reason : 'not rechecked' })
       }
       for (const f of review.findings) {
         const tagged = { ...f, id: `${reviewer}:r${round}:${f.id}`, reviewer }
         if (isBlocking(f)) next.push(tagged)
         else minor.push(tagged)
+      }
+      if (review.verdict !== 'approve' && !next.some((f) => f.reviewer === reviewer)) {
+        reviewProblems[reviewer] = 'changes_required without an open blocking finding'
       }
     })
     // Keep open findings of reviewers who were not active this round.
@@ -300,23 +340,23 @@ async function runUnit(unit) {
     rounds.push({ round, build: build.summary, verdicts: reviews.filter(Boolean).map((r) => `${r.reviewer}: ${r.verdict}`), open: next.length })
     open = next
     log(`Unit ${unit.id} round ${round}: ${open.length} open blocking finding(s)`)
-    if (!open.length && !missing.length && !notYetReviewed.length) return { unit, status: 'approved', lastBuild: build, rounds, openFindings: [], minor }
+    if (!open.length && !missing.length && !notYetReviewed.length && !Object.keys(reviewProblems).length) return { unit, status: 'approved', lastBuild: build, rounds, openFindings: [], minor }
     // Another round cannot settle findings the builder disputed and the reviewer upheld.
     // Stop early and let the lead decide.
     const disputedNow = build.responses.filter((r) => r.action === 'disputed').map((r) => r.findingId)
-    if (round > 1 && open.length && open.every((f) => disputedNow.includes(f.id) && f.upheldReason)) {
+    if (round > 1 && open.length && !notYetReviewed.length && !Object.keys(reviewProblems).length
+      && open.every((f) => disputedNow.includes(f.id) && f.recheckStatus === 'upheld')) {
       log(`Unit ${unit.id}: only upheld disputes left after round ${round}; handing to the lead`)
       break
     }
   }
-  const disputed = {}
-  build.responses.filter((r) => r.action === 'disputed').forEach((r) => { disputed[r.findingId] = r.evidence })
-  const disputes = open.filter((f) => disputed[f.id]).map((f) => ({ ...f, builderEvidence: disputed[f.id] }))
-  return { unit, status: 'unresolved', lastBuild: build, rounds, openFindings: open, disputes, minor }
+  const disputes = currentDisputes()
+  const incomplete = unique([...notYetReviewed, ...Object.keys(reviewProblems)])
+  return { unit, status: 'unresolved', reason: incomplete.length ? `incomplete review: ${incomplete.join(', ')}` : 'open blocking findings', lastBuild: build, rounds, openFindings: open, disputes, minor }
 }
 
 phase('Build and review')
-const results = {}
+const results = Object.create(null)
 const remaining = units.slice()
 while (remaining.length) {
   // A wave is every unit whose dependencies are finished.
@@ -351,22 +391,12 @@ const ticketFiles = unique(units.flatMap((u) => u.files).concat(Object.values(re
 const touchesPython = ticketFiles.some((f) => f.startsWith('spike/') || f.startsWith('budget/'))
 const checks = input.checks || ['npm run build', 'npm run lint', 'npm run typecheck', 'npm test']
   .concat(touchesPython ? ['.venv/bin/python spike/local_images.py --fixture-set all', '.venv/bin/python spike/run_all.py --mode smoke --dry-run'] : [])
-let verify = null
-let previousFailures = Infinity
-for (let round = 1; round <= 2; round++) {
-  verify = await agent([
-    `Verify ticket ${ticket}, round ${round} of 2.`,
+const verify = await agent([
+    `Verify ticket ${ticket}.`,
     `Run these offline checks from the repo root, in order:\n${checks.join('\n')}`,
-    `If a check fails because of a file in this ticket's file set, fix it there and rerun that check:\n${ticketFiles.join('\n')}`,
-    'Do not touch files outside that set; list such failures in remainingFailures. Never weaken, skip, or delete a test to make it pass.',
-    'Report the final result of every check, with the last relevant output lines.',
-  ].join('\n\n'), { label: `verify r${round}`, phase: 'Verify', agentType: 'general-builder', schema: VERIFY })
-  if (!verify) break
-  const failures = verify.checks.filter((c) => c.result === 'fail').length
-  log(`Verify round ${round}: ${failures} failing check(s)`)
-  if (failures === 0 || failures >= previousFailures) break
-  previousFailures = failures
-}
+    'Do not edit any file: unit approvals apply to the reviewed code. Return fixes=[]. Locate failures in remainingFailures; the lead will run a reviewed repair separately.',
+    'Report exactly one result per requested command, using its exact command string and real output. Report skipped checks as not_run.',
+  ].join('\n\n'), { label: 'verify', phase: 'Verify', agentType: 'general-builder', schema: VERIFY })
 
 // ---------- phase 4: done-when gate ----------
 phase('Done-when gate')
@@ -379,10 +409,10 @@ const gate = await agent([
   `Done-when items:\n${json(plan.doneWhen)}`,
   `Unit results:\n${json(unitSummary)}`,
   `Final checks:\n${json(verify ? verify.checks : 'verify agent returned nothing')}`,
-  `Fixes the Verify phase made after unit review (no specialist has seen these):\n${json(verify ? verify.fixes : [])}`,
+  `Unexpected edits reported by read-only Verify (must be empty; any edit needs the lead):\n${json(verify ? verify.fixes : [])}`,
   deferredUnits.length ? `Units deferred to a later run (not built): ${deferredUnits.map((u) => u.id).join(', ')}` : '',
-  'Audit every item as met, not_met, blocked or not_verifiable_offline, with evidence from files and check output. A live or paid capability is never met by mocks alone.',
-  'Then review the whole ticket diff for cross-unit problems the unit reviews could not see, and review every Verify fix as a unit reviewer would. Report problems as findings.',
+  'Copy each done-when item verbatim exactly once; audit it as met, not_met, blocked or not_verifiable_offline, with evidence from files and check output. A live or paid capability is never met by mocks alone.',
+  'Then review the whole ticket diff for cross-unit problems the unit reviews could not see. Flag any Verify edit as a scope violation needing a separately reviewed repair. Report problems as findings.',
 ].join('\n\n'), { label: `gate ${ticket}`, phase: 'Done-when gate', agentType: 'general-reviewer', schema: GATE })
 
 const all = Object.values(results)
@@ -391,15 +421,17 @@ const green = gate
   && !deferredUnits.length
   && all.length === units.length
   && all.every((r) => r.status === 'approved')
-  && verify && verify.checks.every((c) => c.result === 'pass')
-  && gate.items.length >= plan.doneWhen.length
+  && verify && completeChecks(verify.checks, checks)
+  && !verify.remainingFailures.length && !verify.needsLead.length && !verify.fixes.length
+  && gate.items.length === plan.doneWhen.length
+  && plan.doneWhen.every((item) => gate.items.filter((i) => i.item === item).length === plan.doneWhen.filter((s) => s === item).length)
   && gate.items.every((i) => i.status === 'met')
   && !openFindings.length
 return {
   ticket,
   status: green ? 'green' : 'needs_lead',
   notApproved: all.filter((r) => r.status !== 'approved').map((r) => `${r.unit.id}: ${r.status}${r.reason ? ` (${r.reason})` : ''}`),
-  units: all.map((r) => ({ id: r.unit.id, domain: r.unit.domain, status: r.status, reason: r.reason, rounds: r.rounds, filesChanged: r.lastBuild ? r.lastBuild.filesChanged : [], notes: r.lastBuild ? r.lastBuild.notes : '' })),
+  units: all.map((r) => ({ id: r.unit.id, domain: r.unit.domain, files: r.unit.files, status: r.status, reason: r.reason, rounds: r.rounds, filesChanged: r.lastBuild ? r.lastBuild.filesChanged : [], notes: r.lastBuild ? r.lastBuild.notes : '' })),
   deferredUnits,
   checks: verify,
   gate,

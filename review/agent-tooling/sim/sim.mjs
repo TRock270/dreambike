@@ -1,5 +1,6 @@
 // Usage from repo root: node review/agent-tooling/sim/sim.mjs .claude/workflows
 import fs from 'node:fs'
+import assert from 'node:assert/strict'
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
 function load(file) {
   const src = fs.readFileSync(file, 'utf8').replace(/^export const meta =/m, 'const meta =')
@@ -25,8 +26,8 @@ const WF = process.argv[2]
       { id: 'u1', domain: 'models', task: 't1', files: ['src/lib/server/meta.ts'], dependsOn: [], extraReviewers: ['security-reviewer'] },
       { id: 'u2', domain: 'ui', task: 't2', files: ['src/components/DescribeForm.tsx'], dependsOn: ['u1'], extraReviewers: [] },
     ] }
-    if (o.agentType.endsWith('-builder') && o.label.includes('build')) return { summary: 's', filesChanged: ['x'], checks: [], responses: [], needsLead: [], notes: '' }
-    if (o.label.startsWith('verify')) return { checks: [{ command: 'npm test', result: 'pass', output: '' }], fixes: [], remainingFailures: [], needsLead: [] }
+    if (o.agentType.endsWith('-builder') && o.label.includes('build')) return { summary: 's', filesChanged: [o.label.startsWith('u1 ') ? 'src/lib/server/meta.ts' : 'src/components/DescribeForm.tsx'], checks: [], responses: [], needsLead: [], notes: '' }
+    if (o.label.startsWith('verify')) return { checks: ['npm run build', 'npm run lint', 'npm run typecheck', 'npm test'].map((command) => ({ command, result: 'pass', output: '' })), fixes: [], remainingFailures: [], needsLead: [] }
     if (o.label.startsWith('gate')) return { items: [{ item: 'a', status: 'met', evidence: '' }, { item: 'b', status: 'met', evidence: '' }], findings: [], summary: '' }
     if (o.agentType === 'security-reviewer') { secCalls++; return secCalls === 1 ? null : { verdict: 'approve', findings: [], recheck: [], checksRun: [] } }
     if (o.agentType === 'models-reviewer') {
@@ -35,24 +36,35 @@ const WF = process.argv[2]
     }
     return { verdict: 'approve', findings: [], recheck: [], checksRun: [] }
   })
+  assert.equal(bt.status, 'green')
+  assert.ok(bt.units.every((u) => u.status === 'approved'))
+  assert.equal(secCalls, 2)
+  assert.ok(calls.indexOf('u2 build r1 <ui-builder>') > calls.indexOf('u1 models-reviewer r2 <models-reviewer>'))
   console.log('build-ticket status:', bt.status, '| units:', bt.units.map((u) => `${u.id}=${u.status}`).join(' '))
   console.log('calls:', calls.length); calls.forEach((c) => console.log('  ', c)); console.log('logs:', logs)
 
   // review-changes: refuter confirms one, refutes none
   calls.length = 0; logs.length = 0
   const rc = await run(WF + '/review-changes.js', 'HEAD', async (p, o) => {
-    if (o.label === 'list changes') return { files: ['src/lib/quote.ts', 'README.md', '.claude/agents/x.md'] }
+    if (o.label === 'list changes') return { files: ['src/lib/quote.ts', 'README.md', '.claude/agents/x.md'], error: '' }
     if (o.label.startsWith('review')) return { verdict: 'changes_required', findings: [{ id: 'F1', severity: 'blocker', file: 'f', line: 0, claim: 'c', failureScenario: 's', evidence: 'e', requiredFix: 'r' }, { id: 'F2', severity: 'minor', file: 'f', line: 0, claim: 'c', failureScenario: 's', evidence: 'e', requiredFix: 'r' }], recheck: [], checksRun: [] }
     if (o.label.startsWith('refute')) return { outcome: o.label.includes('shop') ? 'refuted' : 'confirmed', reason: 'r' }
   })
+  assert.equal(rc.status, 'needs_lead')
+  assert.equal(rc.confirmed.length, 3)
+  assert.equal(rc.refuted.length, 1)
+  assert.equal(rc.minor.length, 4)
   console.log('review-changes reviewers:', rc.reviewers, '| confirmed', rc.confirmed.length, 'refuted', rc.refuted.length, 'minor', rc.minor.length)
 
   // fix-until-green: fail, fail (less), green
   calls.length = 0; let n = 0
   const fg = await run(WF + '/fix-until-green.js', undefined, async (p, o) => {
-    if (o.label.startsWith('check')) { n++; return n < 3 ? { checks: [{ command: 'npm test', result: 'fail', output: '' }], failures: Array.from({ length: 3 - n }, (_, i) => ({ check: 'npm test', file: i ? 'src/lib/quote.ts' : 'src/components/A.tsx', message: 'm' })) } : { checks: [{ command: 'npm test', result: 'pass', output: '' }], failures: [] } }
-    if (o.label.startsWith('fix')) return { filesChanged: ['src/lib/quote.ts'], fixed: ['x'], notFixed: [] }
+    if (o.label.startsWith('check')) { n++; return { checks: ['npm run typecheck', 'npm run lint', 'npm test', 'npm run build'].map((command) => ({ command, result: n < 3 && command === 'npm test' ? 'fail' : 'pass', output: '' })), failures: n < 3 ? Array.from({ length: 3 - n }, (_, i) => ({ check: 'npm test', file: i ? 'src/lib/quote.ts' : 'src/components/A.tsx', message: 'm' })) : [] } }
+    if (o.label.startsWith('fix')) return { filesChanged: [o.agentType === 'ui-builder' ? 'src/components/A.tsx' : 'src/lib/quote.ts'], fixed: ['x'], notFixed: [] }
     if (o.label === 'review fixes') return { verdict: 'approve', findings: [] }
   })
+  assert.equal(fg.status, 'green')
+  assert.equal(fg.fixes.length, 3)
   console.log('fix-until-green status:', fg.status, '| calls:', calls.join(', '))
+  console.log('ALL SIM ASSERTIONS PASSED')
 })().catch((e) => { console.error('SIM ERROR', e); process.exit(1) })

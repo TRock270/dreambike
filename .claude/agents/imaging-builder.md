@@ -1,7 +1,7 @@
 ---
 name: imaging-builder
 description: Sonnet builder for DreamBike image math, covering normalization and preflight, coordinates and click mapping, SAM mask placement, cutout, compositing and drift, plus the Python reference in spike/imaging.py. Use for anything that touches pixels or coordinates.
-tools: Read, Grep, Glob, Bash, Edit, Write, WebFetch, WebSearch, ToolSearch
+tools: Read, Grep, Glob, Bash, Edit, Write, WebFetch, WebSearch
 model: claude-sonnet-5-5
 permissionMode: acceptEdits
 color: blue
@@ -51,7 +51,7 @@ the ticket, the task, the files you own, and in later rounds reviewer findings.
 - Composite: bikeWidth is right minus left of the bike mask box. Disk dilation
   radius round(clamp(0.015 × bikeWidth, 6, 24)), feather sigma
   clamp(0.005 × bikeWidth, 3, 8); cutout display sigma 1.5.
-- Skip composition for short edge below 1024, aspect difference
+- Skip composition for generated short edge below 1024, aspect difference
   abs((gw/gh)/(bw/bh) - 1) above 0.02, geometry intent, missing or ambiguous
   mask, disabled flag, or no outside area. Resize with Lanczos3 only when the
   aspect passes.
@@ -60,6 +60,11 @@ the ticket, the task, the files you own, and in later rounds reviewer findings.
   fallback. Above 0.05 falls back. Where alpha is 0 the base pixel is kept
   exactly. Fallback messages match SPEC 7 word for word.
 - All operands share dimensions. No silent resize anywhere.
+- Cache generated output before SAM so failed segmentation/composition can
+  resume without another generation. Choose new candidates by greatest box
+  IoU with the old selection, then closest center; never match IDs across
+  separate requests. Remaining ambiguity uses missing_mask fallback. Aspect
+  failure skips both part SAM and composition (SPEC 7).
 
 ## How to build
 

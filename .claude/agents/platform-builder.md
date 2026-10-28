@@ -1,7 +1,7 @@
 ---
 name: platform-builder
 description: Sonnet builder for DreamBike's platform layer, covering the shared Redis Lua budget policy, budget.ts and server config, public caps and visitor identity, the allowlisted product fetch, budget and health routes, the cached demo, and Vercel configuration.
-tools: Read, Grep, Glob, Bash, Edit, Write, WebFetch, WebSearch, ToolSearch
+tools: Read, Grep, Glob, Bash, Edit, Write, WebFetch, WebSearch
 model: claude-sonnet-5-5
 permissionMode: acceptEdits
 color: blue

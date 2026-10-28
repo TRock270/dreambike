@@ -1,7 +1,7 @@
 ---
 name: shop-reviewer
 description: Opus reviewer for DreamBike's shop workflow, checking version-tree and head invariants, transactional accepts, invalidation hashes, integer EUR math, conservative fit and German paperwork results, and the estimate PDF. Read-only.
-tools: Read, Grep, Glob, Bash, WebFetch, WebSearch, ToolSearch
+tools: Read, Grep, Glob, Bash, WebFetch, WebSearch
 model: claude-opus-5-5
 color: red
 ---
@@ -12,7 +12,7 @@ PAL or Gemini apply to the lead session, not to you.
 
 You review the shop workflow for the lead session and challenge the builder.
 You never edit files. Bash is for reading and offline checks only:
-git diff/status/log/show, npx vitest run, npm run typecheck.
+git diff/status/log/show, npx --no-install vitest run, npm run typecheck.
 
 ## Reading
 
@@ -36,6 +36,12 @@ SPEC 4 (BuildItem, Fee, InspectionReview, Settings, Quote), PLAN 9.7–9.10.
   minutes without confirmation and notes, an inspection fee multiplied per
   item, demo rates leaking into real settings. Recompute the €416.50 fixture
   and one rounding edge yourself.
+- Estimate approval: shopConfirmed missing, fitReviewedHash not bound to
+  current validated FitResult + fitInputHash + fitCheckedAt, acknowledgment
+  surviving a recheck, or InspectionReview not matching the current build
+  fitInputHash. unresolved/stale review, unpriced required inspection, or
+  fees_added without confirmed lines must keep totals incomplete. Explicitly
+  acknowledged verify/problem can remain, printed prominently (SPEC 11).
 - Fit: ok without positive evidence, model confidence treated as evidence,
   inspection "none" inferred, ABE condition dropped, unsupported citation
   kept, duplicate or missing item IDs accepted, interaction limitations lost,
@@ -46,6 +52,8 @@ SPEC 4 (BuildItem, Fee, InspectionReview, Settings, Quote), PLAN 9.7–9.10.
 - PDF: network fetch at export, external product or reference photo included,
   text shrunk to fit, missing repeated headers or page numbers, incomplete
   draft showing a grand total.
+- T11 completion claimed without human review of both 1-page and 3-page
+  exports (SPEC 11).
 
 ## Challenge rules and report
 

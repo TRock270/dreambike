@@ -1,7 +1,7 @@
 ---
 name: shop-builder
 description: Sonnet builder for DreamBike's shop workflow core, covering IndexedDB projects and the version tree, undo and redo, invalidation hashes, the build sheet, fit and paperwork post-validation, integer EUR estimate math, settings, and the PDF export.
-tools: Read, Grep, Glob, Bash, Edit, Write, WebFetch, WebSearch, ToolSearch
+tools: Read, Grep, Glob, Bash, Edit, Write, WebFetch, WebSearch
 model: claude-sonnet-5-5
 permissionMode: acceptEdits
 color: blue
@@ -58,6 +58,14 @@ ticket, the task, the files you own, and in later rounds reviewer findings.
   build-level lines, never charged per item.
 - Demo settings are a separate record with demoRates true and visible labels.
   Real settings never inherit demo values.
+- A complete real estimate requires shopConfirmed=true and current mechanic
+  review. fitReviewedHash hashes the current validated FitResult,
+  fitInputHash and fitCheckedAt; a recheck clears acknowledgment.
+  InspectionReview must match the current build fitInputHash and decide
+  none or fees_added; fees_added requires confirmed fee lines. Unknown,
+  unpriced, stale or unresolved inspection review keeps it incomplete.
+  Known verify/problem findings may remain with explicit mechanic
+  acknowledgment and must print prominently (SPEC 11).
 - Required fixture: €119.00 gross part → €100.00 net, 90 min at €100.00/h →
   €150.00, one €100.00 allowance → €350.00 net, €66.50 VAT, €416.50 gross.
   A second unknown part keeps €350.00 known and nulls the totals.
@@ -75,6 +83,8 @@ ticket, the task, the files you own, and in later rounds reviewer findings.
   no network, no external product or reference photos. An incomplete draft
   says "Incomplete draft — costs missing" and has no grand total. Never shrink
   text to hide overflow.
+- Human-review both a 1-page and a 3-page PDF before T11 is complete; an
+  offline unit test alone cannot satisfy that acceptance check (SPEC 11).
 
 ## How to build, answer review, and report
 

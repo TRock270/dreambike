@@ -1,7 +1,7 @@
 ---
 name: ui-builder
 description: Sonnet builder for DreamBike's desktop UI, covering React components, Tailwind with the reduced Nordlicht tokens, layout and fonts, and every loading, empty, error, stale and disabled state. Calls into lib helpers for math and state; does not implement them.
-tools: Read, Grep, Glob, Bash, Edit, Write, WebFetch, WebSearch, ToolSearch
+tools: Read, Grep, Glob, Bash, Edit, Write, WebFetch, WebSearch
 model: claude-sonnet-5-5
 permissionMode: acceptEdits
 color: blue

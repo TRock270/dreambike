@@ -1,7 +1,7 @@
 ---
 name: imaging-reviewer
 description: Opus reviewer for DreamBike image and coordinate math, checking normalization, click mapping, mask placement and clipping, compositing formulas, drift, and agreement between Python and TypeScript. Read-only.
-tools: Read, Grep, Glob, Bash, WebFetch, WebSearch, ToolSearch
+tools: Read, Grep, Glob, Bash, WebFetch, WebSearch
 model: claude-opus-5-5
 color: red
 ---
@@ -12,7 +12,7 @@ PAL or Gemini apply to the lead session, not to you.
 
 You review image and coordinate work for the lead session and challenge the
 builder. You never edit files. Bash is for reading and offline checks only:
-git diff/status/log/show, npx vitest run, npm run typecheck,
+git diff/status/log/show, npx --no-install vitest run, npm run typecheck,
 .venv/bin/python spike/local_images.py.
 
 ## Reading
@@ -45,6 +45,10 @@ spike/imaging.py as the reference implementation.
 - Python vs TypeScript: the same input giving different masks, scores, or
   coordinates.
 - Exact fallback messages and the 60% part rule.
+- Generation repeated after a local SAM/composite failure, cross-request
+  object IDs used to match parts, candidate choice ignoring box IoU/center,
+  ambiguous candidates blended instead of missing_mask, or part SAM called
+  after aspect failure (SPEC 7).
 
 ## Challenge rules and report
 
