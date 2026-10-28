@@ -1,0 +1,24 @@
+# SHA-256 of the files under review, at tooling commit fdb48ee plus this package.
+# Verify inside the worktree: shasum -a 256 -c review/agent-tooling/FILES.sha256
+27288728706fda2ef641e5e50045d92b506001a99e0e7fbf96f4109d06743b57  .claude/agents/general-builder.md
+721feb9039a085da6e18b907b8d3b74add99f96bca70dbad87ea7356ddccdc3f  .claude/agents/general-reviewer.md
+ff2a42ab4c42edf821650e2ca49fc2299d1654912e7451025cebc002097a9ae7  .claude/agents/imaging-builder.md
+726666c77a6c2679225cd5b075bc605b0e145c4220839abe208f1cbe6c3e114e  .claude/agents/imaging-reviewer.md
+d1c802593483237928ef3501fb596f1753b366aee9f89896375ad5263bfe6858  .claude/agents/models-builder.md
+4bc5a89499f4720d54975c82e4fe496f38f23cd3901d5137d71fb4aae0f89d0b  .claude/agents/models-reviewer.md
+4e927faca81af593b6921ad4fb161a97124529371d39b84036dbac31d17e949f  .claude/agents/platform-builder.md
+0b03b82acd3a4c1937d206834e85e2fb4f4d0911719975c53c6dba8613c8e777  .claude/agents/release-reviewer.md
+d62cbf2f7e1736178688f0138d22cdb88ae6851c124e4c08beddc97b4febb101  .claude/agents/security-reviewer.md
+c69a398e24958190c7dea0f263a86b9d30ea0ad320f7981cc5f30de27263b6ae  .claude/agents/shop-builder.md
+7bd24cf69f3c53d9dd782c4b55b17b6a43a7fb3c45ef7e4f35d63719a878c758  .claude/agents/shop-reviewer.md
+e47fecdc17494512909872fd79bbd628d1b91bd2e01b178a1902c273365d3e0d  .claude/agents/ui-builder.md
+51702232e8f98b03e5e652fcc4cadd4c8bf10a370b3f3934d994dcabe48f8c8b  .claude/workflows/build-ticket.js
+6c62aba7d52ab0ce32d5a70b7b57c36e657ce221808edfcc1ed50934e0e35188  .claude/workflows/fix-until-green.js
+1e56700d80bb9366217584f4a01d90074b70b813fb9156f8ca24f9a1f29e3e71  .claude/workflows/review-changes.js
+8c54a5d3231b6a927dcd183ab81249b490f30c2d713e2ce2311377e322febbb1  .claude/settings.json
+974a89c5fc8b7fd422c521b55f192718cabee766dcc80d7f58fa60aef7836701  CLAUDE.md
+04b3952dd1733a26cf7ab4306158a9fb2ff5ac5407f5990834eca7d683ae4a1c  review/agent-tooling/CONTEXT.md
+ced35e17a88ca3e23abe4aeb8c149a4a4e8c755ca45cff0ee0ae51622b1372b4  review/agent-tooling/PROMPT_CODEX.md
+85e1c60bf6033ab3380a0ab92f9b100b8988519d9aa9efbf904eb8d4d80af1ef  review/agent-tooling/sim/check_agents.py
+c88c3ec38aed5c1f103048fefca44335fdd5fbee647d760cb86e023efd1c9ee2  review/agent-tooling/sim/sim-dispute.mjs
+f3d34462e967301ce544d15e7e3c7945294203f816cf96127a92fe1b77bc857b  review/agent-tooling/sim/sim.mjs
