@@ -61,6 +61,17 @@ describe("review fixes", () => {
   it("needs a point for two wheel candidates when there is no bike outline", () => {
     expect(partsForPhrase("wheel", wheels, null, "right", "h1").status).toBe("needs_point");
   });
+  it("ignores a small wheel fragment, so two real wheels are still assigned", () => {
+    // Live 2026-10-28 on an edited photo: two wheels plus a small fragment above the rear wheel.
+    const fragment = obj(rect(30, 12, 38, 16));                 // 32 px vs 400 px wheels
+    const r = partsForPhrase("wheel", [...wheels, fragment], bike.mask, "right", "h1");
+    expect(r.status).toBe("found");
+    expect(r.parts.map((p) => [p.slot, p.box[0]])).toEqual([["wheel_front", 68], ["wheel_rear", 12]]);
+    // A third candidate of wheel size still asks for a point, as before.
+    expect(partsForPhrase("wheel", [...wheels, obj(rect(40, 25, 58, 45))], bike.mask, "right", "h1").status).toBe("needs_point");
+    // Fenders keep small candidates (front and rear fenders can differ a lot in size).
+    expect(partsForPhrase("fender", [obj(rect(12, 20, 32, 24)), obj(rect(68, 22, 72, 24))], bike.mask, "right", "h1").status).toBe("found");
+  });
   it("ignores point parts from another photo", () => {
     const s = withResults({ ...emptyPartMap("h2"), bikeStatus: "none" }, "fuel tank", []);
     const stray = { id: "point:tank:9", slot: "tank" as const, label: "Tank", mask: rect(1, 1, 5, 5), area: 16,

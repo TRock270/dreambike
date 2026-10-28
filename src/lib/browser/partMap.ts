@@ -66,13 +66,23 @@ export function currentBike(state: PartMapState): SegmentedObject | null {
   return state.bikeCandidates[state.bikeChoice] ?? null;
 }
 
+/** A wheel candidate needs at least this share of the largest wheel candidate's area. */
+const MIN_WHEEL_SHARE = 0.25;
+
 /** One phrase's raw objects to slot parts, given the bike mask and facing. */
 export function partsForPhrase(phrase: string, objects: SegmentedObject[], bike: BinaryMask | null,
   facing: Facing, imageHash: string): { parts: MapPart[]; status: PhraseStatus } {
-  const clipped = objects
+  let clipped = objects
     .map((o) => (bike ? { ...o, mask: clipToBike(o.mask, bike) } : o))
     .filter((o) => maskArea(o.mask) > 0 && acceptableAsPart(o.mask, bike));
   if (clipped.length === 0) return { parts: [], status: "none" };
+  // Both wheels of one bike are about the same size, so a "wheel" candidate under a
+  // quarter of the largest one is a fragment (live 2026-10-28: a 93x37 px piece above
+  // the rear wheel), not a third wheel. Fenders can differ a lot, so they keep all.
+  if (phrase === "wheel") {
+    const largest = Math.max(...clipped.map((o) => maskArea(o.mask)));
+    clipped = clipped.filter((o) => maskArea(o.mask) >= MIN_WHEEL_SHARE * largest);
+  }
   const pair = PAIRED_SLOTS[phrase];
   if (pair) {
     const assigned = assignFrontRear(clipped.map((o) => maskBox(o.mask)!), facing, bike ? maskBox(bike) : null);
