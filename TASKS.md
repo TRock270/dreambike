@@ -197,7 +197,7 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Owner decisions recorded: npm set approved with sharp 0.35.5; Pillow and numpy approved; charset-normalizer approved after the fact; node@22 installed via Homebrew.
 - Remaining before T0 can complete:
   - U09: five owned photos, fixtures/expected.json, and the consent record.
-  - U06: Upstash REST URL and token, Billing spend limit, `ledger.py init` after reconciliation, PRICING_VERIFIED_AT.
+  - U06: Billing spend limit, `ledger.py init` after reconciliation, PRICING_VERIFIED_AT. (Upstash done 2026-10-28; see below.)
   - Then the live profiles: SAM concept and points, Spark identify and instruction, image edit, compose; owner overlay review for U01.
 - Consultant review (2026-10-28):
   - Nemotron 3 Super returned 404; the fallback Nemotron 3.5 reviewed the Lua files and common.py; Gemini reviewed imaging.py.
@@ -216,3 +216,12 @@ For each completed ticket append actual date/time ET, files changed, checks and 
     - A symmetric aspect formula (SPEC fixes the formula).
     - The claimed upstream body leak (only the error code and type are kept).
   - Rechecked: local_images 35 passed, 0 failed, 5 skipped; smoke dry run shapes ok.
+
+### T0 session 2 — 2026-10-28 (Upstash ledger, about 0.25 h)
+
+- Owner created the Upstash Redis database: regional, free plan, eviction off. URL and token are only in `.env.local`, which is gitignored.
+- Checks run (Redis only, no Meta calls, $0.00):
+  - `python spike/ledger.py status`: connected. All buckets missing, as expected before init. No halt flag, 0 ledger entries.
+  - `python spike/ledger.py selftest`: 8 of 8 passed. Covered: missing lifetime fails closed, duplicate ID refused (pending and settled), settle refunds the difference, unknown outcome keeps the full reservation, released 429 keeps the attempt count, concurrent reservations stay under the cap (granted=8, used=940000 µ$), and a charge above the reservation halts further calls.
+  - After the selftest: DBSIZE 0, no `{dreambike:selftest-*` keys left.
+- Still open for U06: Meta Billing spend limit, owner reconciliation, then `ledger.py init`, PRICING_VERIFIED_AT, and the per-request search bound before grounded calls.
