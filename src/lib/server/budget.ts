@@ -77,7 +77,7 @@ async function command(redis: RedisRest, args: (string | number)[]): Promise<unk
       method: "POST",
       headers: { Authorization: `Bearer ${redis.token}`, "Content-Type": "application/json" },
       body: JSON.stringify(args.map(String)),
-      signal: AbortSignal.timeout(2000),
+      signal: AbortSignal.timeout(2000), redirect: "error",
     });
     body = (await res.json()) as typeof body;
   } catch {
@@ -100,11 +100,15 @@ export async function reserve(redis: RedisRest, opts: {
   const args = [opts.requestKey, opts.fingerprint, opts.amount, opts.model, opts.route,
     opts.buckets.ticket, opts.buckets.day, now, now + opts.deadlineMs + 30_000, MARKER_TTL_S,
     AGGREGATE_TTL_S, c.lifetime, c.phase, c.ticket, c.day, c.visitor, c.ip, c.visitorCount, c.ipCount];
-  const result = (await command(redis, ["EVAL", script("reserve.lua"), all.length, ...all, ...args])) as [string, string];
-  const [status, detail] = result;
+  const result = await command(redis, ["EVAL", script("reserve.lua"), all.length, ...all, ...args]);
+  // Check the reply shape before trusting it; anything odd fails closed.
+  if (!Array.isArray(result) || typeof result[0] !== "string") throw new AppError("ACCOUNTING_UNAVAILABLE");
+  const [status, detail] = result as [string, string | undefined];
   if (status === "OK") return { requestKey: opts.requestKey, keys, amount: opts.amount };
   if (status === "DENIED") throw new AppError("BUDGET_EXCEEDED");
   if (status === "DUPLICATE") {
+    // Same request ID with a different payload is a client error, not a finished duplicate.
+    if (detail === "conflict") throw new AppError("INVALID_REQUEST", "This request ID was already used for different input.");
     throw new AppError(detail === "reserved" ? "REQUEST_IN_PROGRESS" : "RESULT_NOT_CACHED");
   }
   throw new AppError("ACCOUNTING_UNAVAILABLE");

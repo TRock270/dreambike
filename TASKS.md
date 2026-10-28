@@ -48,6 +48,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 
 ## T3 — Bike cutout, part map, and point selection
 
+- Status: DONE OFFLINE AND IN MOCK 2026-10-28. Live SAM is gated on U01 (route refuses live segmentation before any reservation until placement is verified). See log.
 - Priority: MVP. Estimate: 3h, Oct 29. Depends on: T2 and U01 resolved for mask display.
 - Files: src/app/api/segment/route.ts, src/lib/server/meta.ts/images.ts, src/lib/coordinates.ts/slots.ts, src/components/PartOverlay.tsx/PartSelector.tsx, tests/coordinates.test.ts/masks.test.ts.
 - Work: exact SAM SSE body/parser; full-image binary mask adapter; cutout; core phrase queue at concurrency 4; fixed colors; front/rear by facing; smallest-mask hit test; point fallback; manual custom name. All live calls use the Node wrapper over the same atomic policy created in T0/T1. Public visitor hardening and demo integration arrive in T13; local accounting already enforces project, development, ticket, and day caps.
@@ -320,3 +321,63 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Remaining gates:
   - U05 stays PARTIAL until the Safari check, the owned exif-rotated fixture (U09), and the deployed envelope (T14).
   - Owner Safari check: drop IMG_1570.jpg into `npm run dev`; it should show upright with 1536 × 2048 in the caption. Drop a .HEIC; the exact message should appear.
+
+### T3 — 2026-10-28, 00:43–01:18 ET (about 0.6 h)
+
+- Status: offline and mock scope done. Live part detection is blocked by U01.
+  - `VERIFIED_SAM_PLACEMENT` is null, so `/api/segment` live returns FEATURE_DISABLED before any reservation.
+  - `/build-ticket` was unavailable in this session, so the challenge loop ran by hand. Round 1: models-, imaging-, security- and general-reviewer. Round 2: general-reviewer covering all round-1 items.
+- Files:
+  - New: src/lib/coordinates.ts, src/lib/parts.ts, src/lib/queue.ts, src/lib/server/sse.ts, src/lib/server/paid.ts, src/app/api/segment/route.ts, src/lib/mocks/segment.ts, src/lib/browser/segmentClient.ts, src/lib/browser/partMap.ts, src/components/PartOverlay.tsx, PartSelector.tsx, tests/coordinates.test.ts, masks.test.ts, paid.test.ts, partmap.test.ts.
+  - Changed: src/lib/server/meta.ts (SAM wire), src/lib/server/images.ts (mask placement and PNG), src/lib/server/budget.ts, src/lib/types.ts, src/components/ImageCanvas.tsx, Workspace.tsx, package.json (dev binds 127.0.0.1), .env.example (BUDGET_TICKET), SPEC.md 6.1 implementation note.
+- Checks run:
+  - `npm run typecheck`: ok.
+  - `npm run lint`: ok.
+  - `npm test`: 72 passed in 9 files.
+  - `npm run build`: ok; client bundle canary clean; no hex outside tokens.css.
+  - Headless Chrome 156 over CDP, MOCK=1, on landscape 1440×900 and portrait 1280×800 owner photos (re-run after every fix round):
+    - 15 /api/segment requests: the cutout, then 14 phrases at most 4 in flight.
+    - Answering "Right" assigned the front and rear wheels.
+    - Clicking the mock tank position selected Tank.
+    - The overlay painted at image resolution.
+    - "Select by point" added Mirrors.
+- What the tests cover:
+  - Clicks through both letterboxes, within 3 px at two canvas sizes with fractional sizes, exclusive edges.
+  - Hit test: smallest mask wins; stale, wrong-size and other-photo masks are ignored.
+  - SAM stream:
+    - the same records for every byte split, pairing by object ID, confidence, half-open bounds, an empty lane;
+    - eof without a terminal event, a non-SSE body, an error event, a refusal, 429 with Retry-After, 4xx, and a mid-stream stall that becomes a timeout.
+  - SSE CR/CRLF and multi-line data.
+  - Mask placement refused until verified; box-relative placement stays inside the box; PNG round trip.
+  - Part rules: the 60% rule (also on unions), front/rear by facing, same-side or merged candidates, no bike outline.
+  - Queue: at most 4 in flight, partial results kept.
+  - withReservation against a fake Upstash: settled, released only on 429, unknown otherwise; no dispatch when deployed, not live, without a ticket, or on a duplicate or conflict.
+  - Derivation: the facing answer survives late results, plural union, bike switch, other-photo point parts ignored.
+- Round 1 (CHANGES REQUESTED from models, imaging, security, and general), fixed:
+  - Detection now only writes raw results; parts are derived (no facing race).
+  - Image-hash guards against late results from an earlier photo.
+  - "Motorcycle outline" point target to recover the bike; next-bike switch for photos with more than one bike.
+  - Plural union; 2-screen-px outline by erosion.
+  - withReservation tests.
+  - `next dev -H 127.0.0.1`.
+  - Stream errors mapped honestly: mid-stream timeout, eof, content type, error events.
+  - SSE CR handling, linear scan, cancel.
+  - Envelope: skip rather than break; more than 16 objects gives a warning; real JSON measured; response schema-checked.
+  - One total deadline; Retry-After; frame-0 filter; redirect "error" on the Meta and Redis fetches; conflict maps to INVALID_REQUEST; a paid result is kept if settle fails.
+  - BUDGET_TICKET must look like T3.
+  - Live segmentation refused before any reservation until U01.
+  - Neutral "no bike" state; same-side duplicates need a point; point selection clips first and requires the clicked pixel; wrong-size mask is visible as complete=false.
+  - Types moved to types.ts.
+- Round 2 (general-reviewer): approved. Its minors were also fixed: double-click guard in point mode, hash test for hit testing, "Swap front and rear", derive cache.
+- Consultants:
+  - Nemotron 3.5 saw only part of the files (its token limit). Adopted: reply-shape check on reserve; measured envelope. Rejected: settle NOOP handling (fails closed already), spike charge handling (decided in T0), sliding TTL (harmless).
+  - Gemini, adopted: union must pass the 60% rule; two wheels without a bike outline need a point; build stops on abort; point parts filtered by hash; derive cache and faster clip loop. Rejected: fractional click coordinates (screenToImage already returns integers).
+- Deviations recorded:
+  - SPEC 6.1 implementation note on the segment signature.
+  - Cutout feather at sigma 1.5 deferred to the first ticket that displays the cutout.
+  - A completed stream with no lane stays SCHEMA_INVALID until U01 records a real zero-match stream.
+  - T13 carry-overs: visitor HMAC in the fingerprint, visitor count limits, 48 h identifier TTL, session cookie.
+- Cost ledger: $0.00 (no paid calls).
+- Remaining gates:
+  - U01: owned off-origin overlays.
+  - Then set `VERIFIED_SAM_PLACEMENT`, run one live segment smoke with BUDGET_TICKET=T3, and recheck "a wheel click highlights its real pixels".

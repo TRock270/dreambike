@@ -89,3 +89,17 @@ export type NormalizedImage = {
 export type NormalizeOptions = { maxEdge?: number; maxBytes?: number };
 /** A normalized photo on the client: the decoded WireImage as a Blob plus its metadata. */
 export type NormalizedPhoto = { blob: Blob; width: number; height: number; hash: string; warnings: string[] };
+
+/** A binary mask over the whole normalized image: pixels[y * width + x] is 0 or 1. */
+export type BinaryMask = { width: number; height: number; pixels: Uint8Array };
+/** The photo a mask or request belongs to; hash ties masks to one exact raster. */
+export type PhotoRef = { blob: Blob; width: number; height: number; hash: string };
+/** One decoded SAM object in full-image coordinates. */
+export type SegmentedObject = { mask: BinaryMask; box: [number, number, number, number]; confidence: number | null };
+/** A selectable part on one photo (PLAN 9.3). Concept parts have stable IDs "phrase:slot". */
+export type MapPart = {
+  id: string; slot: SlotId; label: string; mask: BinaryMask; area: number;
+  box: [number, number, number, number]; source: "concept" | "point"; confidence: number | null;
+  stale: boolean; imageHash: string;
+};
+export type PhraseStatus = "pending" | "found" | "none" | "needs_point" | "needs_facing" | "error";

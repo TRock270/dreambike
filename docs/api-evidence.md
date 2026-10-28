@@ -14,7 +14,7 @@ Last updated 2026-10-27 23:55 ET (T0 session 1). **Paid calls so far: none. Spen
 
 | Gate | Status | Evidence so far | What resolves it |
 | --- | --- | --- | --- |
-| U01 SAM mask placement | UNVERIFIED (doc-supported hypothesis) | Doc + Offline: the parser 0.1.0 README record decodes to a 60×27 raster for a 60×27 box, which means box-sized and box-relative. The parser normalizes inclusive `x2/y2` to half-open `right/bottom`. Our adapter raises MASK_PLACEMENT_UNKNOWN until a mode is verified. | Owned off-origin concept and point overlays (`responses_sam.py --mode concept/points`), checked by the owner; TypeScript repeat in T3 |
+| U01 SAM mask placement | UNVERIFIED (doc-supported hypothesis) | Doc + Offline: the parser 0.1.0 README record decodes to a 60×27 raster for a 60×27 box, which means box-sized and box-relative. The parser normalizes inclusive `x2/y2` to half-open `right/bottom`. Our adapter raises MASK_PLACEMENT_UNKNOWN until a mode is verified. | Owned off-origin concept and point overlays (`responses_sam.py --mode concept/points`), checked by the owner; TypeScript repeat in T3 Note T3 2026-10-28: app refuses live segmentation before reserving until this passes (VERIFIED_SAM_PLACEMENT = null). |
 | U02 Spark strict JSON with image and with web_search | UNVERIFIED | Request bodies built and shape-checked in dry run; schemas in `prompts/schemas/` | Live identify and instruction profiles; grounded profile after U06 |
 | U03 Account models, quotas, image sizes | UNVERIFIED | None | First live profiles record model access and rate-limit headers |
 | U04 Edit quality, latency, drift | UNVERIFIED | Offline: composite and drift math with all 7 fallback reasons | Live `images_edits.py --mode edit` plus owner before/after review |

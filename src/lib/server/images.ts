@@ -10,6 +10,7 @@ import {
   LOW_RES_WARNING, MAX_BYTES, MAX_EDGE, MAX_INPUT_PIXELS, MAX_SOURCE_BYTES, MIN_EDGE, MIN_QUALITY,
   WARN_EDGE, fitWithin, headerSize, isAnimated, qualitySteps, shrinkStep, sniffFormat,
 } from "../imageFormat";
+import type { BinaryMask } from "../coordinates";
 import type { NormalizedImage, NormalizeOptions } from "../types";
 
 /** --nl-canvas from tokens.css as RGB (a test keeps the two in sync). */
@@ -131,4 +132,54 @@ export function webpChunks(bytes: Uint8Array): string[] {
 
 export function toDataUrl(mime: "image/webp" | "image/png", bytes: Uint8Array): string {
   return `data:${mime};base64,${Buffer.from(bytes).toString("base64")}`;
+}
+
+// ------------------------------------------------------------------ SAM masks
+
+/**
+ * How a SAM raster sits in the image, fixed by U01 with owned off-origin
+ * overlays (SPEC 7). null = unverified: only a raster that already covers the
+ * full image is accepted; anything else is MASK_PLACEMENT_UNKNOWN.
+ */
+export const VERIFIED_SAM_PLACEMENT: "box_relative" | null = null;
+
+export type SamBounds = { left: number; top: number; right: number; bottom: number };
+
+/** One decoded SAM raster (0/1 bytes, row-major) to a full-image binary mask. */
+export function maskToNormalized(raster: Uint8Array, maskWidth: number, maskHeight: number,
+  bounds: SamBounds, imageWidth: number, imageHeight: number,
+  placement: "box_relative" | null = VERIFIED_SAM_PLACEMENT): BinaryMask {
+  if (raster.length !== maskWidth * maskHeight) throw new AppError("MASK_PLACEMENT_UNKNOWN");
+  if (maskWidth === imageWidth && maskHeight === imageHeight) {
+    return { width: imageWidth, height: imageHeight, pixels: Uint8Array.from(raster, (v) => (v ? 1 : 0)) };
+  }
+  const boxW = bounds.right - bounds.left;
+  const boxH = bounds.bottom - bounds.top;
+  if (placement !== "box_relative" || maskWidth !== boxW || maskHeight !== boxH) {
+    throw new AppError("MASK_PLACEMENT_UNKNOWN");
+  }
+  const pixels = new Uint8Array(imageWidth * imageHeight);
+  // Copy the box-sized raster at the box's top-left; clip at the image border.
+  const x0 = Math.max(0, bounds.left), y0 = Math.max(0, bounds.top);
+  const x1 = Math.min(imageWidth, bounds.right), y1 = Math.min(imageHeight, bounds.bottom);
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      pixels[y * imageWidth + x] = raster[(y - bounds.top) * maskWidth + (x - bounds.left)] ? 1 : 0;
+    }
+  }
+  return { width: imageWidth, height: imageHeight, pixels };
+}
+
+/** Full-image binary mask as a 1-channel PNG (0 or 255), WireMask png_binary_full_image. */
+export async function maskToPng(mask: BinaryMask): Promise<Uint8Array> {
+  const gray = Buffer.from(mask.pixels.map((v) => (v ? 255 : 0)));
+  return new Uint8Array(await sharp(gray, { raw: { width: mask.width, height: mask.height, channels: 1 } })
+    .png({ compressionLevel: 9, palette: false }).toBuffer());
+}
+
+/** Decode a mask PNG back to 0/1 pixels; dimensions must match the image. */
+export async function pngToMask(png: Uint8Array, width: number, height: number): Promise<BinaryMask> {
+  const { data, info } = await sharp(png).extractChannel(0).raw().toBuffer({ resolveWithObject: true });
+  if (info.width !== width || info.height !== height) throw new AppError("INVALID_IMAGE", "Mask size does not match the image.");
+  return { width, height, pixels: Uint8Array.from(data, (v) => (v > 127 ? 1 : 0)) };
 }
