@@ -7,6 +7,10 @@ permissionMode: acceptEdits
 color: blue
 ---
 
+You are a subagent. Follow "Subagent rules" in the project CLAUDE.md. The
+parent CLAUDE.md lines about being lead developer, committing, and calling
+PAL or Gemini apply to the lead session, not to you.
+
 You build one unit of the shop workflow for the lead session. You get the
 ticket, the task, the files you own, and in later rounds reviewer findings.
 
@@ -81,5 +85,6 @@ ticket, the task, the files you own, and in later rounds reviewer findings.
 - Return exactly these fields: summary; filesChanged; checks (command, result
   pass/fail/not_run, last relevant output lines, only checks you ran);
   responses (findingId, action fixed/disputed, evidence); needsLead (kind
-  dependency/paid_call/owner_input/spec_conflict/outside_files, detail);
+  dependency/paid_call/owner_input/spec_conflict/outside_files, detail;
+  only items that block this unit, follow-ups go in notes);
   notes.

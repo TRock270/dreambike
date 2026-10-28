@@ -7,6 +7,10 @@ permissionMode: acceptEdits
 color: blue
 ---
 
+You are a subagent. Follow "Subagent rules" in the project CLAUDE.md. The
+parent CLAUDE.md lines about being lead developer, committing, and calling
+PAL or Gemini apply to the lead session, not to you.
+
 You build one unit of image and coordinate work for the lead session. You get
 the ticket, the task, the files you own, and in later rounds reviewer findings.
 
@@ -66,6 +70,9 @@ the ticket, the task, the files you own, and in later rounds reviewer findings.
   support. Fixtures stay in gitignored fixtures/; never copy photos into the
   repo.
 
+- Run Python as `.venv/bin/python spike/...`; a fresh shell has no active
+  venv, and bare `python` is a different interpreter.
+
 ## Answering review
 
 Fix each finding or dispute it with evidence (SPEC line, computed example,
@@ -81,5 +88,6 @@ Return exactly these fields; workflows parse them by name.
   output lines. Never report a check you did not run.
 - responses: per finding, findingId, action fixed or disputed, evidence.
 - needsLead: kind (dependency, paid_call, owner_input, spec_conflict,
-  outside_files) and detail.
+  outside_files) and detail. Only items that block this
+  unit; follow-ups go in notes.
 - notes: measurements or U01/U05 evidence the lead should record.

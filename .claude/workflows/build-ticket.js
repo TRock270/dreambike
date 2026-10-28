@@ -24,9 +24,15 @@ const EXTRA_REVIEWERS = ['security-reviewer', 'release-reviewer', 'models-review
 const MAX_UNITS = 4
 const MAX_REVIEWERS_PER_UNIT = 3
 
-const input = typeof args === 'string'
-  ? { ticket: args.trim().split(/\s+/)[0], goal: args.trim().split(/\s+/).slice(1).join(' ') }
-  : (args || {})
+// Args arrive as an object, a JSON string, or plain text like "T2 focus on preflight".
+function parseArgs(raw) {
+  if (typeof raw !== 'string') return raw || {}
+  const text = raw.trim()
+  if (text.startsWith('{')) return JSON.parse(text)
+  const words = text.split(/\s+/)
+  return { ticket: words[0], goal: words.slice(1).join(' ') }
+}
+const input = parseArgs(args)
 if (!input.ticket) throw new Error('build-ticket needs a ticket id, e.g. "T2" or {ticket: "T2"}')
 const ticket = input.ticket
 const goal = input.goal ? `Lead's goal for this run: ${input.goal}` : ''
@@ -153,16 +159,19 @@ const planPrompt = [
     : 'Draft the units yourself from TASKS.md and SPEC.md.',
   `Domains: ${Object.keys(DOMAINS).join(', ')}. models = Meta client, model routes, prompts, mocks, spike profiles; imaging = normalize, coordinates, masks, composite; shop = history, sheet, fit policy, quote, PDF; platform = budget, config, fetch, demo, deploy; ui = components and tokens; release = README, credits, submission docs, public assets; general = scaffold, config, glue.`,
   `At most ${MAX_UNITS} units. files lists every file the builder may create or edit, including tests. Two units share a file only if one dependsOn the other.`,
-  'extraReviewers: security-reviewer when the unit dispatches or guards a paid call or touches config or secrets; release-reviewer when it changes anything public. At most one extra reviewer per unit.',
+  'extraReviewers: security-reviewer when the unit dispatches or guards a paid call or touches config or secrets; release-reviewer when it changes anything public; for ui units, imaging-reviewer when it touches canvas, overlay or click mapping, shop-reviewer when it shows money, history or fit results. At most one extra reviewer per unit.',
   `doneWhen: copy each done-when item of ${ticket} from TASKS.md as one string.`,
   'ready=false only for real blockers (owner approval, paid call, missing owner input, gate without documented fallback, SPEC conflict). Plan the offline parts that can proceed and name the gated part in notes.',
   'Do not edit files.',
 ].filter(Boolean).join('\n\n')
 const plan = await agent(planPrompt, { label: `plan ${ticket}`, phase: 'Plan check', agentType: 'general-reviewer', schema: PLAN })
 if (!plan) throw new Error('Plan check agent returned nothing')
-if (!plan.ready) {
-  log(`${ticket} not ready: ${plan.blockers.join('; ')}`)
-  return { ticket, status: 'blocked', blockers: plan.blockers, notes: plan.notes, proposedUnits: plan.units }
+if (!plan.ready || !plan.units.length || !plan.doneWhen.length) {
+  const blockers = plan.blockers
+    .concat(plan.units.length ? [] : ['plan check returned no units'])
+    .concat(plan.doneWhen.length ? [] : ['plan check found no done-when items'])
+  log(`${ticket} not ready: ${blockers.join('; ')}`)
+  return { ticket, status: 'blocked', blockers, notes: plan.notes, proposedUnits: plan.units }
 }
 
 // Validate the unit graph in plain code.
@@ -209,7 +218,8 @@ function builderPrompt(unit, round, open) {
     goal,
     `Task: ${unit.task}`,
     `Files you own (create or edit only these):\n${unit.files.join('\n')}`,
-    'Other units may be editing other files right now. Run only targeted offline checks.',
+    'Other units may be editing other files right now. Run only targeted offline checks, and never npm run build (the Verify phase builds once).',
+    'needsLead ends this unit before review, so use it only for something that blocks the unit; follow-ups go in notes.',
     round === 1 ? '' : `Reviewer findings still open. Fix each one or dispute it with evidence:\n${json(open)}`,
   ].filter(Boolean).join('\n\n')
 }
@@ -226,6 +236,7 @@ function reviewPrompt(unit, reviewer, round, build, mine) {
     `Files in scope:\n${unit.files.join('\n')}`,
     `Builder report:\n${json(build)}`,
     'Read the files themselves (git diff for tracked files, whole content for new ones). Do not trust the report over the code.',
+    'Other reviewers and units run in parallel: do not run npm run build.',
     recheckPart,
     round === 1 ? '' : 'Raise new findings only if blocker or major, and only if the fix caused them or you missed something real.',
   ].filter(Boolean).join('\n\n')
@@ -271,6 +282,8 @@ async function runUnit(unit) {
       if (notYetReviewed.includes(reviewer)) notYetReviewed.splice(notYetReviewed.indexOf(reviewer), 1)
       const recheck = {}
       review.recheck.forEach((r) => { recheck[r.findingId] = r })
+      const skipped = mine.filter((f) => !recheck[f.id])
+      if (skipped.length) log(`Unit ${unit.id}: ${reviewer} did not recheck ${skipped.map((f) => f.id).join(', ')}; kept open`)
       for (const f of mine) {
         const r = recheck[f.id]
         if (!r || r.status === 'upheld') next.push({ ...f, upheldReason: r ? r.reason : 'not rechecked' })
@@ -288,6 +301,13 @@ async function runUnit(unit) {
     open = next
     log(`Unit ${unit.id} round ${round}: ${open.length} open blocking finding(s)`)
     if (!open.length && !missing.length && !notYetReviewed.length) return { unit, status: 'approved', lastBuild: build, rounds, openFindings: [], minor }
+    // Another round cannot settle findings the builder disputed and the reviewer upheld.
+    // Stop early and let the lead decide.
+    const disputedNow = build.responses.filter((r) => r.action === 'disputed').map((r) => r.findingId)
+    if (round > 1 && open.length && open.every((f) => disputedNow.includes(f.id) && f.upheldReason)) {
+      log(`Unit ${unit.id}: only upheld disputes left after round ${round}; handing to the lead`)
+      break
+    }
   }
   const disputed = {}
   build.responses.filter((r) => r.action === 'disputed').forEach((r) => { disputed[r.findingId] = r.evidence })
@@ -359,21 +379,26 @@ const gate = await agent([
   `Done-when items:\n${json(plan.doneWhen)}`,
   `Unit results:\n${json(unitSummary)}`,
   `Final checks:\n${json(verify ? verify.checks : 'verify agent returned nothing')}`,
+  `Fixes the Verify phase made after unit review (no specialist has seen these):\n${json(verify ? verify.fixes : [])}`,
+  deferredUnits.length ? `Units deferred to a later run (not built): ${deferredUnits.map((u) => u.id).join(', ')}` : '',
   'Audit every item as met, not_met, blocked or not_verifiable_offline, with evidence from files and check output. A live or paid capability is never met by mocks alone.',
-  'Then review the whole ticket diff for cross-unit problems the unit reviews could not see, and report them as findings.',
+  'Then review the whole ticket diff for cross-unit problems the unit reviews could not see, and review every Verify fix as a unit reviewer would. Report problems as findings.',
 ].join('\n\n'), { label: `gate ${ticket}`, phase: 'Done-when gate', agentType: 'general-reviewer', schema: GATE })
 
 const all = Object.values(results)
 const openFindings = all.flatMap((r) => r.openFindings || []).concat(gate ? gate.findings.filter(isBlocking) : [])
 const green = gate
+  && !deferredUnits.length
   && all.length === units.length
   && all.every((r) => r.status === 'approved')
   && verify && verify.checks.every((c) => c.result === 'pass')
+  && gate.items.length >= plan.doneWhen.length
   && gate.items.every((i) => i.status === 'met')
   && !openFindings.length
 return {
   ticket,
   status: green ? 'green' : 'needs_lead',
+  notApproved: all.filter((r) => r.status !== 'approved').map((r) => `${r.unit.id}: ${r.status}${r.reason ? ` (${r.reason})` : ''}`),
   units: all.map((r) => ({ id: r.unit.id, domain: r.unit.domain, status: r.status, reason: r.reason, rounds: r.rounds, filesChanged: r.lastBuild ? r.lastBuild.filesChanged : [], notes: r.lastBuild ? r.lastBuild.notes : '' })),
   deferredUnits,
   checks: verify,

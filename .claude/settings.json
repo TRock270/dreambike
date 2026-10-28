@@ -7,17 +7,31 @@
       "Bash(npm run build)",
       "Bash(npm run lint)",
       "Bash(npm run typecheck)",
+      "Bash(npm test)",
       "Bash(npm test *)",
+      "Bash(npx vitest run)",
       "Bash(npx vitest run *)",
-      "Bash(python spike/local_images.py *)",
       "Bash(.venv/bin/python spike/local_images.py *)",
-      "Bash(python spike/run_all.py * --dry-run)",
-      "Bash(.venv/bin/python spike/run_all.py * --dry-run)",
+      "Bash(.venv/bin/python spike/run_all.py --mode smoke --dry-run)",
+      "Bash(git diff)",
       "Bash(git diff *)",
+      "Bash(git status)",
       "Bash(git status *)",
       "Bash(git log *)",
       "Bash(git show *)",
       "Bash(git ls-files *)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Edit(./.env)",
+      "Read(./consent/**)",
+      "Read(./secrets/**)",
+      "Edit(./.claude/settings.json)",
+      "Bash(git *--output*)",
+      "Bash(git *--ext-diff*)",
+      "Bash(git *--no-index*)",
+      "Bash(npm test *--outputFile*)",
+      "Bash(npx vitest *--outputFile*)"
     ]
   }
 }

@@ -129,8 +129,11 @@ The shop exports an English EUR estimate with before/after images and 19% VAT.
   4. Reviewers mark findings resolved, upheld with counter-evidence, or
      withdrawn. After round 1 they add only blocker/major issues the fix caused
      or real misses.
-  5. Stop when nothing blocking is open, or after 3 rounds. The lead decides
-     what is left (PAL challenge allowed) and records it in TASKS.md.
+  5. Stop when nothing blocking is open, after 3 rounds, or when only upheld
+     disputes remain. The lead decides what is left (PAL challenge allowed)
+     and records it in TASKS.md.
+  6. If two reviewers' findings conflict, the builder disputes one citing the
+     other and the lead decides. Spend, secret, and rights rules win.
 - Workflows, owner opt-in 2026-10-28: sessions run these without asking again.
   - `/build-ticket T2`, or args {ticket, goal?, units?, maxRounds?, checks?}:
     plan check, challenge loop per unit (at most 4), full checks, done-when
@@ -143,7 +146,12 @@ The shop exports an English EUR estimate with before/after images and 19% VAT.
 - Work inline for one-file changes under about 50 lines, planning-doc edits,
   and paid smoke runs. A ticket run is typically 10–25 agents; watch /workflows.
 - Workflows never make paid calls, install packages, or ask the owner. They
-  return status, openFindings, disputes, and needsLead for the lead.
+  return a status. build-ticket: green, needs_lead (see notApproved,
+  openFindings, disputes, needsLead), or blocked. review-changes: confirmed,
+  unverified, and refuted findings. fix-until-green: green,
+  green_fix_review_failed, no_progress, unlocated_failure, or still_failing.
+  Only green goes straight to consultant review; anything else needs a lead
+  decision first.
 - After a run the lead decides disputes and needsLead items, does the
   consultant review from ../CLAUDE.md (PAL codereview with Nemotron, Gemini,
   then precommit; internal agents do not count toward those limits), reruns
@@ -155,7 +163,8 @@ If you were started by the Agent tool or a workflow:
 
 - Edit only the files your task lists. Report any other change you need.
 - No commits or other git writes, no npm or pip installs, no paid calls. Run
-  spike scripts only with --dry-run; spike/local_images.py is free.
+  spike scripts only with --dry-run; `.venv/bin/python spike/local_images.py`
+  is free. A fresh shell has no active venv, so never use bare `python`.
 - No consultants (PAL, Gemini) and no questions to the owner.
 - Do not edit PLAN.md, SPEC.md, TASKS.md, CLAUDE.md, HACKATHON_GUIDELINES.md,
   RULES.md, or docs/api-evidence.md. Put proposed changes in your report.

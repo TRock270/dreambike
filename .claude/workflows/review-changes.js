@@ -11,15 +11,22 @@ export const meta = {
 
 // Path rules: which specialist reviews which files. general-reviewer reviews everything.
 const RULES = [
-  { reviewer: 'models-reviewer', re: /^(src\/lib\/server\/meta\.ts|prompts\/|src\/lib\/mocks\/|src\/app\/api\/(segment|identify|instruction|edit|check|search-parts|transcribe)\/|spike\/(responses_sam|responses_spark|images_edits|asr_transcribe|files|run_all)\.py)/ },
-  { reviewer: 'imaging-reviewer', re: /^(src\/lib\/server\/images\.ts|src\/lib\/coordinates\.ts|src\/app\/api\/(normalize|composite)\/|spike\/(imaging|local_images)\.py|src\/components\/(ImageCanvas|PartOverlay|PartSelector|BeforeAfter|UploadDropzone|ReferenceDropzone)\.tsx)/ },
-  { reviewer: 'shop-reviewer', re: /^(src\/lib\/(db|project|cache|quote|pdf)\.ts|src\/lib\/server\/fit[^/]*\.ts|prompts\/fit-check|src\/components\/(BuildSheet|ProductFields|FitBadge|EvidenceLinks|PaperworkSummary|EstimatePreview|MissingCosts|InspectionFees|ExportButton|ShopSettingsForm|VersionStrip|ProjectList|EditReview)\.tsx)/ },
-  { reviewer: 'security-reviewer', re: /^(budget\/|src\/lib\/server\/(budget|config|fetch-product|meta)\.ts|src\/app\/api\/|spike\/(ledger|common|deployment)\.py|next\.config\.ts|\.env\.example$|\.gitignore$|\.claude\/settings\.json$|src\/(middleware|proxy)\.ts)/ },
-  { reviewer: 'release-reviewer', re: /^(README\.md|CREDITS\.md|LICENSE|docs\/(submission|demo-script)\.md|public\/)/ },
+  { reviewer: 'models-reviewer', re: /^(src\/lib\/server\/meta\.ts|prompts\/|src\/lib\/mocks\/|src\/app\/api\/(segment|identify|instruction|edit|check|search-parts|transcribe)\/|spike\/(responses_sam|responses_spark|images_edits|asr_transcribe|files|run_all)\.py|tests\/(meta|sam|spark|sse))/ },
+  { reviewer: 'imaging-reviewer', re: /^(src\/lib\/server\/images\.ts|src\/lib\/coordinates\.ts|src\/app\/api\/(normalize|composite)\/|spike\/(imaging|local_images)\.py|src\/components\/(ImageCanvas|PartOverlay|PartSelector|BeforeAfter|UploadDropzone|ReferenceDropzone)\.tsx|src\/lib\/browser\/|src\/lib\/imageFormat\.ts|tests\/(images|coordinates|masks|composite))/ },
+  { reviewer: 'shop-reviewer', re: /^(src\/lib\/(db|project|cache|quote|pdf)\.ts|src\/lib\/server\/fit[^/]*\.ts|prompts\/fit-check|src\/components\/(BuildSheet|ProductFields|FitBadge|EvidenceLinks|PaperworkSummary|EstimatePreview|MissingCosts|InspectionFees|ExportButton|ShopSettingsForm|VersionStrip|ProjectList|EditReview)\.tsx|tests\/(project|cache|quote|fit-policy))/ },
+  { reviewer: 'security-reviewer', re: /^(budget\/|src\/lib\/server\/(budget|config|fetch-product|meta|http)\.ts|tests\/(budget|config|fetch-product)|src\/app\/api\/|spike\/(ledger|common|deployment)\.py|next\.config\.ts|\.env\.example$|\.gitignore$|\.claude\/settings\.json$|src\/(middleware|proxy)\.ts)/ },
+  { reviewer: 'release-reviewer', re: /^(README\.md|CREDITS\.md|LICENSE|docs\/(submission|demo-script)\.md|public\/|src\/components\/(UploadNotice|DemoBanner)\.tsx)/ },
 ]
 const MAX_REFUTES = 12
 
-const input = typeof args === 'string' ? { base: args.trim() || 'HEAD' } : (args || {})
+// Args arrive as an object, a JSON string, or a plain base ref like "HEAD~1".
+function parseArgs(raw) {
+  if (typeof raw !== 'string') return raw || {}
+  const text = raw.trim()
+  if (text.startsWith('{')) return JSON.parse(text)
+  return { base: text || 'HEAD' }
+}
+const input = parseArgs(args)
 const base = input.base || 'HEAD'
 
 const str = { type: 'string' }
@@ -44,7 +51,14 @@ const REVIEW = {
   properties: {
     verdict: { type: 'string', enum: ['approve', 'changes_required'] },
     findings: { type: 'array', items: FINDING },
-    recheck: { type: 'array', items: { type: 'object', properties: {} } },
+    recheck: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['findingId', 'status', 'reason'],
+        properties: { findingId: str, status: { type: 'string', enum: ['resolved', 'upheld', 'withdrawn'] }, reason: str },
+      },
+    },
     checksRun: { type: 'array', items: { type: 'object', required: ['command', 'result', 'output'], properties: { command: str, result: str, output: str } } },
   },
 }
@@ -74,7 +88,10 @@ for (const rule of RULES) {
   const matched = files.filter((f) => rule.re.test(f))
   if (matched.length) assignments[rule.reviewer] = matched
 }
-for (const r of input.extraReviewers || []) assignments[r] = assignments[r] || files
+const KNOWN_REVIEWERS = RULES.map((rule) => rule.reviewer)
+const extras = (input.extraReviewers || []).filter((r) => KNOWN_REVIEWERS.includes(r))
+if (extras.length < (input.extraReviewers || []).length) log('Ignored unknown extraReviewers names')
+for (const r of extras) assignments[r] = assignments[r] || files
 assignments['general-reviewer'] = files
 log(`${files.length} file(s); reviewers: ${Object.keys(assignments).join(', ')}`)
 

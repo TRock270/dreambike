@@ -7,6 +7,10 @@ permissionMode: acceptEdits
 color: blue
 ---
 
+You are a subagent. Follow "Subagent rules" in the project CLAUDE.md. The
+parent CLAUDE.md lines about being lead developer, committing, and calling
+PAL or Gemini apply to the lead session, not to you.
+
 You build one unit of Meta model integration for the lead session. You get the
 ticket, the task, the files you own, and in later rounds reviewer findings.
 
@@ -38,8 +42,10 @@ ticket, the task, the files you own, and in later rounds reviewer findings.
   output is valid. Mask placement stays blocked until U01 has evidence.
 - Muse Image: POST /images/edits with model muse-image-1.0, images array
   (base first, reference second in compose), n 1, size "WxH", response_format
-  b64_json, output_format webp, reasoning_strength, and all tool_enablement
-  flags false (compose always false). Never send mask, transparent
+  b64_json, output_format webp, reasoning_strength, and tool_enablement
+  (image search, web search, shell) false by default. Only the optional
+  named-product text mode may set the two search flags true in editImage;
+  composeImage always forces them false. Never send mask, transparent
   background, previous_response_id, or stream.
 - Spark: model MUSE_MODEL, stream false, store false, max_output_tokens 4096,
   instructions from the prompt file, one message whose first input_text is the
@@ -69,6 +75,9 @@ ticket, the task, the files you own, and in later rounds reviewer findings.
   including byte splits, reasoning items before the message, refusals,
   incomplete status, and unsupported citation URLs.
 
+- Run Python as `.venv/bin/python spike/...`; a fresh shell has no active
+  venv, and bare `python` is a different interpreter.
+
 ## Answering review
 
 Fix each finding or dispute it with evidence (SPEC line, docs link, test
@@ -84,6 +93,7 @@ Return exactly these fields; workflows parse them by name.
   output lines. Never report a check you did not run.
 - responses: per finding, findingId, action fixed or disputed, evidence.
 - needsLead: kind (dependency, paid_call, owner_input, spec_conflict,
-  outside_files) and detail.
+  outside_files) and detail. Only items that block this
+  unit; follow-ups go in notes.
 - notes: API facts or deviations the lead should record in
   docs/api-evidence.md, sanitized, with no bodies or keys.

@@ -11,15 +11,22 @@ export const meta = {
 
 // Path rules: which builder fixes which files. First match wins.
 const BUILDERS = [
-  { builder: 'models-builder', re: /^(src\/lib\/server\/meta\.ts|prompts\/|src\/lib\/mocks\/|src\/app\/api\/(segment|identify|instruction|edit|check|search-parts|transcribe)\/|spike\/(responses_sam|responses_spark|images_edits|asr_transcribe|files|run_all)\.py)/ },
-  { builder: 'imaging-builder', re: /^(src\/lib\/server\/images\.ts|src\/lib\/coordinates\.ts|src\/app\/api\/(normalize|composite)\/|spike\/(imaging|local_images)\.py|tests\/(images|coordinates|masks|composite))/ },
+  { builder: 'models-builder', re: /^(src\/lib\/server\/meta\.ts|prompts\/|src\/lib\/mocks\/|src\/app\/api\/(segment|identify|instruction|edit|check|search-parts|transcribe)\/|spike\/(responses_sam|responses_spark|images_edits|asr_transcribe|files|run_all)\.py|tests\/(meta|sam|spark|sse))/ },
+  { builder: 'imaging-builder', re: /^(src\/lib\/server\/images\.ts|src\/lib\/coordinates\.ts|src\/app\/api\/(normalize|composite)\/|spike\/(imaging|local_images)\.py|src\/lib\/browser\/|src\/lib\/imageFormat\.ts|tests\/(images|coordinates|masks|composite))/ },
   { builder: 'shop-builder', re: /^(src\/lib\/(db|project|cache|quote|pdf)\.ts|src\/lib\/server\/fit[^/]*\.ts|tests\/(project|cache|quote|fit-policy))/ },
-  { builder: 'platform-builder', re: /^(budget\/|src\/lib\/server\/(budget|config|fetch-product)\.ts|src\/app\/api\/(budget|health|product-image)\/|spike\/(ledger|common|deployment)\.py|next\.config\.ts|tests\/(budget|fetch-product))/ },
+  { builder: 'platform-builder', re: /^(budget\/|src\/lib\/server\/(budget|config|fetch-product|http)\.ts|src\/app\/api\/(budget|health|product-image)\/|spike\/(ledger|common|deployment)\.py|next\.config\.ts|tests\/(budget|config|fetch-product))/ },
   { builder: 'ui-builder', re: /^(src\/components\/|src\/styles\/|src\/app\/(layout|page)\.tsx|src\/app\/globals\.css)/ },
 ]
 const builderFor = (file) => (BUILDERS.find((b) => b.re.test(file)) || { builder: 'general-builder' }).builder
 
-const input = typeof args === 'object' && args ? args : {}
+// Args arrive as an object, a JSON string, or one plain check command like "npm test".
+function parseArgs(raw) {
+  if (typeof raw !== 'string') return raw || {}
+  const text = raw.trim()
+  if (text.startsWith('{')) return JSON.parse(text)
+  return text ? { checks: [text] } : {}
+}
+const input = parseArgs(args)
 const checks = input.checks || ['npm run typecheck', 'npm run lint', 'npm test', 'npm run build']
 const maxRounds = Math.min(Math.max(input.maxRounds || 3, 1), 4)
 
@@ -59,6 +66,8 @@ for (let round = 1; round <= maxRounds; round++) {
   ].join('\n\n'), { label: `check r${round}`, phase: 'Check', agentType: 'general-builder', effort: 'low', schema: CHECK_RESULT })
   if (!last) break
   if (!last.failures.length && last.checks.every((c) => c.result === 'pass')) { status = 'green'; break }
+  // A failing or skipped check without a located failure gives the fixers nothing to work on.
+  if (!last.failures.length) { status = 'unlocated_failure'; break }
   if (last.failures.length >= previous) stalled += 1
   else stalled = 0
   if (stalled >= 2) { status = 'no_progress'; break }
@@ -93,5 +102,8 @@ const review = changed.length
     'Look for weakened or skipped tests, loosened assertions, silenced type or lint errors, and behavior that now differs from SPEC.md. Read the diff yourself. Do not edit files.',
   ].join('\n\n'), { label: 'review fixes', phase: 'Review fixes', agentType: 'general-reviewer', schema: REVIEW })
   : null
+
+// Green checks with a rejected fix review still need the lead's eyes.
+if (status === 'green' && review && review.verdict !== 'approve') status = 'green_fix_review_failed'
 
 return { status, checks: last ? last.checks : [], failures: last ? last.failures : [], fixes, review }

@@ -7,6 +7,10 @@ permissionMode: acceptEdits
 color: cyan
 ---
 
+You are a subagent. Follow "Subagent rules" in the project CLAUDE.md. The
+parent CLAUDE.md lines about being lead developer, committing, and calling
+PAL or Gemini apply to the lead session, not to you.
+
 You build one unit of a DreamBike ticket for the lead session. The lead gives
 you the ticket, the task, the files you own, and in later rounds the reviewer
 findings you must answer.
@@ -38,6 +42,9 @@ findings you must answer.
 - Docs: describe only what is built and checked. No invented URL, result,
   photo credit, or feature.
 
+- Run Python as `.venv/bin/python spike/...`; a fresh shell has no active
+  venv, and bare `python` is a different interpreter.
+
 ## Answering review
 
 - For each finding, fix it or dispute it with evidence (SPEC/TASKS line, test
@@ -55,5 +62,6 @@ Return exactly these fields; workflows parse them by name.
 - responses: one entry per finding you were given, with findingId, action
   fixed or disputed, and evidence.
 - needsLead: anything only the lead can do, as kind (dependency, paid_call,
-  owner_input, spec_conflict, outside_files) and detail.
+  owner_input, spec_conflict, outside_files) and detail. Only items that block this
+  unit; follow-ups go in notes.
 - notes: facts the lead should record in TASKS.md or docs/api-evidence.md.
