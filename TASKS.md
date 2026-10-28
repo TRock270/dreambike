@@ -673,7 +673,7 @@ For each completed ticket append actual date/time ET, files changed, checks and 
   - Spark identify: BMW R nineT, 1170 cc boxer, 2014–2023, ABS unknown. Text and paint instructions parsed cleanly.
   - Paint edit (tank matte olive): 1792×1344 WebP in 11.9 s; the roundel and side panels are kept.
 - For the T3 session (not changed here): VERIFIED_SAM_PLACEMENT stays null until the owner checks the overlays. If set, the adapter must also handle masks downscaled to a 1024 px long edge, and a point click can return the whole bike, so the concept lane is the safer default for wheels.
-- Owner checks open: spike/out/sam/plain-wall-right/overlay-wheel.png and overlay-points.png (U01); fixtures/plain-wall-right.jpg against spike/out/edits/image_edit-high.webp (U04).
+- Done 2026-10-28, owner checks: overlays "the detected parts are fine" (U01); paint edit "fine" (U04). The point click returning the whole bike stays a T3 item; VERIFIED_SAM_PLACEMENT is decided in T3.
 
 ### T7 spike — 2026-10-28, 09:37 ET paid compose run (about 0.1 h)
 
@@ -682,4 +682,5 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Cost: $0.010 reserved and settled. Lifetime $0.042121.
 - Result (private, spike/out/edits/image_compose-high.webp): front wheel replaced by a gold multi-spoke wheel with chrome hub at matching size and position; rear wheel unchanged, because the spike sends only the front reference; rest of the scene looks unchanged.
 - Note for the T7 build: the front brake discs are mostly hidden or gone behind the new spokes. A wheel swap must keep the brakes, so the T7 prompt should say so, and the build sheet should flag brake-disc fit as "verify". Rear-wheel swaps need a second reference or a second run.
-- Owner check open: fixtures/plain-wall-right.jpg against spike/out/edits/image_compose-high.webp.
+- Done 2026-10-28, owner check: front wheel "great"; the rear wheel didn't change, as expected with one front reference. Swapping both wheels in one result is T7 work (both references in one request, or two steps).
+- Fixture tank patch, owner request 2026-10-28: the solid fill over the photographer's reflection on the tank in plain-wall-right.jpg looked like a dark square. The owner rejected a first blurred version ("too much") and chose a subtle one: only the old square [2345,1180,2465,1320) is refilled with tank paint from its edge pixels (the hidden reflection can't come back). It was inserted losslessly with `jpegtran -drop` into the 16 px blocks around it; outside those blocks the JPEG data is unchanged (decoded max difference 2 from chroma upsampling at block edges). Waiting in the scratchpad for the owner to check it and move it into fixtures/.
