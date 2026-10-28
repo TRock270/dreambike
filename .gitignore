@@ -36,3 +36,6 @@ RULES.md
 
 # Owner photo drop folder (private originals, never committed)
 my_bike/
+
+# Personal Claude Code overrides (project .claude/settings.json is shared)
+.claude/settings.local.json
