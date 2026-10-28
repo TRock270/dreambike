@@ -258,6 +258,10 @@ type StoredMask = { id: string; imageHash: string; width: number; height: number
 type Part = { id: string; slot: SlotId; label: string;
   box: [number, number, number, number]; maskId: string; area: number;
   source: "concept" | "point"; confidence: number | null; stale: boolean };
+// Implementation note (owner request, 2026-10-28): source also allows "box", a part the
+// mechanic marked by dragging a rectangle (the rectangle is the mask, no SAM call), and Part
+// has an optional absent: boolean for a box that marks where a missing part should be added.
+// Records without these fields still validate.
 type BikeRevision = { id: string; bike: BikeData; confirmed: boolean;
   revision: number; confirmedAt: number | null };
 type Version = { id: string; projectId: string; parentId: string | null;
@@ -315,6 +319,9 @@ const IdentifyResponse = z.object({ bike: Bike }).strict();
 const InstructionPayload = z.object({ slot: Slot, box: Box, bike: Bike,
   mode: z.enum(["text", "paint", "reference"]),
   text: z.string().min(1).max(2000), width: Dimension, height: Dimension }).strict();
+// Implementation note (2026-10-28): InstructionPayload also has absent: z.boolean().default(false).
+// absent=true means the part is not on the bike yet and box marks where to add it. Only text
+// mode allows it (paint and reference are refused), and the server forces intent "geometry".
 const InstructionResponse = z.object({ instruction: Instruction }).strict();
 const EditPayload = z.object({ slot: Slot, prompt: z.string().min(1).max(4000),
   mode: z.enum(["text", "paint", "reference"]),
@@ -554,7 +561,7 @@ const LabelPartModelOutput = z.object({ label: Short, slot: Slot,
 | File | Inputs | Required behavior and expected output |
 | --- | --- | --- |
 | identify.v1.md | Normalized photo, width, height | IdentifyModelOutput; suggest family/engine/year/ABS/facing; unknown/null when hidden; no VIN or exact-year claim from insufficient evidence |
-| instruction.v1.md | Slot, normalized box/size, Bike, mode, text, optional owned reference | InstructionModelOutput; English instruction names part and screen position, preserves rest, extracts spec, title, and geometry intent |
+| instruction.v1.md (v2 from 2026-10-28: adds the trusted absent field and an "add the part at box" rule; the header block is stripped before sending; v2 has no live evidence yet) | Slot, normalized box/size, Bike, mode, text, optional owned reference | InstructionModelOutput; English instruction names part and screen position, preserves rest, extracts spec, title, and geometry intent |
 | compose.v3.md | Slot, intent, description, base as image 1, owned reference as image 2 | App RenderDescriptor; reference replaces only target, preserve perspective/light/scale; for wheels keep brake discs, calipers, fender, fork or swingarm and final drive of image 1 (v2 and v3, 2026-10-28: v1 lost the brakes in 3 of 3 live renders, v2 the swingarm); Muse output is one opaque image |
 | edit.v1.md (added T5, 2026-10-28) | One slot, approved text-mode edit prompt, base image | App RenderDescriptor for intent replace/geometry; change only the described part, keep angle/scale/lighting and everything else; the server picks edit.v1 or paint.v1 from the request mode, never from client intent |
 | paint.v1.md | One slot, color/finish request, base image | App RenderDescriptor; change finish only, retain geometry and all other parts; Muse output is one image |

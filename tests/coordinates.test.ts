@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { displayedRect, hitTest, screenToImage, type BinaryMask, type HitPart } from "@/lib/coordinates";
+import { dragToImageBox, displayedRect, hitTest, screenToImage, type BinaryMask, type HitPart } from "@/lib/coordinates";
 
 const image = { width: 2000, height: 1500 };
 
@@ -63,5 +63,30 @@ describe("hitTest image identity", () => {
     const part = { id: "old", slot: "tank" as const, mask: { width: 20, height: 10, pixels }, area: 200, stale: false, imageHash: "photo-a" };
     expect(hitTest([part], { x: 3, y: 3 }, { width: 20, height: 10, hash: "photo-b" })).toBeNull();
     expect(hitTest([part], { x: 3, y: 3 }, { width: 20, height: 10, hash: "photo-a" })?.id).toBe("old");
+  });
+});
+
+describe("dragToImageBox", () => {
+  const img = { width: 1000, height: 500 };
+  const tall = { left: 0, top: 0, width: 1000, height: 1000 };  // shown 1000x500 at top 250, scale 1 (bars above and below)
+  const wide = { left: 0, top: 0, width: 1000, height: 250 };   // shown 500x250 at left 250, scale 2 (bars left and right)
+  it("maps a drag through a vertical letterbox to a half-open box", () => {
+    expect(dragToImageBox({ x: 100, y: 300 }, { x: 300, y: 400 }, tall, img)).toEqual([100, 50, 301, 151]);
+  });
+  it("maps a drag through a horizontal letterbox, corners in any order", () => {
+    expect(dragToImageBox({ x: 350, y: 50 }, { x: 450, y: 150 }, wide, img)).toEqual([200, 100, 401, 301]);
+    expect(dragToImageBox({ x: 450, y: 150 }, { x: 350, y: 50 }, wide, img)).toEqual([200, 100, 401, 301]);
+  });
+  it("clamps an end point in the letterbox or outside the element to the photo edge", () => {
+    expect(dragToImageBox({ x: 500, y: 500 }, { x: 5000, y: 5000 }, tall, img)).toEqual([500, 250, 1000, 500]);
+    expect(dragToImageBox({ x: 500, y: 500 }, { x: -50, y: 0 }, tall, img)).toEqual([0, 0, 501, 251]);
+
+    expect(dragToImageBox({ x: 400, y: 125 }, { x: 0, y: 625 }, wide, img)).toEqual([0, 250, 301, 500]);
+  });
+  it("returns null when a side is under 8 image px, at two container sizes", () => {
+    expect(dragToImageBox({ x: 100, y: 300 }, { x: 106, y: 400 }, tall, img)).toBeNull();   // 7 px wide
+    expect(dragToImageBox({ x: 100, y: 300 }, { x: 107, y: 400 }, tall, img)).toEqual([100, 50, 108, 151]);
+    expect(dragToImageBox({ x: 350, y: 50 }, { x: 353, y: 150 }, wide, img)).toBeNull();    // 2 px * 2 = 4 + 1 wide
+    expect(dragToImageBox({ x: 350, y: 50 }, { x: 357, y: 150 }, wide, img)).toEqual([200, 100, 215, 301]);
   });
 });

@@ -32,6 +32,8 @@ export type InstructionRequest = {
   slot: SlotId; box: [number, number, number, number]; bike: BikeData; mode: "text" | "paint" | "reference";
   /** In reference mode this is the mechanic's description of what the reference photo shows. */
   text: string; width: number; height: number;
+  /** True when the part is not on the bike yet; only valid in text mode. */
+  absent?: boolean;
 };
 
 /**

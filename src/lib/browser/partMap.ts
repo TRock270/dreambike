@@ -48,7 +48,7 @@ export function emptyPartMap(imageHash = ""): PartMapState {
   };
 }
 
-function makePart(id: string, slot: SlotId, label: string, mask: BinaryMask, source: "concept" | "point",
+function makePart(id: string, slot: SlotId, label: string, mask: BinaryMask, source: "concept" | "point" | "box",
   confidence: number | null, imageHash: string): MapPart | null {
   const box = maskBox(mask);
   if (!box) return null;
@@ -149,8 +149,10 @@ export function derive(state: PartMapState): DerivedMap {
   }
   // Fresh parts must belong to this photo. Stale parts keep their old hash and stay as they are
   // (visible, never selectable); a slot that has a fresh part drops its stale one.
+  // Box parts are never clipped: the rectangle itself is the part (a box for a part the bike lacks
+  // may lie outside the outline and would clip to nothing).
   const fresh = state.pointParts.filter((p) => !p.stale && p.imageHash === state.imageHash)
-    .map((p) => (bike ? clipPointPart(p, bike.mask) : p)).filter((p): p is MapPart => p !== null);
+    .map((p) => (bike && p.source !== "box" ? clipPointPart(p, bike.mask) : p)).filter((p): p is MapPart => p !== null);
   parts.push(...fresh);
   const freshSlots = new Set(parts.map((p) => p.slot));
   parts.push(...state.pointParts.filter((p) => p.stale && (p.slot === "custom" || !freshSlots.has(p.slot))));
@@ -161,6 +163,36 @@ export function derive(state: PartMapState): DerivedMap {
 function clipPointPart(part: MapPart, bike: BinaryMask): MapPart | null {
   const made = makePart(part.id, part.slot, part.label, clipToBike(part.mask, bike), part.source, part.confidence, part.imageHash);
   return made && { ...made, stale: part.stale };
+}
+
+/**
+ * A part from a dragged box: a full-image rectangle mask. The id includes the box, so a redrawn
+ * box is a new part (a prepared instruction for the old box must not carry over) and a restored id
+ * can never collide with a new one. Null when the box is empty or does not fit the image.
+ */
+export function boxPart(slot: SlotId, label: string, box: [number, number, number, number], imageHash: string,
+  width: number, height: number, absent: boolean): MapPart | null {
+  const [l, t, r, b] = box.map(Math.round) as [number, number, number, number];
+  if (l < 0 || t < 0 || r > width || b > height || r <= l || b <= t) return null;
+  const pixels = new Uint8Array(width * height);
+  for (let y = t; y < b; y++) pixels.fill(1, y * width + l, y * width + r);
+  const part = makePart(`box:${slot}:${imageHash.slice(0, 12)}:${l},${t},${r},${b}`, slot, label,
+    { width, height, pixels }, "box", null, imageHash);
+  return part && { ...part, absent };
+}
+
+/**
+ * The 60% rule for a box that marks a part the bike has: the box inside the outline may not cover
+ * more than 60% of the bike. Absent boxes and photos without an outline always pass.
+ */
+export function boxAcceptable(part: MapPart, bike: BinaryMask | null): boolean {
+  if (part.absent || !bike) return true;
+  return acceptableAsPart(clipToBike(part.mask, bike), bike);
+}
+
+/** Add a point or box part: the same non-custom slot replaces; custom parts are kept side by side. */
+export function withPointPart(pointParts: MapPart[], part: MapPart): MapPart[] {
+  return [...pointParts.filter((p) => p.slot === "custom" || p.slot !== part.slot), part];
 }
 
 type Update = (fn: (s: PartMapState) => PartMapState) => void;
@@ -320,7 +352,8 @@ export function restoredPartMap(photo: { hash: string; width: number; height: nu
     const binary = storedMaskToBinary(mask, part.stale ? undefined : imageHash);
     if (!fits(binary)) throw new Error(`Mask ${mask.id} does not match the photo size.`);
     return { id: part.id, slot: part.slot, label: part.label, mask: binary, area: part.area, box: part.box, source: part.source,
-      confidence: part.confidence, stale: part.stale, imageHash: part.stale ? mask.imageHash : imageHash };
+      confidence: part.confidence, stale: part.stale, imageHash: part.stale ? mask.imageHash : imageHash,
+      ...(part.absent !== undefined ? { absent: part.absent } : {}) };
   });
   const bikeBox = bike ? maskBox(bike) : null;
   const candidate: SegmentedObject | null = bike && bikeBox ? { mask: bike, box: bikeBox, confidence: null } : null;
@@ -349,7 +382,7 @@ export function partsToPersisted(view: DerivedMap, imageHash: string, newId: () 
       maskId = stored.id;
     }
     return { id: p.id, slot: p.slot, label: p.label, box: p.box, maskId, area: p.area, source: p.source,
-      confidence: p.confidence, stale: p.stale };
+      confidence: p.confidence, stale: p.stale, ...(p.absent !== undefined ? { absent: p.absent } : {}) };
   });
   return { bikeMask, parts, masks };
 }

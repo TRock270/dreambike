@@ -79,7 +79,9 @@ export type SegmentedObject = { mask: BinaryMask; box: [number, number, number, 
 /** A selectable part on one photo (PLAN 9.3). Concept parts have stable IDs "phrase:slot". */
 export type MapPart = {
   id: string; slot: SlotId; label: string; mask: BinaryMask; area: number;
-  box: [number, number, number, number]; source: "concept" | "point"; confidence: number | null;
+  box: [number, number, number, number]; source: "concept" | "point" | "box"; confidence: number | null;
   stale: boolean; imageHash: string;
+  /** Box parts only: the part is not on the bike yet (for example a sissy bar), so the box marks where it goes. */
+  absent?: boolean;
 };
 export type PhraseStatus = "pending" | "found" | "none" | "needs_point" | "needs_facing" | "error" | "stale";

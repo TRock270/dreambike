@@ -160,12 +160,23 @@ export function promptText(file: string): string {
   return readFileSync(path.join(process.cwd(), "prompts", file), "utf8");
 }
 
-export function sparkBody(model: string, promptFile: string, format: SparkFormat, task: unknown, imageUrl: string | null) {
+/** A prompt file without its header paragraph (same rule as renderTemplate). */
+export function promptBody(file: string): string {
+  const text = promptText(file);
+  const end = text.indexOf("\n\n");
+  // A prompt file without its header block is a packaging error; never send a cut-off prompt.
+  if (end < 0) throw new Error(`${file} has no header block`);
+  return text.slice(end + 2);
+}
+
+/** stripHeader is off by default so the identify.v1 request stays byte-identical to its live evidence. */
+export function sparkBody(model: string, promptFile: string, format: SparkFormat, task: unknown, imageUrl: string | null,
+  stripHeader = false) {
   const content: unknown[] = [{ type: "input_text", text: JSON.stringify(task) }];
   if (imageUrl) content.push({ type: "input_image", image_url: imageUrl });
   return {
     model, stream: false, store: false, max_output_tokens: 4096,
-    instructions: promptText(promptFile),
+    instructions: stripHeader ? promptBody(promptFile) : promptText(promptFile),
     input: [{ type: "message", role: "user", content }],
     text: { format: { type: "json_schema", name: format, strict: true, schema: modelJsonSchema(format) } },
   };

@@ -1,9 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+// Node has no OffscreenCanvas: replace only the two canvas helpers; requestComposite stays real.
+vi.mock("@/lib/browser/renderClient", async (original) => ({
+  ...(await original<typeof import("@/lib/browser/renderClient")>()),
+  resizeTo: async (b: Blob) => b,
+  maskToPngBlob: async () => new Blob(["mask"]),
+}));
 import { requestEdit } from "@/lib/browser/renderClient";
 import { requestInstruction, type InstructionRequest } from "@/lib/browser/sparkClient";
 import { unknownBike } from "@/lib/bikeForm";
 import { derive, emptyPartMap, partMapAfterEdit, refreshedPart } from "@/lib/browser/partMap";
-import { FALLBACK_TEXT, willSkipBlend } from "@/lib/browser/renderFlow";
+import { FALLBACK_TEXT, blend, willSkipBlend } from "@/lib/browser/renderFlow";
+import { compositeRgb } from "@/lib/server/images";
+import { boxPart } from "@/lib/browser/partMap";
 import { boxIoU, chooseCandidate, interiorPoint } from "@/lib/parts";
 
 describe("matching the edited part again (SPEC 7)", () => {
@@ -104,5 +113,41 @@ describe("reference part in the request forms", () => {
   it("reference mode without a reference never reaches the network", async () => {
     expect(await sentForm(() => edit("reference", null))).toBeNull();
     expect(await sentForm(() => instr("reference", null))).toBeNull();
+  });
+});
+
+describe("blend for a box part", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it("makes no segment request: only the composite call goes out, with the rectangle as both old and new mask", async () => {
+    const urls: string[] = [];
+    let form: FormData | null = null;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => {
+      urls.push(url);
+      form = init.body as FormData;
+      return new Response("{}", { status: 500 });
+    }));
+    const base = { blob: new Blob(["b"]), width: 2048, height: 1536, hash: "h" };
+    const generated = { blob: new Blob(["g"]), width: 2048, height: 1536, hash: "g", generatedWidth: 2048, generatedHeight: 1536, warnings: [] };
+    const part = boxPart("custom", "Sissy bar", [100, 100, 200, 200], "h", 2048, 1536, true)!;
+    await blend(base, generated, part, [0, 0, 2048, 1536], "paint", () => undefined).catch(() => undefined);
+    expect(urls).toEqual(["/api/composite"]);
+    expect(form!.has("oldMask")).toBe(true);
+    expect(form!.has("newMask")).toBe(true);
+  });
+});
+
+describe("composite with a box part", () => {
+  it("equal old and new rectangle masks compose instead of reporting missing_mask", () => {
+    const w = 64, h = 64;
+    const base = { width: w, height: h, data: new Uint8Array(w * h * 3).fill(100) };
+    const edited = { width: w, height: h, data: new Uint8Array(w * h * 3).fill(100) };
+    const data = new Uint8Array(w * h);
+    for (let y = 20; y < 30; y++) for (let x = 20; x < 30; x++) { data[y * w + x] = 1; edited.data.fill(200, (y * w + x) * 3, (y * w + x) * 3 + 3); }
+    const mask = { width: w, height: h, pixels: data };
+    const out = compositeRgb(base, edited, mask, mask, 40, "paint", { width: 1024, height: 1024 }, true);
+    // generated 1024 square vs base 64 square: same aspect, edge >= 1024
+    expect(out.reason).toBe("composited");
+    expect(out.composed).toBe(true);
+    expect(compositeRgb(base, edited, mask, null, 40, "paint", { width: 1024, height: 1024 }).reason).toBe("missing_mask");
   });
 });

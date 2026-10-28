@@ -3,7 +3,7 @@
 // The model proposes; editPolicy enforces intent and paint-only slots.
 import { createHash } from "node:crypto";
 import { ImageFile, InstructionModelOutput, InstructionPayload, InstructionResponse } from "@/lib/contracts";
-import { modeAllowed, enforceIntent, withBikeWarnings } from "@/lib/editPolicy";
+import { absentAllowed, modeAllowed, enforceIntent, withBikeWarnings } from "@/lib/editPolicy";
 import { AppError } from "@/lib/errors";
 import { MOCK_LABEL } from "@/lib/mocks";
 import { loadConfig } from "@/lib/server/config";
@@ -36,6 +36,9 @@ export async function POST(req: Request): Promise<Response> {
     const p = parsed.data;
     // Reference mode needs exactly one reference; other modes must not send one (SPEC 5).
     if ((p.mode === "reference") !== Boolean(files.reference)) throw new AppError("INVALID_REQUEST");
+    if (p.absent && !absentAllowed(p.mode)) {
+      throw new AppError("INVALID_REQUEST", "A part that is not on the bike yet is described in text.");
+    }
     if (!modeAllowed(p.slot, p.mode)) {
       throw new AppError("INVALID_REQUEST", `${slotInfo(p.slot).label}: paint changes only.`);
     }
@@ -53,7 +56,11 @@ export async function POST(req: Request): Promise<Response> {
 
     let instruction: InstructionData;
     if (config.mode === "mock") {
-      instruction = {
+      instruction = p.absent ? {
+        title: `Mock: add ${slotInfo(p.slot).label.toLowerCase()}`,
+        editPrompt: `Mock instruction to add the ${slotInfo(p.slot).label.toLowerCase()}: ${p.text}. Keep everything else in the photo unchanged.`,
+        spec: [], intent: "geometry", warnings: [MOCK_LABEL],
+      } : {
         title: `Mock: ${slotInfo(p.slot).label.toLowerCase()} ${p.mode === "paint" ? "paint" : "change"}`,
         editPrompt: `Mock instruction for the ${slotInfo(p.slot).label.toLowerCase()}: ${p.text}. Keep everything else in the photo unchanged.`,
         spec: [], intent: p.mode === "paint" ? "paint" : "replace",
@@ -66,8 +73,8 @@ export async function POST(req: Request): Promise<Response> {
       if (!sparkPrices) throw new AppError("LIVE_DISABLED", "Pricing for this model is not verified.");
       // The model's own limitation notes are not sent: the server adds bike limitations itself,
       // and that free text could carry instructions copied from a photo.
-      const body = sparkBody(config.museModel, "instruction.v1.md", "edit_instruction_v1",
-        { ...p, bike: { ...p.bike, limitations: [] } }, reference?.dataUrl ?? null);
+      const body = sparkBody(config.museModel, "instruction.v2.md", "edit_instruction_v1",
+        { ...p, bike: { ...p.bike, limitations: [] } }, reference?.dataUrl ?? null, true);
       const raw = await withReservation({
         route: "/api/instruction", model: config.museModel, amountMicroUsd: prices.reservations["spark-ungrounded"]!,
         requestId, deadlineMs: Math.max(1_000, DEADLINE_MS - (Date.now() - startedAt)),
@@ -81,7 +88,7 @@ export async function POST(req: Request): Promise<Response> {
       if (!model.success) throw new AppError("SCHEMA_INVALID");
       instruction = model.data.instruction;
     }
-    instruction = withBikeWarnings(enforceIntent(p.slot, p.mode, p.text, instruction), p.bike);
+    instruction = withBikeWarnings(enforceIntent(p.slot, p.mode, p.text, instruction, p.absent), p.bike);
     return jsonResponse(InstructionResponse.parse({ instruction }));
   } catch (error) {
     return errorResponse(error, requestId);

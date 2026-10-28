@@ -48,13 +48,14 @@ export async function blend(base: PhotoRef, generated: Generated, part: MapPart,
   // The browser makes the base-sized raster; SAM and the blend both use exactly this one.
   const edited = await resizeTo(generated.blob, base.width, base.height);
   if (!edited) return { result: fullEdit(generated, "missing_mask"), newMask: null };
-  onStage("segmenting");
+  if (part.source !== "box") onStage("segmenting");
   let newMask: BinaryMask | null = null;
   try {
     const phrase = slotInfo(part.slot).phrase;
     const point = interiorPoint(part.mask, part.box);
     const raster = { blob: edited, width: base.width, height: base.height };
-    const seg = phrase && part.source === "concept"
+    // A box part is a rectangle the owner drew: nothing to look up, so no segment request.
+    const seg = part.source === "box" ? null : phrase && part.source === "concept"
       ? await requestSegment(raster, { mode: "concept", phrase }, signal)
       : point ? await requestSegment(raster, { mode: "points", points: [{ ...point, label: "positive" }] }, signal) : null;
     if (seg) {
@@ -68,8 +69,10 @@ export async function blend(base: PhotoRef, generated: Generated, part: MapPart,
     if (!soft) throw error;
   }
   onStage("compositing");
+  // The server needs both masks. A box part is where the part is now and will be, so the rectangle is both.
+  const compositeNew = part.source === "box" ? part.mask : newMask;
   const r = await requestComposite(base, edited, meta, await maskToPngBlob(part.mask),
-    newMask ? await maskToPngBlob(newMask) : null, signal);
+    compositeNew ? await maskToPngBlob(compositeNew) : null, signal);
   return { result: r.composed ? r : fullEdit(generated, r.reason, r.drift), newMask };
 }
 

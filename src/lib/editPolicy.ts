@@ -19,11 +19,18 @@ const FORK_WHEEL_REPLACEMENT = /\b(replace|swap|inch(es)?|zoll|billet|wider|narr
 const FORK_WHEEL_WEAK = /\b(new|spokes?|mags?|cast)(?=\W|$)/i;
 const FINISH_WORDS = /\b(paint|painted|black|chrome|powder|coat(ed)?|colou?r|gloss|matte|satin|polish(ed)?|anodi[sz]ed)(?=\W|$)/i;
 
+/** A part that is not there cannot be painted or taken from a wheel-swap reference. */
+export function absentAllowed(mode: Mode): boolean {
+  return mode === "text";
+}
+
 /**
  * Enforce intent: paint mode is always paint; fork and wheel replacements and
  * handlebar height or shape changes are geometry, whatever the model said.
  */
-export function enforceIntent(slot: SlotId, mode: Mode, requestText: string, instruction: InstructionData): InstructionData {
+export function enforceIntent(slot: SlotId, mode: Mode, requestText: string, instruction: InstructionData, absent = false): InstructionData {
+  // A part that is not on the bike yet is always added as a whole-image geometry edit.
+  if (absent) return instruction.intent === "geometry" ? instruction : { ...instruction, intent: "geometry" };
   if (mode === "paint") return instruction.intent === "paint" ? instruction : { ...instruction, intent: "paint" };
   let intent = instruction.intent;
   if (mode === "reference") {

@@ -2,25 +2,33 @@
 
 import { useState } from "react";
 import type { DerivedMap, PartMapState } from "@/lib/browser/partMap";
-import { SLOTS, slotColorVar } from "@/lib/slots";
+import { SLOTS, slotColorVar, slotInfo } from "@/lib/slots";
 import type { MapPart, PhraseStatus, SlotId } from "@/lib/types";
 
 export type PointTarget = { kind: "bike" } | { kind: "part"; slot: SlotId; label: string };
+
+export type BoxTarget = { slot: SlotId; label: string; absent: boolean };
 
 type Props = {
   map: PartMapState;
   view: DerivedMap;
   selected: MapPart | null;
   pointMode: PointTarget | null;
+  boxMode: BoxTarget | null;
   busy: boolean;
   onSelect: (id: string) => void;
   onStartPoint: (target: PointTarget) => void;
   onCancelPoint: () => void;
+  onStartBox: (target: BoxTarget) => void;
+  onCancelBox: () => void;
+  onToggleAbsent: (absent: boolean) => void;
   onFacing: (facing: "left" | "right") => void;
   onSwapFacing: () => void;
   onRedetect: () => void;
   onNextBike: () => void;
 };
+
+const slotPaintOnly = (slot: SlotId) => slotInfo(slot).paintOnly;
 
 const STATUS_TEXT: Record<PhraseStatus, string> = {
   pending: "Looking…", found: "Found", none: "Not found", needs_point: "Select by point",
@@ -28,12 +36,16 @@ const STATUS_TEXT: Record<PhraseStatus, string> = {
 };
 
 /** Edit-panel list of detected parts, bike choice, front/rear, and point selection. */
-export function PartSelector({ map, view, selected, pointMode, busy, onSelect, onStartPoint, onCancelPoint, onFacing, onSwapFacing, onRedetect, onNextBike }: Props) {
+export function PartSelector({ map, view, selected, pointMode, boxMode, busy, onSelect, onStartPoint, onCancelPoint, onStartBox, onCancelBox, onToggleAbsent, onFacing, onSwapFacing, onRedetect, onNextBike }: Props) {
   const [target, setTarget] = useState<SlotId | "bike">("custom");
   const [customName, setCustomName] = useState("");
+  const [absent, setAbsent] = useState(false);
   const needsFacing = Object.values(view.phrases).includes("needs_facing");
   const label = target === "bike" ? "Motorcycle outline" : target === "custom" ? customName.trim()
     : SLOTS.find((s) => s.id === target)!.label;
+  // Paint-only slots (frame, engine) cannot be added, so the checkbox is hidden for them.
+  const canAdd = target !== "bike" && target !== "custom" ? !SLOTS.find((s) => s.id === target)!.paintOnly : target === "custom";
+  const addChecked = canAdd && absent;
 
   return (
     <div className="flex flex-col gap-4">
@@ -56,9 +68,17 @@ export function PartSelector({ map, view, selected, pointMode, busy, onSelect, o
           <span aria-hidden="true" className="mr-2 inline-block size-3 rounded-full align-middle" style={{ background: slotColorVar(selected.slot) }} />
           Selected: <span className="font-semibold">{selected.label}</span>
           {selected.source === "point" && <span className="ml-1 text-[13px]">(point selection)</span>}
+          {selected.source === "box" && <span className="ml-1 text-[13px]">Marked by box{selected.absent ? ", to add" : ""}</span>}
         </p>
       ) : (
         <p className="text-text-muted text-[13px]">Click a highlighted part on the photo, or pick one below.</p>
+      )}
+
+      {selected?.source === "box" && !slotPaintOnly(selected.slot) && (
+        <label className="flex items-center gap-2 text-[13px]">
+          <input type="checkbox" checked={selected.absent === true} onChange={(e) => onToggleAbsent(e.target.checked)} />
+          Not on the bike yet (add it)
+        </label>
       )}
 
       {needsFacing && (
@@ -112,9 +132,16 @@ export function PartSelector({ map, view, selected, pointMode, busy, onSelect, o
         </ul>
       </details>
 
-      <fieldset className="flex flex-col gap-2 border-t border-hairline pt-3" disabled={busy && !pointMode}>
+      <fieldset className="flex flex-col gap-2 border-t border-hairline pt-3" >
         <legend className="font-medium">Part not found?</legend>
-        {pointMode ? (
+        {boxMode ? (
+          <>
+            <p className="text-[13px]" role="status">
+              {boxMode.absent ? `Drag a box where the ${boxMode.label.toLowerCase()} should go` : `Drag a box around the ${boxMode.label.toLowerCase()} in the photo`}
+            </p>
+            <button type="button" onClick={onCancelBox} className="self-start rounded-full border border-hairline px-4 py-1.5 text-[13px]">Cancel</button>
+          </>
+        ) : pointMode ? (
           <>
             <p className="text-[13px]" role="status">
               Click on the {pointMode.kind === "bike" ? "motorcycle" : pointMode.label.toLowerCase()} in the photo.
@@ -138,12 +165,27 @@ export function PartSelector({ map, view, selected, pointMode, busy, onSelect, o
                   className="rounded-full border border-hairline bg-surface-3 px-3 py-1.5" placeholder="For example: oil cooler" />
               </label>
             )}
-            <button type="button" disabled={!label || busy}
-              onClick={() => onStartPoint(target === "bike" ? { kind: "bike" } : { kind: "part", slot: target, label })}
-              className="self-start rounded-full bg-primary px-4 py-1.5 text-on-fill text-[13px] disabled:opacity-50">
-              Select by point
-            </button>
-            {busy && <p className="text-text-muted text-[12px]">Available when part detection has finished.</p>}
+            {canAdd && (
+              <label className="flex items-center gap-2 text-[13px]">
+                <input type="checkbox" checked={addChecked} onChange={(e) => setAbsent(e.target.checked)} />
+                Not on the bike yet (add it)
+              </label>
+            )}
+            {/* Marking a box needs no detection, so only the part name gates it. */}
+            <div className="flex gap-2">
+              <button type="button" disabled={!label || target === "bike"}
+                onClick={() => { if (target === "bike") return; onStartBox({ slot: target, label, absent: addChecked }); setAbsent(false); }}
+                className="rounded-full bg-primary px-4 py-1.5 text-on-fill text-[13px] disabled:opacity-50">
+                Mark with a box
+              </button>
+              <button type="button" disabled={!label || busy}
+                onClick={() => onStartPoint(target === "bike" ? { kind: "bike" } : { kind: "part", slot: target, label })}
+                className="rounded-full border border-hairline px-4 py-1.5 text-[13px] disabled:opacity-50">
+                Select by point
+              </button>
+            </div>
+            {target === "bike" && <p className="text-text-muted text-[12px]">Boxes cannot mark the motorcycle outline. Use Select by point.</p>}
+            {busy && <p className="text-text-muted text-[12px]">Selecting by point is available when part detection has finished.</p>}
           </>
         )}
       </fieldset>

@@ -812,3 +812,54 @@ For each completed ticket append actual date/time ET, files changed, checks and 
     - the rest are flicker, performance or abort nits with no user-visible failure.
   Gemini was not asked.
 - Open: an owner check in a real browser (the Download file in Finder, and the follow-up with real parts, about $0.07); point clicks (T3).
+
+### Owner requests run 1 — 2026-10-28, about 18:05–18:50 ET (box selection, adding a missing part)
+
+- Owner's live check of the follow-ups: "works all good". New owner requests:
+  - add a part the bike does not have (a sissy bar);
+  - select parts the app did not find, for example the café-racer tail extensions behind the seat. The owner asked for no café-racer logic, only manual selection;
+  - fold the right panel and fit the layout (run 2).
+- Owner decisions:
+  - drag a box with no AI: the rectangle is the part mask, free. Live SAM points return the whole bike;
+  - add: mark the spot by box, tick "Not on the bike yet", describe, Prepare, Render;
+  - the layout and history choices are for run 2.
+- Files:
+  - types.ts, contracts.ts: Part.source "box", optional absent; InstructionPayload absent, default false.
+  - coordinates.ts: dragToImageBox.
+  - partMap.ts: boxPart, boxAcceptable (the 60% rule for present boxes), withPointPart.
+  - renderFlow.ts: no SAM recut for box parts; the rectangle is the old and the new mask, so the server's union, drift and feather path stays.
+  - ImageCanvas.tsx: box mode with a live rectangle.
+  - editPolicy.ts: absentAllowed; enforceIntent forces geometry.
+  - prompts/instruction.v2.md (v1 kept); meta.ts uses v2 with the header stripped.
+  - instruction route: absent only in text mode.
+  - sparkClient.ts.
+  - PartSelector.tsx, Workspace.tsx: "Mark with a box", "Not on the bike yet (add it)", "Marked by box[, to add]", Select by point kept as secondary.
+  - SPEC.md: implementation notes on Part, InstructionPayload and the instruction.v2 row.
+  - Tests: coordinates, partmap, renderflow, spark.
+- Workflow build-ticket T3: U1, U2 and U3 approved; U1 and U3 needed round 2. Verify checks passed.
+  - The done-when gate checks T3's own items, which this work does not add to. Still open, as before:
+    - "a wheel click highlights its real pixels" (live points closed);
+    - "merged wheels use point selection" (blocked: points are off live; the box is the working fallback).
+- Lead fixes after the run:
+  - the add checkbox resets after use;
+  - promptBody throws on a prompt file with no header block instead of cutting the first character;
+  - the box drag uses the pointer-down rect for both corners;
+  - no text selection while dragging;
+  - nothing is placed when box mode ends mid-drag.
+  review-changes quick: green, with 2 minors not changed: Escape mid-drag lets the next click through, and the live preview is not scroll-corrected.
+- Browser check ($0, MOCK=1, headless Chrome, profile deleted after):
+  - The tail section was marked as Rear fender by box (the screenshot shows the rectangle on the tail). It rendered "Blended: everything outside the part is kept" and was accepted.
+  - A sissy bar marked "to add": the prepared change was "Mock: add sissy bar" with "Shape change: shown as a full edit"; the render gave the full image and was accepted.
+  - The fieldset add checkbox is unticked again. History shows Step 1 Rear fender, Step 2 Sissy bar.
+  - Requests: segment 17 (15 import plus 2 bike recuts, none for box parts), instruction 2, edit 2.
+- Checks: typecheck, lint, build pass; npm test 434 passed in 19 files; local_images.py --fixture-set all 71 passed.
+- Consultants: PAL chat nim-nemotron35 (2 calls: the files, then the types it asked for). Its points were checked and rejected:
+  - "empty box mask sent": impossible, because boxes under 8 px and empty masks return null;
+  - "absent frame or engine can't be added": intended, an engine or frame swap is out of scope;
+  - "reference intent downgrade": existing T7 behaviour, not this change;
+  - the rest were message wording and performance nits.
+  Gemini was not asked.
+- Open:
+  - instruction.v2 has no live evidence yet. All live instruction calls now use it, so the owner's paid check covers it (about $0.06, BUDGET_TICKET=T3): mark the tail and paint it, then add a sissy bar.
+  - The absent flag is stored with the part.
+  - Run 2: fitted layout, folding sections, later steps in History.

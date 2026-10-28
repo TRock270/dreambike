@@ -147,8 +147,9 @@ export const StoredMask = z.object({
 
 export const Part = z.object({
   id: Short, slot: Slot, label: Short, box: Box, maskId: Id,
-  area: z.number().int().min(0), source: z.enum(["concept", "point"]),
+  area: z.number().int().min(0), source: z.enum(["concept", "point", "box"]),
   confidence: z.number().min(0).max(1).nullable(), stale: z.boolean(),
+  absent: z.boolean().optional(),
 }).strict();
 
 export const BikeRevision = z.object({
@@ -283,6 +284,8 @@ export const IdentifyResponse = z.object({ bike: BikeChecked }).strict();
 export const InstructionPayload = z.object({
   slot: Slot, box: Box, bike: BikeChecked, mode: EditMode,
   text: z.string().min(1).max(2000), width: Dimension, height: Dimension,
+  /** True when the part is not on the bike yet and the box marks where to add it. */
+  absent: z.boolean().default(false),
 }).strict().refine((p) => boxInside(p.box, p.width, p.height),
   { message: "box must lie inside the image", path: ["box"] });
 export const InstructionResponse = z.object({ instruction: Instruction }).strict();

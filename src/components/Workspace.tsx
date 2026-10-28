@@ -7,7 +7,7 @@ import {
 import { deleteProject, listProjects, type DreamDb } from "@/lib/db";
 import { children, type PendingRef } from "@/lib/project";
 import {
-  buildPartMap, derive, emptyPartMap, followUpPart, otherWheelSlot, partMapAfterEdit, recutBike, refreshedPart, selectByPoint, type PartMapState,
+  buildPartMap, derive, emptyPartMap, followUpPart, otherWheelSlot, partMapAfterEdit, recutBike, refreshedPart, selectByPoint, boxPart, boxAcceptable, withPointPart, type PartMapState,
 } from "@/lib/browser/partMap";
 import { AppError } from "@/lib/errors";
 import { PreflightError } from "@/lib/browser/preflight";
@@ -31,7 +31,7 @@ import { EditReview, type RenderState } from "./EditReview";
 import { ImageCanvas } from "./ImageCanvas";
 import { InstructionPreview } from "./InstructionPreview";
 import { PaintForm } from "./PaintForm";
-import { PartSelector, type PointTarget } from "./PartSelector";
+import { PartSelector, type BoxTarget, type PointTarget } from "./PartSelector";
 import { ReferenceDropzone } from "./ReferenceDropzone";
 import { ProjectList, type ProjectListState } from "./ProjectList";
 import { UploadDropzone } from "./UploadDropzone";
@@ -58,9 +58,12 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
   const [map, setMap] = useState<PartMapState>(() => emptyPartMap());
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [pointMode, setPointMode] = useState<PointTarget | null>(null);
+  // Box mode: the mechanic drags a rectangle on the photo. No network request is involved.
+  const [boxMode, setBoxMode] = useState<BoxTarget | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pointBusy, setPointBusy] = useState(false);
   const pointAbort = useRef<AbortController | null>(null);
+  const boxEndedAt = useRef(0); // time of the last finished box drag
   const view = useMemo(() => derive(map), [map]);
   const [bikeForm, setBikeForm] = useState<BikeFormState>(emptyBikeForm);
   const [identify, setIdentify] = useState<{ status: "pending" | "done" | "error" | "off"; message: string | null }>({ status: "off", message: null });
@@ -254,6 +257,7 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
     setPrefill(null);
     setSelectedId(null);
     setPointMode(null);
+    setBoxMode(null);
     setNotice(null);
     setBranchChoices(null);
     setAccept({ saving: false, error: null });
@@ -439,8 +443,64 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
     }
   }
 
+  function cancelPoint() {
+    pointAbort.current?.abort(); // an in-flight point request must not land on a later selection
+    setPointMode(null);
+  }
+
+  function startBox(target: BoxTarget) {
+    cancelPoint(); // one marking mode at a time
+    setNotice(null);
+    setBoxMode(target);
+  }
+
+  function startPoint(target: PointTarget) {
+    setBoxMode(null);
+    setPointMode(target);
+  }
+
+  /** A finished drag: the rectangle is the part. Nothing is sent anywhere. */
+  function handleBox(box: [number, number, number, number]) {
+    if (!photo || !boxMode) return;
+    if (map.imageHash !== photo.hash) return; // the part map belongs to another photo
+    const part = boxPart(boxMode.slot, boxMode.label, box, photo.hash, photo.width, photo.height, boxMode.absent);
+    if (!part) { setNotice("That box is too small or outside the photo. Drag a larger box."); return; }
+    if (!boxAcceptable(part, view.bike?.mask ?? null)) {
+      setNotice("That box covers too much of the motorcycle. Drag a tighter box around the part.");
+      return;
+    }
+    setNotice(null);
+    partsDirty.current = true;
+    setMap((m) => (m.imageHash !== photo.hash ? m : { ...m, pointParts: withPointPart(m.pointParts, part) }));
+    selectByUser(part.id);
+    boxEndedAt.current = Date.now(); // the click that ends this drag must not reselect (see handleClick)
+    setBoxMode(null);
+  }
+
+  /** The selected box part is, or is not, on the bike yet. A new absent value makes the prepared change stale (prepKey). */
+  function toggleAbsent(absent: boolean) {
+    if (!selected || selected.source !== "box") return;
+    const id = selected.id;
+    // Making a box present again applies the 60% rule that absent boxes skip.
+    if (!absent && !boxAcceptable({ ...selected, absent: false }, view.bike?.mask ?? null)) {
+      setNotice("That box covers too much of the motorcycle, so it cannot be a part that is already on the bike. Mark a tighter box.");
+      return;
+    }
+    partsDirty.current = true;
+    setMap((m) => ({ ...m, pointParts: m.pointParts.map((p) => (p.id === id ? { ...p, absent } : p)) }));
+  }
+
+  // Escape leaves box mode.
+  useEffect(() => {
+    if (!boxMode) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setBoxMode(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [boxMode]);
+
   async function handleClick(point: ImagePoint) {
     if (!photo) return;
+    if (Date.now() - boxEndedAt.current < 400) return; // the click that follows a box drag
     setNotice(null);
     if (!pointMode) {
       const hit = hitTest(view.parts, point, photo);
@@ -459,8 +519,7 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
       setMap((m) => {
         if (m.imageHash !== photo.hash) return m; // the photo changed meanwhile
         if ("bike" in result) return { ...m, bikePoint: result.bike, bikeChoice: "point" };
-        const replaced = m.pointParts.filter((p) => p.slot === "custom" || p.slot !== result.part.slot);
-        return { ...m, pointParts: [...replaced, result.part] };
+        return { ...m, pointParts: withPointPart(m.pointParts, result.part) };
       });
       if ("part" in result) selectByUser(result.part.id);
       setPointMode(null);
@@ -474,16 +533,18 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
   // A stale part (cut on an earlier picture) is shown but can never be the selected part.
   const selected = view.parts.find((p) => p.id === selectedId && !p.stale) ?? null;
   const selectionKey = photo && selected ? `${photo.hash}:${selected.id}` : null;
+  const absent = selected?.absent === true;
   const paintOnly = selected ? !modeAllowed(selected.slot, "text") : false;
   // Paint-only slots (frame, engine) never offer reference mode; a server that said "off" hides it too.
-  const referenceOffered = referenceEnabled && referenceOff === null && !paintOnly;
-  const mode = paintOnly ? "paint" : editMode === "reference" && !referenceOffered ? "text" : editMode;
+  const referenceOffered = referenceEnabled && referenceOff === null && !paintOnly && !absent;
+  // An absent part is added by describing it: paint and reference photos are not offered.
+  const mode = paintOnly ? "paint" : absent ? "text" : editMode === "reference" && !referenceOffered ? "text" : editMode;
   const reference = mode === "reference" && refState && refState.key === selectionKey ? refState.photo : null;
   // The key includes the bike as sent, so editing the bike makes an older preview stale.
   // It also includes the shown version, so a preview never carries over to another head.
   // The reference hash is part of the key too: swapping the reference makes an instruction prepared for the
   // old one stale, so a rear crop can never render with an instruction prepared for the front crop.
-  const prepKey = `${session?.project.headVersionId ?? "unsaved"}:${selectionKey}:${mode}:${reference?.hash ?? "-"}:${JSON.stringify(bikeForm.bike)}`;
+  const prepKey = `${session?.project.headVersionId ?? "unsaved"}:${selectionKey}:${mode}:${absent}:${reference?.hash ?? "-"}:${JSON.stringify(bikeForm.bike)}`;
   const current = prepared && prepared.key === prepKey ? prepared : null;
 
   // Selecting another part drops the reference from memory (the key check above already ignores it).
@@ -652,11 +713,16 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
   async function prepare(text: string) {
     if (!photo || !selected || !selectionKey) return;
     if (mode === "reference" && !reference) return;
+    // A box marked before the outline arrived skipped the 60% rule; check it now.
+    if (selected.source === "box" && selected.absent !== true && !boxAcceptable(selected, view.bike?.mask ?? null)) {
+      setNotice("That box covers too much of the motorcycle. Mark a tighter box around the part.");
+      return;
+    }
     const key = prepKey;
     setPrepared({ key, state: "busy" });
     try {
       const instruction = await requestInstruction({ slot: selected.slot, box: selected.box, bike: bikeForm.bike,
-        mode, text, width: photo.width, height: photo.height }, undefined, mode === "reference" ? reference?.blob ?? null : null);
+        mode, text, width: photo.width, height: photo.height, absent: selected.absent === true }, undefined, mode === "reference" ? reference?.blob ?? null : null);
       setPrepared((p) => (p?.key === key ? { key, state: "done", instruction, requestText: text } : p));
     } catch (error) {
       if (error instanceof PreflightError && error.code === "FEATURE_DISABLED") setReferenceOff(error.message);
@@ -727,7 +793,7 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
         <div className="flex min-w-0 flex-[2] flex-col gap-4">
           <section aria-label="Photo" className="flex flex-1 items-center justify-center rounded-card border border-hairline bg-recess p-4">
             {photo ? (
-              <ImageCanvas photo={photo} parts={view.parts} selectedId={selectedId} onImageClick={handleClick}
+              <ImageCanvas photo={photo} parts={view.parts} selectedId={selectedId} onImageClick={handleClick} boxMode={boxMode !== null} onBox={handleBox}
                 cursor={pointMode ? "crosshair" : "default"} />
             ) : noticeAccepted ? <UploadDropzone onPhoto={(p) => void choosePhoto(p)} />
               : <UploadNotice onAccept={() => setNoticeAccepted(true)} />}
@@ -784,8 +850,9 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
                 </div>
               )}
               {notice && <p role="status" className="rounded-chip bg-neutral-soft px-3 py-2 text-neutral-soft-text text-[13px]">{notice}</p>}
-              <PartSelector map={map} view={view} selected={selected} pointMode={pointMode} busy={!map.done || pointBusy}
-                onSelect={selectByUser} onStartPoint={setPointMode} onCancelPoint={() => setPointMode(null)}
+              <PartSelector map={map} view={view} selected={selected} pointMode={pointMode} boxMode={boxMode} busy={!map.done || pointBusy}
+                onSelect={selectByUser} onStartPoint={startPoint} onCancelPoint={cancelPoint}
+                onStartBox={startBox} onCancelBox={() => setBoxMode(null)} onToggleAbsent={toggleAbsent}
                 onFacing={(facing) => { if (facingChangesParts(map)) partsDirty.current = true; setMap((m) => ({ ...m, facing })); setBikeForm((f) => editField(f, "facing", facing)); }}
                 onRedetect={redetect}
                 onSwapFacing={() => {
@@ -798,7 +865,9 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
               {selected && (
                 <section aria-label="Change the selected part" className="flex flex-col gap-3 border-t border-hairline pt-3">
                   <h3 className="text-[15px] font-semibold">Change: {selected.label}</h3>
-                  {paintOnly ? (
+                  {absent ? (
+                    <p className="text-text-muted text-[12px]">This part is not on the bike yet, so describe it in text. The box marks where it goes.</p>
+                  ) : paintOnly ? (
                     <p className="text-text-muted text-[12px]">{slotInfo(selected.slot).label} allows paint changes only.</p>
                   ) : (
                     <div role="tablist" aria-label="Kind of change" className="flex gap-1">
@@ -810,7 +879,7 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
                       ))}
                     </div>
                   )}
-                  {!paintOnly && !referenceOffered && (
+                  {!paintOnly && !absent && !referenceOffered && (
                     <p className="text-text-muted text-[12px]">
                       {referenceOff ?? "Reference photos are switched off on this server. Describe the part in text instead."}
                     </p>

@@ -1,6 +1,6 @@
 // Pure part-map derivation: facing and bike choices survive late detection results.
 import { describe, expect, it } from "vitest";
-import { binaryToStoredMask, derive, emptyPartMap, followUpPart, otherWheelSlot, partMapAfterEdit, partsForPhrase, partsToPersisted, restoredPartMap, storedMaskToBinary, type PartMapState } from "@/lib/browser/partMap";
+import { binaryToStoredMask, derive, emptyPartMap, followUpPart, otherWheelSlot, partMapAfterEdit, partsForPhrase, partsToPersisted, restoredPartMap, boxPart, boxAcceptable, withPointPart, storedMaskToBinary, type PartMapState } from "@/lib/browser/partMap";
 import { hitTest } from "@/lib/coordinates";
 import { maskArea, maskBox } from "@/lib/parts";
 import { CORE_PHRASES } from "@/lib/slots";
@@ -221,5 +221,79 @@ describe("other-wheel helpers", () => {
     expect(after.parts.some((p) => p.slot === "wheel_rear" && p.stale)).toBe(true);
     expect(followUpPart(after.parts, "wheel_rear", "h2")).toBeNull();
     expect(followUpPart(after.parts, "wheel_rear", "h1")).toBeNull();
+  });
+});
+
+describe("box parts (drawn rectangles)", () => {
+  const bikeMask = rect(10, 10, 90, 45);
+  const base = (pointParts: MapPart[]): PartMapState => ({ ...emptyPartMap("h2"), bikeCandidates: [obj(bikeMask)], bikeChoice: 0,
+    bikeStatus: "found", done: true, requests: Object.fromEntries(CORE_PHRASES.map((p) => [p, "stale"])), pointParts });
+
+  it("builds a full-image rectangle with half-open edges, off-origin, and an id that follows the box", () => {
+    const part = boxPart("custom", "Sissy bar", [20, 5, 30, 15], "h2abcdef012345", W, H, true)!;
+    expect(part.source).toBe("box");
+    expect(part.absent).toBe(true);
+    expect(part.box).toEqual([20, 5, 30, 15]);
+    expect(part.area).toBe(100);
+    expect(part.mask.pixels[5 * W + 20]).toBe(1);
+    expect(part.mask.pixels[5 * W + 30]).toBe(0);   // right edge is exclusive
+    expect(part.mask.pixels[15 * W + 20]).toBe(0);  // bottom edge is exclusive
+    expect(part.id).not.toBe(boxPart("custom", "Sissy bar", [20, 5, 31, 15], "h2abcdef012345", W, H, true)!.id);
+    // clipping to the image: out of range is refused, a box touching the border is fine
+    expect(boxPart("custom", "x", [90, 40, 101, 50], "h2", W, H, false)).toBeNull();
+    expect(boxPart("custom", "x", [90, 40, 100, 50], "h2", W, H, false)!.area).toBe(100);
+    expect(boxPart("custom", "x", [5, 5, 5, 9], "h2", W, H, false)).toBeNull();
+  });
+
+  it("derive does not clip a box to the bike, and it replaces the same slot's detected part", () => {
+    const outside = boxPart("custom", "Sissy bar", [92, 2, 99, 9], "h2", W, H, true)!;
+    expect(derive(base([outside])).parts.map((p) => [p.id, p.area])).toEqual([[outside.id, 49]]);
+    const tank = boxPart("tank", "Tank", [40, 12, 60, 20], "h2", W, H, false)!;
+    const s = withResults(base([tank]), "fuel tank", [obj(rect(30, 12, 70, 20))]);
+    const parts = derive(s).parts.filter((p) => p.slot === "tank");
+    expect(parts.map((p) => p.id)).toEqual([tank.id]);
+    expect(parts[0]!.area).toBe(160);
+  });
+
+  it("withPointPart replaces the same slot and keeps custom boxes side by side", () => {
+    const a = boxPart("custom", "A", [0, 0, 10, 10], "h2", W, H, true)!;
+    const b = boxPart("custom", "B", [20, 0, 30, 10], "h2", W, H, true)!;
+    const t1 = boxPart("tank", "Tank", [40, 12, 50, 22], "h2", W, H, false)!;
+    const t2 = boxPart("tank", "Tank", [50, 12, 60, 22], "h2", W, H, false)!;
+    expect(withPointPart(withPointPart([a], b), t1).map((p) => p.id)).toEqual([a.id, b.id, t1.id]);
+    expect(withPointPart([a, t1], t2).map((p) => p.id)).toEqual([a.id, t2.id]);
+  });
+
+  it("a box from another photo is neither derived as fresh nor selectable", () => {
+    const other = boxPart("custom", "A", [20, 5, 40, 25], "h1", W, H, true)!;
+    const view = derive(base([other]));
+    expect(view.parts.find((p) => p.id === other.id)).toBeUndefined();
+    expect(hitTest([other], { x: 25, y: 10 }, { width: W, height: H, hash: "h2" })).toBeNull();
+    expect(hitTest([{ ...other, imageHash: "h2" }], { x: 25, y: 10 }, { width: W, height: H, hash: "h2" })?.id).toBe(other.id);
+  });
+
+  it("applies the 60% rule to a present box inside the outline, not to an absent one or without outline", () => {
+    const big = boxPart("tank", "Tank", [10, 10, 90, 36], "h2", W, H, false)!;   // 80x26 of 80x35 = 74%
+    const small = boxPart("tank", "Tank", [10, 10, 50, 30], "h2", W, H, false)!; // 40x20 of 2800 = 29%
+    expect(boxAcceptable(big, bikeMask)).toBe(false);
+    expect(boxAcceptable(small, bikeMask)).toBe(true);
+    expect(boxAcceptable({ ...big, absent: true }, bikeMask)).toBe(true);
+    expect(boxAcceptable(big, null)).toBe(true);
+  });
+
+  it("round-trips through persistence with and without absent, and old records without the field still load", () => {
+    const present = boxPart("tank", "Tank", [40, 12, 60, 20], "h2", W, H, false)!;
+    const absent = boxPart("custom", "Sissy bar", [92, 2, 99, 9], "h2", W, H, true)!;
+    const noField: MapPart = { ...present, id: "old", absent: undefined };
+    delete (noField as { absent?: boolean }).absent;
+    const view = derive(base([present, absent, noField]));
+    let n = 0;
+    const out = partsToPersisted(view, "h2", () => `m${n++}`, 1);
+    expect(out.parts.map((p) => p.absent)).toEqual([false, true, undefined]);
+    expect("absent" in out.parts[2]!).toBe(false);
+    const restoredIn = out.parts.map((part) => ({ part, mask: out.masks.find((m) => m.id === part.maskId)! }));
+    const back = derive(restoredPartMap(PHOTO, bikeMask, restoredIn, "unknown")).parts;
+    expect(back.map((p) => [p.id, p.source, p.absent])).toEqual([[present.id, "box", false], [absent.id, "box", true], ["old", "box", undefined]]);
+    expect(back[1]!.mask.pixels).toEqual(absent.mask.pixels);
   });
 });
