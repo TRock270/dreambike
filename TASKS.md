@@ -267,9 +267,9 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Checks: `python spike/local_images.py --fixture-set all`: 40 passed, 0 failed, 0 skipped (before: 35 passed, 5 skipped).
 - Cost: $0.00. No paid calls.
 - Remaining before the live T0 profiles:
-  - Owner reviews the pricing page, then Claude appends PRICING_VERIFIED_AT.
-  - Owner opens fixtures/ in Preview and confirms no people and no readable plates, then identifiersReviewed and noPeople become true.
-  - Owner writes the dated consent record in consent/. It must cover Meta analysis, contributor-mode training and the public demo. Its path goes into expected.json.
+  - Done 2026-10-28: the owner reviewed the pricing page and added PRICING_VERIFIED_AT=2026-10-28T07:47:28-04:00 to `.env.local` themselves. Auto mode blocked Claude's shell append, in line with the new `.env.local` deny rule. `ledger.py status` readiness: pricing_verified true.
+  - Done 2026-10-28: the owner checked fixtures/ in Preview and saw no people and no readable plates. identifiersReviewed and noPeople are now true for all 5 entries.
+  - Open: the consent record. At the owner's request Claude drafted it in the session scratchpad; the deny rule on consent/** keeps Claude out of that folder. The owner moves it to consent/2026-10-28-dreambike-photos.md, edits it, then dates and signs it. consentRecord in expected.json stays null until the owner confirms it is signed.
   - Then the live profiles:
     - SAM concept, including the zero-match lane behaviour the T3 session asked about
     - SAM points with an overlay for U01; report the placement mode to the T3 session for VERIFIED_SAM_PLACEMENT
