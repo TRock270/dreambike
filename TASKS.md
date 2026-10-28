@@ -80,6 +80,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 
 ## T7 — Owned reference photo mode
 
+- Status: DONE 2026-10-28. Offline part in d220d74; live app run 14:06–14:34 ET with the owner's checks (front and rear wheel accepted). See log.
 - Priority: MVP with documented cut fallback. Estimate: 1h, Oct 30. Depends on: T5, T6 and U04 compose profile.
 - Files: src/components/ReferenceDropzone.tsx, prompts/compose.v1.md, src/lib/server/meta.ts, instruction/edit route reference branches.
 - Work: normalize one owned reference, base first/reference second, force image/web search off, share preview/accept/version path. No second build-item write on accept.
@@ -737,3 +738,33 @@ For each completed ticket append actual date/time ET, files changed, checks and 
   - The Reference tab was not checked in a browser.
   - T8/T9: flag brake-disc fit as "verify" on wheel references.
   - The workflow path fix in .claude/workflows/*.js is not in this commit; it needs its own /review-changes.
+
+### T7 live app run — 2026-10-28, about 13:00–14:40 ET (including the U01 follow-up above)
+
+- Owner go-ahead: one front-wheel render, then one rear-wheel render, in the app with reference mode, cap $1. Claude drove the local app in headless Chrome over CDP (scratchpad script, not committed); the owner judged every preview and decided each accept.
+- Preconditions:
+  - Live part detection was blocked by U01. Fixed first; see "T3 U01 follow-up" (commit 4e3427d).
+  - The dev server showed "Demo only": VISITOR_HASH_SECRET is missing or under 32 bytes in .env.local (checked by name only, values never printed). For this run the dev server got a random 64-hex key in the process env only. The owner should add a permanent one to .env.local.
+  - Free rehearsal first: MOCK=1, the whole click path front and rear, $0.
+- Setup: `LIVE_API_ENABLED=true BUDGET_TICKET=T7 TICKET_CAP_USD=1 DAILY_CAP_USD=1 npm run dev`. Fresh Chrome profile, 1440x1000. Base: fixtures/plain-wall-right.nocover.jpg (the owner-approved tank patch). References: fixtures/reference-wheel-front.jpg and reference-wheel-rear.jpg. Owner's description: "Gold multi-spoke wheel with chrome hub, about 20 inch."
+- Flow and results (previews private, in the session scratchpad only):
+  - Import: 1 identify, 15 segment; front and rear wheel found and assigned (front on the right).
+  - Front: the Spark instruction kept the brakes in its text. compose.v1 renders 1–3 replaced the wheel well but dropped the brake discs and calipers (and twice the fender); the owner rejected all three. compose.v2 (commit 40b4182): render 4 kept the disc, caliper and fender; owner accepted (Step 1). Caliper lettering slightly garbled.
+  - After accepting: re-detection on the render found the wheels plus a 93x37 px fragment, so wheels needed a point (off live). Fix: wheel candidates under 25% of the largest are ignored (commit 78d707d); hot reload re-derived the parts with no new SAM call.
+  - Rear: v2 render 5 dropped the swingarm and final drive across the wheel; the owner chose to tighten the prompt. compose.v3 (commit 9835298): render 6 brought the swingarm back but lost the disc and fender bracket; render 7 kept final drive, disc and bracket. The owner accepted it (Step 2) after viewing it. The rear gold is slightly darker than the front.
+  - Final state: history Start, Step 1 front wheel, Step 2 rear wheel; the sheet has both wheels ("Full image, not blended", as SPEC 6.2 says for geometry).
+- Requests (dev log): normalize 3, identify 1, segment 33 (one a lead probe on the accepted front render), instruction 2, edit 7, composite 7; all HTTP 200.
+- Cost: $0.154870 settled (SAM 0.0825, edits 0.070, Spark about 0.0024). Nothing left reserved. Lifetime $0.228141; T7 ticket about $0.165 including the 09:37 spike; day $0.218141.
+- Done-when: met: "an owner's own part crop can render a reference edit" (front and rear, live in the app), and "Inspect one result" (the owner inspected all 7). The rest were met offline (see the T7 entry above). The reference image stays in React state only; the PDF export (T11) must keep its regression check.
+- Checks: typecheck, lint, build pass; npm test 408 passed in 19 files; local_images.py --fixture-set all 71 passed; spike dry runs exit 0.
+- Reviews (review-changes): compose.v2 green (one minor, PLAN note applied); wheel fragment filter green (minor: a heavily hidden real wheel under 25% would be dropped; recorded, not changed); compose.v3 green with no findings.
+- Consultants: PAL chat nim-nemotron35 on src/lib/server/images.ts and src/app/api/segment/route.ts. Points, each checked against the code and rejected:
+  - isDownscaled accepts a 1-px-wide box: does not occur, and harmless.
+  - length overflow: JS numbers are doubles, 2^32 is exact.
+  - zero-size box division: unreachable, because isDownscaled requires both sides > 0.
+  - an empty 0x0 box: gives no object, and the parser does not produce one.
+  - 0 objects reported as complete: SPEC says empty detections return objects=[].
+  - 422 after paying: intended.
+  Gemini was not asked.
+- Follow-ups: the owner adds VISITOR_HASH_SECRET to .env.local; point clicks (T3); T8/T9 flag brake, axle and final-drive fit as "verify" on wheel references; there is no DOM test for the dropzone gating; reference renders vary a lot from run to run (7 renders for 2 accepts), so the demo should budget retries.
+
