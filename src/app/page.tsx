@@ -1,4 +1,5 @@
 import { ModeBanner } from "@/components/ModeBanner";
+import { Workspace } from "@/components/Workspace";
 import { loadConfig } from "@/lib/server/config";
 
 // Mode depends on server environment at request time, not at build time.
@@ -21,15 +22,7 @@ export default function Home() {
           <button type="button" className="rounded-full border border-hairline bg-surface-2 px-4 py-1.5 text-[13px]">Settings</button>
         </div>
       </header>
-      <main className="flex flex-1 gap-4 p-4">
-        <section aria-label="Photo" className="flex flex-[2] items-center justify-center rounded-card border border-hairline bg-recess">
-          <p className="text-text-secondary">Import a photo of your own bike to start.</p>
-        </section>
-        <aside aria-label="Edit panel" className="w-[360px] shrink-0 rounded-card border border-hairline bg-surface-1 p-4">
-          <h2 className="text-[20px] leading-[1.35]">Edit</h2>
-          <p className="mt-2 text-text-muted text-[13px]">Select a part on the photo to describe a change.</p>
-        </aside>
-      </main>
+      <Workspace />
       <nav aria-label="Sheet and estimate" className="flex gap-2 border-t border-hairline bg-surface-1 px-6 py-3">
         <button type="button" className="rounded-full bg-primary px-4 py-1.5 text-[13px] text-on-fill">Build sheet</button>
         <button type="button" className="rounded-full border border-hairline px-4 py-1.5 text-[13px]">Estimate</button>

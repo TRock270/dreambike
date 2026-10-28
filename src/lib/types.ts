@@ -81,3 +81,11 @@ export type BudgetReservation = {
   reservedMicroUsd: number; chargedMicroUsd: number;
   state: "reserved" | "settled" | "unknown"; attempts: number;
 };
+
+/** Server normalization result (SPEC 7). quality is the WebP quality that fit the byte limit. */
+export type NormalizedImage = {
+  bytes: Uint8Array; width: number; height: number; hash: string; quality: number; warnings: string[];
+};
+export type NormalizeOptions = { maxEdge?: number; maxBytes?: number };
+/** A normalized photo on the client: the decoded WireImage as a Blob plus its metadata. */
+export type NormalizedPhoto = { blob: Blob; width: number; height: number; hash: string; warnings: string[] };

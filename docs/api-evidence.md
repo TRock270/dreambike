@@ -18,8 +18,8 @@ Last updated 2026-10-27 23:55 ET (T0 session 1). **Paid calls so far: none. Spen
 | U02 Spark strict JSON with image and with web_search | UNVERIFIED | Request bodies built and shape-checked in dry run; schemas in `prompts/schemas/` | Live identify and instruction profiles; grounded profile after U06 |
 | U03 Account models, quotas, image sizes | UNVERIFIED | None | First live profiles record model access and rate-limit headers |
 | U04 Edit quality, latency, drift | UNVERIFIED | Offline: composite and drift math with all 7 fallback reasons | Live `images_edits.py --mode edit` plus owner before/after review |
-| U05 EXIF, byte envelopes, HEIC | PARTIAL (offline only) | Offline, owner photos: 5 real iPhone HEIC files rejected by signature with the exact message; their sips JPEG copies (two with Orientation 6) normalize to 2048×1536 or 1536×2048 at 0.52–1.02 MB. Offline, synthetic: EXIF orientation 6 is applied once and stripped, with the marker within 0.8 px; 4000×3000 input reduced to 2048×1536 at 1,200,814 bytes (q=70); HEIC rejected by signature with the exact message; >25 MB, >40 MP, animated, and corrupt inputs give distinct errors | Owned EXIF fixture compared across browser, Pillow, and sharp (T2); deployed envelope (T14) |
-| U06 Search query bound and durable accounting | PARTIAL (atomic ledger verified) | Live Redis 2026-10-28: Upstash (regional, eviction off); `ledger.py selftest` 8/8 passed against the real reserve.lua/settle.lua, including a concurrency cap and fail-closed cases; selftest keys deleted afterwards. Owner reports a $50 Meta Billing limit (2026-10-28). Billing reconciled at $0.01; lifetime total initialized at 10000 µ$ |  PRICING_VERIFIED_AT; documented per-request search bound before grounded calls |
+| U05 EXIF, byte envelopes, HEIC | PARTIAL (Chrome + server done; Safari and deployed envelope open) | T2 2026-10-28: real headless Chrome 156 (CDP) through the actual dropzone: owner Orientation-6 JPEG → 1536×2048, mean abs diff vs Pillow 4.21 (180° reference 84.71); real HEIC → exact message, 0 /api/normalize requests. Server (sharp): owner Orientation-6 JPEG 1600×1200 → 1200×1600; Pillow-vs-sharp vitest on owner JPEGs mean diff <4; HEIC (signature or real MIME) → 415 with exact message; APNG/animated, corrupt, >40 MP, >1.30 MB body → distinct 4xx, never 500. Offline: 5 owner HEICs rejected by signature; synthetic checks in local_images.py | Owner Safari check; owned exif-rotated fixture (U09); deployed envelope (T14) |
+| U06 Search query bound and durable accounting | PARTIAL (atomic ledger verified) | Live Redis 2026-10-28: Upstash (regional, eviction off); `ledger.py selftest` 8/8 passed against the real reserve.lua/settle.lua, including a concurrency cap and fail-closed cases; selftest keys deleted afterwards. Owner reports a $50 Meta Billing limit (2026-10-28). Billing reconciled at $0.01; lifetime total initialized at 10000 µ$. Pricing compared with the live page 2026-10-28, all values match (see Pricing check); owner review pending | Owner reviews pricing and sets PRICING_VERIFIED_AT; documented per-request search bound before grounded calls |
 | U07 Shops, product sources, fetch | UNVERIFIED | None (T12, optional) | Owner domains, T12 tests |
 | U08 Vercel project limits | UNVERIFIED | None | T14 |
 | U09 Fixtures, bike truth, consent, identifiers | BLOCKED | `fixtures/` and `consent/` don't exist; all 5 fixture checks reported as skipped | Owner supplies the photos, `fixtures/expected.json`, and private consent |
@@ -80,6 +80,28 @@ Dry runs (`run_all.py --mode smoke --dry-run`) produced valid request shapes for
 
 Gate behavior observed: paid scripts exit 3 without a ledger; grounded exits 3 without `SEARCH_QUERY_RESERVE`; Files exits 3 (pricing unknown); ASR exits 5 (no recording); `deployment.py` exits 2 (app not built).
 
+## Pricing check (2026-10-28)
+
+Claude compared `budget/prices.json` with the live page https://dev.meta.ai/docs/pricing-rate-limits. The page shows no "last updated" date. The owner still has to review it before PRICING_VERIFIED_AT is set.
+
+| Item | Live page | prices.json | Match |
+| --- | --- | --- | --- |
+| sam-3.1 image segmentation | $2.50 per 1,000 images | 2,500 µ$ per image | yes |
+| muse-image-1.0 | $0.01 per image, billed only for images generated and returned | 10,000 µ$ per returned image | yes |
+| muse-spark-1.3-contributor | input $0.10, output $0.20 per 1M tokens | 100,000 / 200,000 µ$ per 1M | yes |
+| Web search grounding | "$2.50 per 1,000 search queries, in addition to the request's token cost" | 2,500 µ$ per query | yes |
+| muse-voice-transcribe-1.0 | $0.18 per hour, whole seconds rounded down | 180,000 µ$ per hour; 30 s reserves 1,500 | yes |
+| Files API | not listed | `null` | yes (profile stays blocked) |
+
+- The reservations still cover the worst case. Ungrounded Spark costs at most 1,048,576 input tokens × $0.10/M plus 4,096 output tokens × $0.20/M = 105,677 µ$, under the 110,000 reserved.
+- The contributor cached-input rate ($0.002/M) isn't used. Settlement assumes no cache discount (SPEC).
+- Not stated on the page:
+  - how many search queries one web_search tool call can bill. Grounded calls stay disabled under U06.
+  - how reasoning tokens are billed. The first live Spark call compares reported `usage` with `max_output_tokens`; a charge above the reservation halts further calls (selftest case).
+  - Files pricing.
+- Contributor rate limits (per team): `muse-spark-1.3-contributor` 150 RPM and 3M TPM, `muse-image-1.0` 150 RPM, `sam-3.1` 3,000 RPM.
+- Contributor mode gives "discounted pricing or more usage in exchange for permission to use your content". The owner's consent record must cover this.
+
 ## Proposed corrections and deviations
 
 | Item | Spec | Proposal or decision | Status |
@@ -98,4 +120,5 @@ The local audit is `spike/out/ledger.jsonl` (gitignored). Shared totals come fro
 
 | Date ET | Ticket | Profile | Calls | Settled USD | Notes |
 | --- | --- | --- | --- | --- | --- |
-| — | — | — | 0 | 0.00 | No paid calls yet |
+| before 2026-10-28 | — | Owner calls before the ledger existed | unknown | 0.01 | From the Billing page; used as the lifetime starting total in `ledger.py init` |
+| — | T0 | — | 0 | 0.00 | No paid calls from the app or spike yet |

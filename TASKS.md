@@ -40,6 +40,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 
 ## T2 — Photo import, preflight, normalization, and upload notice
 
+- Status: DONE 2026-10-28 (offline and Chrome checked; Safari check and owned fixture roles pending, see log).
 - Priority: MVP. Estimate: 2h, Oct 29. Depends on: T1.
 - Files: src/components/UploadDropzone.tsx/UploadNotice.tsx/ImageCanvas.tsx, src/app/api/normalize/route.ts, src/lib/server/images.ts, browser image adapter, tests/images.test.ts, spike/local_images.py.
 - Work: owned-photo notice; MIME/signature checks; client orientation-aware bounded WebP; server decode/EXIF/sRGB/metadata stripping; dimensions/hash; HEIC rejection; low-resolution warning. Enforce actual total body bytes.
@@ -264,3 +265,58 @@ For each completed ticket append actual date/time ET, files changed, checks and 
   - Roles, identifier review, and consent are still the owner's.
 - Cost ledger: $0.00. No paid calls.
 - Remaining gates: U01–U04 and U06 need the ledger and the fixtures; T3+ live handlers must call budget.ts reserve() before dispatch.
+
+### T2 — 2026-10-28, 00:22–00:42 ET (about 0.5 h)
+
+- Status: done.
+  - Still open for the owner: the Safari check and the roles for the five owned fixtures (U09).
+  - `/build-ticket` could not run in this session: the agents in .claude/ load only in sessions started after ea62a19. The same loop ran by hand: the lead built; imaging, security, and general reviewers (general-purpose agents following their .claude/agents definitions) reviewed; the lead fixed; general-reviewer rechecked.
+- Files:
+  - New: src/lib/imageFormat.ts (pure helpers shared by browser and server), src/lib/server/images.ts (sharp), src/lib/server/http.ts, src/app/api/normalize/route.ts, src/lib/browser/preflight.ts, src/lib/browser/normalizeClient.ts, src/components/UploadNotice.tsx, UploadDropzone.tsx, ImageCanvas.tsx, Workspace.tsx, tests/images.test.ts, tests/preflight.test.ts.
+  - Changed: src/app/page.tsx, src/lib/types.ts (NormalizedImage, NormalizeOptions, NormalizedPhoto).
+- Checks run (Node 22):
+  - `npm run typecheck`: ok.
+  - `npm run lint`, repo-wide: ok.
+  - `npm test`: 41 passed in 5 files.
+  - `npm run build`: ok; the client bundle canary scan was clean; no hex outside tokens.css.
+  - `python spike/local_images.py --fixture-set all`: 35 passed, 0 failed, 5 skipped (U09 fixtures).
+  - Real server (`next start`):
+    - The owner's Orientation-6 JPEG (sips, 1600×1200 stored) came back 1200×1600.
+    - A 4 MB JPEG gave 413; a foreign Origin gave 403.
+  - Real headless Chrome 156 over CDP, using the actual notice and dropzone on `next dev`:
+    - The owner's IMG_1570 (Orientation 6, 4032×3024 stored) came back 1536×2048.
+    - The browser-path output differs from Pillow by a mean of 4.21 per channel; a 180°-rotated reference differs by 84.71.
+    - The real IMG_1572.HEIC showed the exact HEIC message with 0 /api/normalize requests.
+  - Vitest compares Pillow and sharp on the owner JPEG copies: same size, mean difference under 4.
+- Review round 1:
+  - general-reviewer: 2 major and 4 minor.
+  - imaging-reviewer: 2 major and 4 minor.
+  - security-reviewer: approved, with 6 minor.
+  - Nemotron 3.5 (PAL) and Gemini also reviewed.
+  - Fixed:
+    - HEIC or unsupported files sent with their real MIME now get 415.
+    - Browser header checks have tests.
+    - The server rejects APNG.
+    - Body limit for this route is 1.30 MB, with streamed, duplicate-part, and forged-Host tests.
+    - Origin allowlist: APP_ORIGIN, plus localhost only when not deployed; never derived from Host.
+    - Retry with the same file.
+    - Types moved to types.ts.
+    - Sharp resizes during decode, with an 8 s timeout per pipeline.
+    - The quality ladder now matches Python, and a 1×1 no-progress loop is stopped.
+    - JPEG fill bytes and SOS, VP8 sync, HEIF compatible brands.
+    - The browser reads a 1 MB header, guards 40 MP after decode, falls back to `<img>` where createImageBitmap options are unsupported, and detects WebP encoding once.
+    - Unexpected errors log class and request ID only.
+  - Round 2 (general-reviewer): approved all 12 items. Its minor notes on non-JSON 5xx retry and the WebP flag were fixed; a large HEIC posted straight to the API gets 413 before the HEIC message, accepted because the browser rejects HEIC first.
+  - Rejected, verified against the code:
+    - Nemotron "PNG chunk length at pos+4": the length is at pos.
+    - "errorResponse can throw": every code has an entry.
+    - "MIME-only validation": the file signature decides.
+    - "Deadline thunk": no effect.
+  - Left as is:
+    - Browser APNG detection beyond the first 1 MB; the server catches it.
+    - TS resamples each shrink step from the decoded raster; the pixel sizes are the same as Python's.
+  - Deferred to T13: the signed session cookie on POST routes (SPEC 5). This route makes no paid call and is Origin-checked.
+- Cost ledger: $0.00 (no paid calls).
+- Remaining gates:
+  - U05 stays PARTIAL until the Safari check, the owned exif-rotated fixture (U09), and the deployed envelope (T14).
+  - Owner Safari check: drop IMG_1570.jpg into `npm run dev`; it should show upright with 1536 × 2048 in the caption. Drop a .HEIC; the exact message should appear.
