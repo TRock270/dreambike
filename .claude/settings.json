@@ -35,6 +35,7 @@
       "Bash(npx --no-install vitest run tests/spark.test.ts)",
       "Bash(npx --no-install vitest run tests/sse.test.ts)",
       "Bash(npx --no-install vitest run tests/edit.test.ts)",
+      "Bash(npx --no-install vitest run tests/workflows.test.ts)",
       "Bash(.venv/bin/python spike/local_images.py --fixture-set all)",
       "Bash(.venv/bin/python spike/local_images.py --fixture-set plain)",
       "Bash(.venv/bin/python spike/run_all.py --mode smoke --dry-run)",
