@@ -72,6 +72,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 
 ## T6 — Durable local projects and history tree
 
+- Status: DONE 2026-10-28 (offline and in mock; no paid calls involved). See log.
 - Priority: MVP. Estimate: 2h, Oct 30. Depends on: T5.
 - Files: src/lib/db.ts/project.ts/cache.ts, src/components/VersionStrip.tsx/ProjectList.tsx, tests/project.test.ts/cache.test.ts.
 - Work: IndexedDB stores, immutable snapshots, transactional acceptance, same-slot replacement, head navigation, branching, stale mask flags, quota/LRU handling, pending-request guard. Derive active sheet from the selected version.
@@ -534,3 +535,105 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Remaining gates:
   - U04: one live render with BUDGET_TICKET=T5 on an owned photo and an owner before/after review.
   - U01: real masks, which enable real composition.
+
+### T6 — 2026-10-28, about 02:00–02:40 and 08:15–08:40 ET (build-ticket workflow, fix round, browser check)
+
+- Status: done offline and in mock. History and storage are local only and make no paid calls.
+- Dependency: fake-indexeddb 6.2.6 as an exact devDependency for tests only. It is 491 KB unpacked, Apache-2.0, and not in the client bundle; under the 1 MB approval threshold.
+- Files:
+  - New:
+    - src/lib/db.ts: idb layer and transactions.
+    - src/lib/project.ts: pure version tree.
+    - src/lib/cache.ts: derivation cache, byte ledger, LRU, quota.
+    - src/lib/browser/projectSession.ts: UI glue.
+    - src/components/AppShell.tsx: client header with Undo and Redo; page.tsx stays a server component.
+    - src/components/ProjectList.tsx, src/components/VersionStrip.tsx.
+    - tests/db.test.ts, cache.test.ts, project.test.ts, projectsession.test.ts, bikeform.test.ts, tests/support/idb.ts.
+  - Changed:
+    - src/lib/contracts.ts: persisted schemas (ImageRef, StoredImage, StoredMask, Part, BikeRevision, Version with tree refinements, Project, CacheEntry, meta).
+    - src/lib/types.ts: persisted types inferred from those schemas; EditModeId.
+    - src/lib/browser/partMap.ts: restoredPartMap, mask conversion, partsToPersisted, stale parts carried forward.
+    - src/lib/bikeForm.ts: bikeFormFromRevision.
+    - src/components/Workspace.tsx, EditReview.tsx, PartOverlay.tsx, PartSelector.tsx; src/app/page.tsx; tests/partmap.test.ts.
+  - TASKS lists fewer files for T6. These extra files were needed: projectSession, AppShell, partMap, bikeForm, contracts and types, and the db and projectsession tests.
+- Design notes:
+  - DB "dreambike" v1 with the stores and indexes from SPEC 9.
+  - A newer schema opens read-only and never deletes. Another tab's upgrade closes this connection with a "reload the page" message.
+  - acceptVisual writes image, masks, version and head in one transaction. It checks expectedHeadId inside the transaction (stale_head), is idempotent for a retry with the same IDs, and accepts kind "visual" only (sheet versions come with T8).
+  - Undo, redo and jump load the target view first, then move the head with an expected-head guard.
+  - attachParts updates display data (parts and outline) only when the image hash matches.
+  - Quota: one safe cache cleanup, one retry with the same IDs, then STORAGE_FULL. Writes pause when protected data alone exceeds 200 MB.
+  - Reload and open never start a paid call. The identify result is cached as id:<hash>:identify-v1.
+- Checks run:
+  - typecheck: ok. lint: ok. build: ok.
+  - `npm test`: 213 passed in 18 files, all on fake-indexeddb:
+    - three accepts survive close and reopen;
+    - undo restores the image ref and items together;
+    - redo with a branch chooser, and a branch from an earlier node;
+    - the same slot edited twice gives one active item and two change records;
+    - an injected failure inside acceptVisual keeps the head and leaves no orphan;
+    - a stale expectedHeadId is refused;
+    - an idempotent retry;
+    - quota as a put error and as a transaction abort, with exactly 2 attempts and then STORAGE_FULL with projects intact;
+    - read-only on a newer schema;
+    - deleteProject keeps shared blobs;
+    - invalid persisted records are rejected;
+    - the head is unchanged when the target photo is missing on undo or jump.
+  - Headless Chrome 156 over CDP, MOCK=1, 1440×1000, synthetic gradient JPEG (no owner photo):
+    - import created the project ("Saved on this device");
+    - three accepts (Tank, Tank again, then Front wheel after "Detect parts again");
+    - reload, the project list, Open: head image hash, four history steps, sheet (Tank, Front wheel) and confirmed bike all came back, with 0 /api/segment, /api/identify, /api/edit or /api/instruction calls after the reload;
+    - Undo and Redo change the image and the sheet together;
+    - a branch from step 1 gives the branch chooser (titles plus accept time), and picking one works;
+    - jumping to step 0 works;
+    - Undo while a preview is open discards it with "no new render was started";
+    - two consecutive opens leave identical mask IDs, so opening writes nothing;
+    - no page exceptions.
+- Workflow result: needs_lead.
+  - All 4 units (history, store, restore, ui) were approved by their reviewers, and the checks were green.
+  - Gate majors: STORAGE_FULL offered no delete without closing the project; the browser inspection was missing.
+- Fix round:
+  - shop-builder fixed 13 items:
+    - blocking() closes the connection;
+    - navigation loads the view before moving the head;
+    - jump is guarded;
+    - invalid input gives InvalidWriteError, not "corrupt";
+    - image dedupe skips damaged records;
+    - unreferenced masks are refused;
+    - acceptVisual accepts visual versions only;
+    - the storage limit is checked in attachParts;
+    - cutout size is checked;
+    - the childParts slot is checked;
+    - EditMode comes from contracts;
+    - Version tree refinements;
+    - quota as a transaction abort, which exposed a real gap in runTx that is now fixed.
+  - ui-builder fixed six items:
+    - inline delete-only project list on STORAGE_FULL, keeping the preview and the IDs;
+    - delete for damaged projects;
+    - read-only Accept stays in memory without a fake retry;
+    - the openSaved token guard;
+    - navigation waits for pending part saves;
+    - stale parts are drawn dashed on the photo.
+  - Lead: the browser run showed the root version saved only [tank], because detection was saved before the front/rear answer. Facing and bike-choice changes now mark the parts for saving, only when a detected front/rear phrase can change. The branch chooser shows the accept time.
+- Review of the fix round:
+  - shop-reviewer approved, with no auto-commit hazard found (every await in a transaction is an IDB request).
+  - general-reviewer found 2 majors, both fixed:
+    - opening an unconfirmed project with a cached facing suggestion rewrote the masks;
+    - "Save this photo" could hide a paid preview. It is now disabled until the preview is accepted or discarded.
+  - Its minors were also fixed:
+    - the storage-full notice clears on Reject;
+    - the save-photo token check now also runs on error;
+    - a failed part save on full storage gets a free "Save the parts" retry.
+  - The shop-reviewer's m1 (redo passes the previewed target) was fixed.
+- Consultants: unavailable this round.
+  - PAL nim-nemotron35 codereview skipped db.ts both times (file token limit), so it returned no findings.
+  - Gemini (agy) was denied a tool permission in headless mode.
+  - The limits for this task are used up; no retries.
+- Recorded, not changed:
+  - m2: a same-ID retry after the head has moved on reports "not saved" although the version exists.
+  - m3: putCache links a same-hash image without validating it.
+  - SHOP-H2: an undo followed by redo back to the same head is not detected in storage; the UI discards the preview on any navigation.
+  - Stale parts on a full-image fallback are dropped by design (SPEC 9 invalidation table).
+  - The STORAGE_FULL UI paths are unit-tested at the storage layer only; fake quota was not driven through the browser.
+- Cost ledger: $0.00 (no paid calls).
+- Remaining gates: none for T6. Safari should get one manual pass (IndexedDB Blob storage), together with the T2 Safari check.

@@ -81,10 +81,16 @@ export function PartSelector({ map, view, selected, pointMode, busy, onSelect, o
       <ul className="flex flex-col gap-1" aria-label="Detected parts">
         {view.parts.map((p) => (
           <li key={p.id}>
-            <button type="button" onClick={() => onSelect(p.id)} aria-pressed={selected?.id === p.id}
-              className={`flex w-full items-center gap-2 rounded-chip px-3 py-1.5 text-left text-[13px] ${selected?.id === p.id ? "bg-surface-3 font-semibold" : "hover:bg-surface-2"}`}>
-              <span aria-hidden="true" className="size-3 shrink-0 rounded-full" style={{ background: slotColorVar(p.slot) }} />
+            {/* A stale part was cut on an earlier picture: shown, never selectable (SPEC 9). */}
+            <button type="button" onClick={() => onSelect(p.id)} disabled={p.stale} aria-pressed={selected?.id === p.id}
+              className={`flex w-full items-center gap-2 rounded-chip px-3 py-1.5 text-left text-[13px] ${selected?.id === p.id ? "bg-surface-3 font-semibold" : p.stale ? "text-text-muted" : "hover:bg-surface-2"}`}>
+              <span aria-hidden="true" className="size-3 shrink-0 rounded-full" style={{ background: slotColorVar(p.slot), opacity: p.stale ? 0.4 : 1 }} />
               {p.label}
+              {p.stale && (
+                <span className="ml-auto rounded-chip bg-neutral-soft px-2 py-0.5 text-neutral-soft-text text-[12px]">
+                  <span aria-hidden="true" className="mr-1">⟳</span>Outdated, detect again
+                </span>
+              )}
             </button>
           </li>
         ))}

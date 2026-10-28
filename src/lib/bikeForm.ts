@@ -4,7 +4,7 @@
 // correction or a confirmed bike.
 import { BikeChecked } from "./contracts";
 import { bikeLimitations } from "./editPolicy";
-import type { BikeData } from "./types";
+import type { BikeData, BikeRevision } from "./types";
 
 export type BikeField = "make" | "model" | "family" | "engine" | "yearFrom" | "yearTo" | "abs" | "style" | "facing";
 export const BIKE_FIELDS: readonly BikeField[] = ["make", "model", "family", "engine", "yearFrom", "yearTo", "abs", "style", "facing"];
@@ -66,4 +66,23 @@ export function parseYear(text: string): number | null | "invalid" {
   if (!/^\d{4}$/.test(t)) return "invalid";
   const y = Number(t);
   return y >= 1900 && y <= 2100 ? y : "invalid";
+}
+
+/**
+ * The form for a reopened project. A confirmed (or revised) bike is the mechanic's own, so every
+ * field counts as touched and a late AI suggestion can never overwrite it. A project that was
+ * never confirmed (revision 0) stays open to a cached suggestion.
+ */
+export function bikeFormFromRevision(rev: BikeRevision): BikeFormState {
+  const theirs = rev.confirmed || rev.revision > 0;
+  return {
+    bike: rev.bike, touched: new Set(theirs ? BIKE_FIELDS : []), suggested: false,
+    confirmed: rev.confirmed, revision: rev.revision,
+  };
+}
+
+/** The persisted record for a confirmed form; `id` stays the project's existing bike revision id. */
+export function bikeRevisionFromForm(state: BikeFormState, id: string, now: number): BikeRevision {
+  return { id, bike: state.bike, confirmed: state.confirmed, revision: state.revision,
+    confirmedAt: state.confirmed ? now : null };
 }

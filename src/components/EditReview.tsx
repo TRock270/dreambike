@@ -19,10 +19,18 @@ type Props = {
   onRetryBlend: () => void;
   onRenderAgain: () => void;
   onCancel: () => void;
+  /** Accept is writing to local storage. */
+  saving?: boolean;
+  /** The last Accept failed; the preview stays so Accept can be tried again. */
+  saveError?: string | null;
+  /** No project is saved (storage unavailable or read-only): Accept only changes this tab. */
+  unsaved?: boolean;
+  /** Storage is read-only: the accept stays in this tab and says so; no retry is offered. */
+  readOnly?: boolean;
 };
 
-/** One render's progress and preview. Nothing changes until Accept (persistence arrives with T6). */
-export function EditReview({ base, state, onAccept, onReject, onRetryBlend, onRenderAgain, onCancel }: Props) {
+/** One render's progress and preview. Nothing changes until Accept; Accept saves a new version. */
+export function EditReview({ base, state, onAccept, onReject, onRetryBlend, onRenderAgain, onCancel, saving = false, saveError = null, unsaved = false, readOnly = false }: Props) {
   if (state.kind === "running") return <ProgressStatus stage={state.stage} onCancel={onCancel} />;
   if (state.kind === "error") {
     return (
@@ -64,9 +72,26 @@ export function EditReview({ base, state, onAccept, onReject, onRetryBlend, onRe
         <p key={w} className="rounded-chip bg-warning-soft px-3 py-2 text-warning-soft-text"><span aria-hidden="true" className="mr-1 font-semibold">⚠</span>{w}</p>
       ))}
       <p className="text-text-muted text-[12px]">The image is a visualization, not a guarantee of the finished bike.</p>
+      {readOnly && (
+        <p className="rounded-chip bg-warning-soft px-3 py-2 text-warning-soft-text">
+          <span aria-hidden="true" className="mr-1 font-semibold">⚠</span>Not saved: local storage is read-only. Accepting changes only what you see now; it is lost when you close the page.
+        </p>
+      )}
+      {unsaved && !readOnly && (
+        <p className="rounded-chip bg-neutral-soft px-3 py-2 text-neutral-soft-text">
+          <span aria-hidden="true" className="mr-1 font-semibold">ⓘ</span>This project is not saved. Accepting changes only what you see now; it is lost when you close the page.
+        </p>
+      )}
+      {saveError && (
+        <p role="alert" className="rounded-chip bg-danger-soft px-3 py-2 text-danger-soft-text">
+          <span aria-hidden="true" className="mr-1 font-semibold">✕</span>Not saved: {saveError} The project still has its earlier version and this preview is kept. Press Accept to try again; no new render is made.
+        </p>
+      )}
       <div className="flex gap-2">
-        <button type="button" onClick={onAccept} className="rounded-full bg-primary px-4 py-1.5 text-on-fill">Accept</button>
-        <button type="button" onClick={onReject} className="rounded-full border border-hairline px-4 py-1.5">Reject</button>
+        <button type="button" onClick={onAccept} disabled={saving} className="rounded-full bg-primary px-4 py-1.5 text-on-fill disabled:opacity-50">
+          {saving ? "Saving…" : saveError ? "Try saving again" : "Accept"}
+        </button>
+        <button type="button" onClick={onReject} disabled={saving} className="rounded-full border border-hairline px-4 py-1.5 disabled:opacity-50">Reject</button>
       </div>
     </section>
   );

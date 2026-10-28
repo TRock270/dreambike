@@ -114,6 +114,90 @@ export const Settings = z.object({
   { message: "each slot may appear at most once in laborBySlot", path: ["laborBySlot"] },
 );
 
+// ------------------------------------------------- persisted records (SPEC 9)
+// Validated on every IndexedDB read. Blobs are stored by reference, never base64.
+
+export const ImageRef = z.object({
+  id: Id, hash: Hash, width: Dimension, height: Dimension,
+  bytes: z.number().int().min(0).max(50_000_000),
+  rights: z.enum(["owner", "visitor", "external_runtime"]),
+}).strict();
+
+/** `z.instanceof(Blob)` accepts only a real Blob object, so a base64 string fails. */
+export const StoredImage = ImageRef.extend({
+  blob: z.instanceof(Blob), lastAccessedAt: z.number().int().min(0),
+}).strict();
+
+/** pixels holds exactly width * height bytes, each 0 or 1. */
+export const StoredMask = z.object({
+  id: Id, imageHash: Hash, width: Dimension, height: Dimension,
+  pixels: z.instanceof(Uint8Array), createdAt: z.number().int().min(0),
+}).strict().superRefine((m, ctx) => {
+  if (m.pixels.length !== m.width * m.height) {
+    ctx.addIssue({ code: "custom", path: ["pixels"], message: "pixels length must be width*height" });
+    return;
+  }
+  for (let i = 0; i < m.pixels.length; i++) {
+    if ((m.pixels[i] ?? 0) > 1) {
+      ctx.addIssue({ code: "custom", path: ["pixels", i], message: "mask bytes must be 0 or 1" });
+      return;
+    }
+  }
+});
+
+export const Part = z.object({
+  id: Short, slot: Slot, label: Short, box: Box, maskId: Id,
+  area: z.number().int().min(0), source: z.enum(["concept", "point"]),
+  confidence: z.number().min(0).max(1).nullable(), stale: z.boolean(),
+}).strict();
+
+export const BikeRevision = z.object({
+  id: Id, bike: Bike, confirmed: z.boolean(),
+  revision: z.number().int().min(0), confirmedAt: z.number().int().min(0).nullable(),
+}).strict();
+
+const uniqueSlots = (items: readonly { slot: string }[]) =>
+  new Set(items.map((i) => i.slot)).size === items.length;
+
+export const Version = z.object({
+  id: Id, projectId: Id, parentId: Id.nullable(), kind: z.enum(["root", "visual", "sheet"]),
+  image: ImageRef, cutoutImageId: Id.nullable(), bikeMaskId: Id.nullable(),
+  parts: z.array(Part).max(60), items: z.array(BuildItem).max(22),
+  fees: z.array(Fee).max(40), inspectionReview: InspectionReview.nullable(),
+  change: z.object({
+    slot: Slot, itemId: Id, instruction: z.string().min(1).max(4000), mode: EditMode,
+  }).strict().nullable(),
+  composed: z.boolean(), aligned: z.boolean(), drift: z.number().min(0).max(1).nullable(),
+  fallbackReason: Note.nullable(), createdAt: z.number().int().min(0),
+}).strict().superRefine((v, ctx) => {
+  const bad = (path: string, message: string) => ctx.addIssue({ code: "custom", path: [path], message });
+  if (!uniqueSlots(v.items)) bad("items", "at most one item per slot");
+  const ids = new Set(v.items.map((i) => i.id));
+  if (ids.size !== v.items.length) bad("items", "item ids must be unique");
+  if ((v.kind === "root") !== (v.parentId === null)) bad("parentId", "only the root version has no parent");
+  if (v.kind === "visual") {
+    const item = v.change ? v.items.find((i) => i.id === v.change?.itemId) : undefined;
+    if (!v.change) bad("change", "a visual version needs a change record");
+    else if (!item) bad("change", "change.itemId must be one of the version's items");
+    else if (item.slot !== v.change.slot) bad("change", "change.slot must equal the item's slot");
+  }
+  if (v.fees.some((f) => f.itemIds.some((id) => !ids.has(id)))) bad("fees", "every fee itemId must be one of the version's items");
+});
+
+export const Project = z.object({
+  id: Id, name: Short, rootVersionId: Id, headVersionId: Id, bikeRevision: BikeRevision,
+  settingsId: Short, createdAt: z.number().int().min(0), updatedAt: z.number().int().min(0),
+}).strict();
+
+export const CacheEntry = z.object({
+  key: z.string().min(1).max(500), blobIds: z.array(Id).max(20), value: z.unknown(),
+  bytes: z.number().int().min(0), createdAt: z.number().int().min(0),
+  lastAccessedAt: z.number().int().min(0), expiresAt: z.number().int().min(0).nullable(),
+}).strict();
+
+/** One row of the meta store: schema version, byte ledger, last-open project, ... */
+export const MetaRecord = z.object({ key: Short, value: z.unknown() }).strict();
+
 export const WireImage = z.object({
   mime: z.literal("image/webp"),
   dataUrl: z.string().startsWith("data:image/webp;base64,").max(1_666_800),

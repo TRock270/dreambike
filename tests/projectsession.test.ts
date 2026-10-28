@@ -1,0 +1,367 @@
+// Project session glue against fake-indexeddb: open, create, accept with the head guard,
+// undo/redo/branch, saving parts, identify cache. A fresh database per test.
+import "fake-indexeddb/auto";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { closeDreamDb, openDreamDb, type DreamDb } from "@/lib/db";
+import { AppError } from "@/lib/errors";
+import { activeItems, pathFromRoot } from "@/lib/project";
+import {
+  acceptEdit, cachedIdentify, createFromPhoto, headVersion, identifyForPhoto, jumpToVersion, loadHeadView, newAcceptIds,
+  openProject, openStorage, persistParts, redoHead, saveBike, saveErrorText, undoHead, type AcceptIds, type AcceptInput, type ProjectSession,
+} from "@/lib/browser/projectSession";
+import { bikeFormFromRevision, bikeRevisionFromForm, confirmBike, editField, emptyBikeForm } from "@/lib/bikeForm";
+import { derive, emptyPartMap, refreshedPart } from "@/lib/browser/partMap";
+import * as spark from "@/lib/browser/sparkClient";
+import type { BikeData, BinaryMask, NormalizedPhoto, SlotId } from "@/lib/types";
+import { hash, freshIndexedDb, H, W } from "./support/idb";
+
+vi.mock("@/lib/browser/sparkClient", () => ({ requestIdentify: vi.fn(), requestInstruction: vi.fn() }));
+
+let h: DreamDb;
+beforeEach(async () => {
+  freshIndexedDb();
+  h = await openDreamDb();
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+  closeDreamDb(h);
+});
+
+const photoOf = (c: string): NormalizedPhoto => ({
+  blob: new Blob([new Uint8Array(12).fill(c.charCodeAt(0))]), width: W, height: H, hash: hash(c), warnings: [],
+});
+const instruction = (title: string) => ({
+  title, editPrompt: `prompt ${title}`, spec: [{ key: "finish", value: "matte" }], intent: "paint" as const, warnings: [],
+});
+const mask = (): BinaryMask => {
+  const pixels = new Uint8Array(W * H);
+  pixels[0] = 1; pixels[1] = 1;
+  return { width: W, height: H, pixels };
+};
+const result = (c: string, composed = true) => ({
+  blob: new Blob([new Uint8Array(9).fill(c.charCodeAt(0))]), width: W, height: H, hash: hash(c), composed,
+  aligned: true, drift: 0.01, reason: composed ? ("composited" as const) : ("geometry" as const),
+});
+
+/** The input for one accept on the session's current head. */
+function inputFor(s: ProjectSession, slot: SlotId, title: string, c: string, ids: AcceptIds = newAcceptIds()): AcceptInput {
+  const r = result(c);
+  return {
+    ref: { projectId: s.project.id, expectedHeadId: s.project.headVersionId }, ids, slot, mode: "text",
+    instruction: instruction(title), result: r, refreshed: refreshedPart(slot, slot, mask(), r.hash), now: 100,
+  };
+}
+
+/** Accept and return the new session; fails the test on a refusal. */
+async function accept(s: ProjectSession, slot: SlotId, title: string, c: string): Promise<ProjectSession> {
+  const out = await acceptEdit(h, s, inputFor(s, slot, title, c));
+  if (out.status !== "accepted") throw new Error(`refused: ${out.message}`);
+  return out.session;
+}
+
+async function start(c = "a"): Promise<ProjectSession> {
+  return createFromPhoto(h, photoOf(c), new Date(2026, 9, 28, 14, 5));
+}
+
+describe("create and open", () => {
+  it("a new import is a project named by local date and time, with the photo saved", async () => {
+    const s = await start();
+    expect(s.project.name).toBe("Bike photo 2026-10-28 14:05");
+    expect(s.project.settingsId).toBe("default");
+    const opened = await openProject(h, s.project.id);
+    expect(opened.view.photo.hash).toBe(hash("a"));
+    expect(opened.view.photo.blob.size).toBe(12);
+    expect(opened.hasSavedBike).toBe(false);
+  });
+
+  it("reopening starts nothing: the map is restored, nothing detected, no network call", async () => {
+    const s = await start();
+    const opened = await openProject(h, s.project.id);
+    expect(spark.requestIdentify).not.toHaveBeenCalled();
+    expect(opened.view.map.done).toBe(true);
+    expect(Object.values(derive(opened.view.map).phrases).every((p) => p === "stale")).toBe(true);
+    expect(opened.view.map.bikeStatus).not.toBe("none"); // never claims "no outline found" for an unchecked version
+  });
+
+  it("an unknown project id is a clear error", async () => {
+    await expect(openProject(h, "missing")).rejects.toThrow(/no longer exists/);
+  });
+
+  it("a damaged version makes open fail clearly and deletes nothing", async () => {
+    const s = await start();
+    const raw = { ...(await h.db.get("versions", s.project.rootVersionId)), items: "not a list" };
+    await h.db.put("versions", raw as never);
+    await expect(openProject(h, s.project.id)).rejects.toThrow(/version/i);
+    expect(await h.db.count("projects")).toBe(1);
+    expect(await h.db.count("versions")).toBe(1);
+  });
+
+  it("openStorage reports unavailable instead of throwing when IndexedDB is missing", async () => {
+    Object.assign(globalThis, { indexedDB: undefined });
+    const st = await openStorage();
+    expect(st.status).toBe("unavailable");
+  });
+});
+
+describe("history through the session", () => {
+  it("three accepted edits survive close and reopen", async () => {
+    let s = await start();
+    s = await accept(s, "fork", "Fork one", "b");
+    s = await accept(s, "tank", "Tank two", "c");
+    s = await accept(s, "seat", "Seat three", "d");
+    closeDreamDb(h);
+    h = await openDreamDb();
+    const opened = await openProject(h, s.project.id);
+    expect(opened.view.photo.hash).toBe(hash("d"));
+    expect(activeItems(headVersion(opened.session)).map((i) => i.slot).sort()).toEqual(["fork", "seat", "tank"]);
+    expect(pathFromRoot(opened.session.versions, opened.session.project.headVersionId)).toHaveLength(4);
+  });
+
+  it("undo restores the image and the sheet together, redo brings them back, no node is created", async () => {
+    let s = await start();
+    s = await accept(s, "fork", "Fork one", "b");
+    s = await accept(s, "tank", "Tank two", "c");
+    const undone = await undoHead(h, s);
+    if (undone.status !== "moved") throw new Error("undo failed");
+    expect(undone.view.photo.hash).toBe(hash("b"));
+    expect(activeItems(headVersion(undone.session)).map((i) => i.slot)).toEqual(["fork"]);
+    expect(await h.db.count("versions")).toBe(3);
+    const redone = await redoHead(h, undone.session);
+    if (redone.status !== "moved") throw new Error("redo failed");
+    expect(redone.view.photo.hash).toBe(hash("c"));
+    expect(activeItems(headVersion(redone.session))).toHaveLength(2);
+    expect(await h.db.count("versions")).toBe(3);
+  });
+
+  it("undo at the start and redo at the end say so", async () => {
+    const s = await start();
+    expect(await undoHead(h, s)).toEqual({ status: "nothing", message: "Nothing to undo." });
+    expect(await redoHead(h, s)).toEqual({ status: "nothing", message: "Nothing to redo." });
+  });
+
+  it("accepting after undo branches; redo then asks which branch and nothing is written until chosen", async () => {
+    let s = await start();
+    s = await accept(s, "fork", "Fork one", "b");
+    const firstChildId = s.project.headVersionId;
+    const back = await undoHead(h, s);
+    if (back.status !== "moved") throw new Error("undo failed");
+    const branch = await accept(back.session, "tank", "Tank branch", "c");
+    expect(branch.versions).toHaveLength(3);
+    const root = await jumpToVersion(h, branch, branch.project.rootVersionId);
+    if (root.status !== "moved") throw new Error("jump failed");
+    const asked = await redoHead(h, root.session);
+    expect(asked.status).toBe("choose_branch");
+    if (asked.status !== "choose_branch") return;
+    expect(asked.children).toHaveLength(2);
+    expect((await h.db.get("projects", s.project.id))!.headVersionId).toBe(root.session.project.headVersionId);
+    const picked = await redoHead(h, root.session, firstChildId);
+    if (picked.status !== "moved") throw new Error("redo failed");
+    expect(picked.view.photo.hash).toBe(hash("b"));
+    expect(activeItems(headVersion(picked.session)).map((i) => i.slot)).toEqual(["fork"]);
+  });
+
+  it("the same slot edited twice: one active item, two change records in the history", async () => {
+    let s = await start();
+    s = await accept(s, "fork", "Chrome fork", "b");
+    s = await accept(s, "fork", "Black fork", "c");
+    const items = activeItems(headVersion(s));
+    expect(items).toHaveLength(1);
+    expect(items[0]!.title).toBe("Black fork");
+    const changes = pathFromRoot(s.versions, s.project.headVersionId).map((v) => v.change?.instruction).filter(Boolean);
+    expect(changes).toEqual(["Chrome fork", "Black fork"]);
+  });
+});
+
+describe("accept guard", () => {
+  it("a preview made for an older head is refused, writes nothing, and the head stays", async () => {
+    let s = await start();
+    const old = inputFor(s, "fork", "Late preview", "z"); // rendered while the head was the root
+    s = await accept(s, "tank", "Newer edit", "b");
+    const before = await h.db.count("versions");
+    const out = await acceptEdit(h, s, old);
+    expect(out).toMatchObject({ status: "refused", reason: "stale_head" });
+    expect(await h.db.count("versions")).toBe(before);
+    expect((await h.db.get("projects", s.project.id))!.headVersionId).toBe(s.project.headVersionId);
+  });
+
+  it("a preview for another project is refused", async () => {
+    const a = await start("a");
+    const b = await start("b");
+    const out = await acceptEdit(h, b, inputFor(a, "fork", "Wrong project", "z"));
+    expect(out).toMatchObject({ status: "refused", reason: "wrong_project" });
+  });
+
+  it("the database refuses a stale head even when the in-memory session is out of date (another tab)", async () => {
+    let s = await start();
+    const staleView = s; // this tab still thinks the head is the root
+    s = await accept(s, "tank", "Other tab edit", "b");
+    const out = await acceptEdit(h, staleView, inputFor(staleView, "fork", "Late", "c"));
+    expect(out).toMatchObject({ status: "refused", reason: "stale_head" });
+    expect(await h.db.count("versions")).toBe(2);
+  });
+
+  it("retry with the same IDs after an unknown outcome is idempotent: no duplicate line", async () => {
+    const s = await start();
+    const input = inputFor(s, "fork", "Fork one", "b");
+    const first = await acceptEdit(h, s, input);
+    const again = await acceptEdit(h, s, input); // the UI never saw the first answer
+    expect(first.status).toBe("accepted");
+    expect(again).toMatchObject({ status: "accepted", idempotent: true });
+    expect(await h.db.count("versions")).toBe(2);
+    if (again.status === "accepted") expect(activeItems(headVersion(again.session))).toHaveLength(1);
+  });
+
+  it("a failure inside the write keeps the old head and leaves no orphan; retry with the same IDs works", async () => {
+    const s = await start();
+    const input = inputFor(s, "fork", "Fork one", "b");
+    const realPut = IDBObjectStore.prototype.put;
+    const spy = vi.spyOn(IDBObjectStore.prototype, "put").mockImplementation(function (this: IDBObjectStore, ...args: Parameters<typeof realPut>) {
+      if (this.name === "projects") throw new Error("injected failure");
+      return realPut.apply(this, args);
+    });
+    await expect(acceptEdit(h, s, input)).rejects.toThrow("injected failure");
+    expect((await h.db.get("projects", s.project.id))!.headVersionId).toBe(s.project.headVersionId);
+    expect(await h.db.count("versions")).toBe(1);
+    expect(await h.db.count("images")).toBe(1);
+    expect(await h.db.count("masks")).toBe(0);
+    spy.mockRestore();
+    const retry = await acceptEdit(h, s, input);
+    expect(retry).toMatchObject({ status: "accepted", idempotent: false });
+    expect(await h.db.count("versions")).toBe(2);
+  });
+
+  it("a full disk surfaces STORAGE_FULL, keeps the head, and the same IDs save once space is back", async () => {
+    const s = await start();
+    const input = inputFor(s, "fork", "Fork one", "b");
+    const realPut = IDBObjectStore.prototype.put;
+    const spy = vi.spyOn(IDBObjectStore.prototype, "put").mockImplementation(function (this: IDBObjectStore, ...args: Parameters<typeof realPut>) {
+      if (this.name === "versions") throw new DOMException("disk full", "QuotaExceededError");
+      return realPut.apply(this, args);
+    });
+    const error = await acceptEdit(h, s, input).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(AppError);
+    expect((error as AppError).code).toBe("STORAGE_FULL");
+    expect(saveErrorText(error)).toMatch(/storage is full/i);
+    expect((await h.db.get("projects", s.project.id))!.headVersionId).toBe(s.project.headVersionId);
+    expect(await h.db.count("versions")).toBe(1);
+    spy.mockRestore();
+    expect((await acceptEdit(h, s, input)).status).toBe("accepted");
+  });
+});
+
+describe("parts", () => {
+  it("detected parts are saved on the head, restored on open, and other parts turn stale after an edit", async () => {
+    let s = await start();
+    const rootHash = headVersion(s).image.hash;
+    const seat = refreshedPart("seat", "Seat", mask(), rootHash)!;
+    const detected = derive({ ...emptyPartMap(rootHash), done: true, pointParts: [seat] });
+    const saved = await persistParts(h, s, rootHash, detected);
+    expect(saved).not.toBeNull();
+    s = saved!;
+    expect(headVersion(s).parts).toHaveLength(1);
+    expect(headVersion(s).items).toHaveLength(0); // attach never touches the sheet
+
+    s = await accept(s, "fork", "Fork one", "b");
+    const reopened = await loadHeadView(h, s);
+    const parts = derive(reopened.map).parts;
+    const bySlot = Object.fromEntries(parts.map((p) => [p.slot, p.stale]));
+    expect(bySlot).toEqual({ fork: false, seat: true }); // fresh target, inherited part shown disabled
+    expect(reopened.map.imageHash).toBe(hash("b"));
+  });
+
+  it("a full-image fallback has no parts to restore", async () => {
+    let s = await start();
+    const r = result("b", false);
+    const out = await acceptEdit(h, s, { ...inputFor(s, "fork", "Fork one", "b"), result: r });
+    if (out.status !== "accepted") throw new Error("refused");
+    s = out.session;
+    expect(headVersion(s).parts).toEqual([]);
+    expect(headVersion(s).bikeMaskId).toBeNull();
+  });
+
+  it("parts detected for another image are not saved on the shown version", async () => {
+    const s = await start();
+    expect(await persistParts(h, s, hash("q"), derive(emptyPartMap(hash("q"))))).toBeNull();
+  });
+});
+
+describe("identify cache", () => {
+  const bike: BikeData = { make: "Harley-Davidson", model: "Sportster", family: "sportster", engine: null, yearFrom: null, yearTo: null,
+    abs: "unknown", style: null, facing: "left", confidence: 0.8, limitations: [] };
+
+  it("the same photo never pays twice, and opening only reads the cache", async () => {
+    vi.mocked(spark.requestIdentify).mockResolvedValue(bike);
+    const photo = photoOf("a");
+    const first = await identifyForPhoto(h, photo);
+    expect(first.cachedAt).toBeNull();
+    const second = await identifyForPhoto(h, photo);
+    expect(second.cachedAt).not.toBeNull();
+    expect(second.bike.model).toBe("Sportster");
+    expect(spark.requestIdentify).toHaveBeenCalledTimes(1);
+    expect(await cachedIdentify(h, hash("a"))).not.toBeNull();
+    expect(await cachedIdentify(h, hash("b"))).toBeNull();
+  });
+
+  it("a failed cache write does not lose the answer", async () => {
+    vi.mocked(spark.requestIdentify).mockResolvedValue(bike);
+    const realPut = IDBObjectStore.prototype.put;
+    vi.spyOn(IDBObjectStore.prototype, "put").mockImplementation(function (this: IDBObjectStore, ...args: Parameters<typeof realPut>) {
+      if (this.name === "cache") throw new Error("cache broke");
+      return realPut.apply(this, args);
+    });
+    const r = await identifyForPhoto(h, photoOf("a"));
+    expect(r.bike.make).toBe("Harley-Davidson");
+  });
+
+  it("without storage the call still works and is simply not cached", async () => {
+    vi.mocked(spark.requestIdentify).mockResolvedValue(bike);
+    const r = await identifyForPhoto(null, photoOf("a"));
+    expect(r.cachedAt).toBeNull();
+  });
+});
+
+describe("bike confirmation withdrawn", () => {
+  it("a confirmation taken back is saved: reopening shows unconfirmed and the edited value", async () => {
+    const s = await start();
+    let form = confirmBike(editField(emptyBikeForm(), "facing", "right"))!;
+    await saveBike(h, s, bikeRevisionFromForm(form, s.project.bikeRevision.id, 10));
+    // The mechanic changes one field; the form is unconfirmed, and that is what Workspace saves.
+    form = editField(form, "facing", "left");
+    await saveBike(h, s, bikeRevisionFromForm(form, s.project.bikeRevision.id, 20));
+    const reopened = bikeFormFromRevision((await openProject(h, s.project.id)).session.project.bikeRevision);
+    expect(reopened.confirmed).toBe(false);
+    expect(reopened.bike.facing).toBe("left");
+    expect(reopened.revision).toBe(1);
+  });
+});
+
+describe("navigation failures leave the stored head alone", () => {
+  it("undo to a version whose photo is missing throws and the stored head does not move", async () => {
+    let s = await start();
+    const rootImageId = headVersion(s).image.id;
+    s = await accept(s, "fork", "Fork one", "b");
+    await h.db.delete("images", rootImageId);
+    await expect(undoHead(h, s)).rejects.toThrow(/missing/);
+    expect((await h.db.get("projects", s.project.id))!.headVersionId).toBe(s.project.headVersionId);
+  });
+
+  it("jump to a version whose photo is missing throws and the stored head does not move", async () => {
+    let s = await start();
+    const rootImageId = headVersion(s).image.id;
+    const rootId = s.project.rootVersionId;
+    s = await accept(s, "fork", "Fork one", "b");
+    await h.db.delete("images", rootImageId);
+    await expect(jumpToVersion(h, s, rootId)).rejects.toThrow(/missing/);
+    expect((await h.db.get("projects", s.project.id))!.headVersionId).toBe(s.project.headVersionId);
+  });
+
+  it("jump is refused when another tab already moved the head", async () => {
+    let s = await start();
+    const rootId = s.project.rootVersionId;
+    const stale = await accept(s, "fork", "Fork one", "b"); // head = v1
+    s = await accept(stale, "tank", "Tank two", "c"); // head = v2 in storage
+    const out = await jumpToVersion(h, stale, rootId); // this tab still thinks head = v1
+    expect(out.status).toBe("nothing");
+    expect((await h.db.get("projects", s.project.id))!.headVersionId).toBe(s.project.headVersionId);
+  });
+});

@@ -1,7 +1,10 @@
 // Pure part-map derivation: facing and bike choices survive late detection results.
 import { describe, expect, it } from "vitest";
-import { derive, emptyPartMap, partsForPhrase, type PartMapState } from "@/lib/browser/partMap";
-import type { BinaryMask, SegmentedObject } from "@/lib/types";
+import { binaryToStoredMask, derive, emptyPartMap, partMapAfterEdit, partsForPhrase, partsToPersisted, restoredPartMap, storedMaskToBinary, type PartMapState } from "@/lib/browser/partMap";
+import { hitTest } from "@/lib/coordinates";
+import { maskArea, maskBox } from "@/lib/parts";
+import { CORE_PHRASES } from "@/lib/slots";
+import type { BinaryMask, MapPart, Part, SegmentedObject, SlotId } from "@/lib/types";
 
 const W = 100, H = 50;
 function rect(l: number, t: number, r: number, b: number): BinaryMask {
@@ -16,6 +19,8 @@ const wheels = [obj(rect(12, 25, 32, 45)), obj(rect(68, 25, 88, 45))];
 function withResults(s: PartMapState, phrase: string, objects: SegmentedObject[]): PartMapState {
   return { ...s, requests: { ...s.requests, [phrase]: "done" }, raw: { ...s.raw, [phrase]: objects } };
 }
+
+const PHOTO = { hash: "h2", width: W, height: H };
 
 describe("derive", () => {
   it("asks for facing, then assigns wheels; a later result does not undo the answer", () => {
@@ -61,5 +66,108 @@ describe("review fixes", () => {
     const stray = { id: "point:tank:9", slot: "tank" as const, label: "Tank", mask: rect(1, 1, 5, 5), area: 16,
       box: [1, 1, 5, 5] as [number, number, number, number], source: "point" as const, confidence: null, stale: false, imageHash: "h1" };
     expect(derive({ ...s, pointParts: [stray] }).parts).toEqual([]);
+  });
+});
+
+describe("stale parts and persistence", () => {
+  const box = (m: BinaryMask) => maskBox(m)!;
+  const mk = (id: string, slot: SlotId, m: BinaryMask, hash: string, stale: boolean): MapPart =>
+    ({ id, slot, label: slot, mask: m, area: maskArea(m), box: box(m), source: "point", confidence: null, stale, imageHash: hash });
+  const bikeMask = rect(10, 10, 90, 45);
+  const base = (): PartMapState => ({ ...emptyPartMap("h2"), bikeCandidates: [obj(bikeMask)], bikeChoice: 0, bikeStatus: "found", done: true,
+    requests: Object.fromEntries(CORE_PHRASES.map((p) => [p, "stale"])) });
+
+  it("derive keeps a stale part but it is not selectable, and hitTest ignores it", () => {
+    const stale = mk("point:tank:1", "tank", rect(40, 12, 60, 20), "h1", true);
+    const view = derive({ ...base(), pointParts: [stale] });
+    const kept = view.parts.find((p) => p.id === stale.id)!;
+    expect(kept.stale).toBe(true);
+    expect(kept.imageHash).toBe("h1");
+    expect(view.phrases["fuel tank"]).toBe("stale");
+    expect(hitTest(view.parts, { x: 50, y: 15 }, { width: W, height: H })).toBeNull();
+  });
+
+  it("a fresh part for the same slot replaces the stale one", () => {
+    const stale = mk("point:tank:1", "tank", rect(40, 12, 60, 20), "h1", true);
+    const fresh = mk("point:tank:2", "tank", rect(42, 12, 58, 20), "h2", false);
+    const view = derive({ ...base(), pointParts: [stale, fresh] });
+    expect(view.parts.map((p) => p.id)).toEqual(["point:tank:2"]);
+    expect(view.phrases["fuel tank"]).toBe(base().requests["fuel tank"]);
+  });
+
+  it("partMapAfterEdit carries other parent parts as stale and matches the restored map", () => {
+    const tank = mk("point:tank:1", "tank", rect(40, 12, 60, 20), "h1", false);
+    const seat = mk("point:seat:1", "seat", rect(20, 12, 35, 20), "h1", false);
+    const prev = { ...base(), imageHash: "h1", pointParts: [tank, seat] };
+    const refreshed = mk("point:seat:accepted:h2", "seat", rect(20, 12, 36, 20), "h2", false);
+    const after = partMapAfterEdit(prev, "h2", refreshed, true);
+    const v = derive(after);
+    expect(v.parts.map((p) => [p.slot, p.stale]).sort()).toEqual([["seat", false], ["tank", true]]);
+    expect(partMapAfterEdit(prev, "h2", refreshed, false).pointParts).toEqual([refreshed]);
+
+    // persist, then restore: the same view comes back
+    let n = 0;
+    const saved = partsToPersisted(v, "h2", () => `m${n++}`, 5);
+    const byId = new Map(saved.masks.map((m) => [m.id, m]));
+    const restored = restoredPartMap(PHOTO, v.bike!.mask,
+      saved.parts.map((part) => ({ part, mask: byId.get(part.maskId)! })), "unknown");
+    const again = derive(restored);
+    expect(again.parts.map((p) => [p.id, p.stale, p.imageHash])).toEqual(v.parts.map((p) => [p.id, p.stale, p.imageHash]));
+    for (const p of v.parts) expect(Array.from(again.parts.find((q) => q.id === p.id)!.mask.pixels)).toEqual(Array.from(p.mask.pixels));
+  });
+
+  it("does not persist a carried-over bike outline under the new hash", () => {
+    const prev = { ...base(), imageHash: "h1" };
+    const after = partMapAfterEdit(prev, "h2", null, true);
+    const v = derive(after);
+    expect(v.bike).not.toBeNull();
+    expect(partsToPersisted(v, "h2", () => "x", 1).bikeMask).toBeNull();
+    const recut = { ...after, bikeCarried: false };
+    expect(partsToPersisted(derive(recut), "h2", () => "x", 1).bikeMask).not.toBeNull();
+  });
+
+  it("round-trips masks bit-exactly and keeps old ids for stale parts", () => {
+    const m = rect(3, 4, 17, 9);
+    m.pixels[0] = 1; m.pixels[W * H - 1] = 1; // border pixels
+    const stored = binaryToStoredMask(m, "h2", "mk", 7);
+    expect(stored.pixels.length).toBe(W * H);
+    expect(Array.from(storedMaskToBinary(stored, "h2").pixels)).toEqual(Array.from(m.pixels));
+    const stale = mk("point:tank:1", "tank", rect(40, 12, 60, 20), "h1", true);
+    const out = partsToPersisted({ bike: null, parts: [stale], phrases: {} }, "h2", () => "new", 1, new Map([["point:tank:1", "old-mask"]]));
+    expect(out.parts[0]!.maskId).toBe("old-mask");
+    expect(out.masks).toEqual([]);
+  });
+
+  it("rejects masks with the wrong size, wrong hash, or non-binary bytes", () => {
+    const good = binaryToStoredMask(rect(1, 1, 5, 5), "h2", "mk", 1);
+    expect(() => storedMaskToBinary({ ...good, pixels: good.pixels.slice(1) })).toThrow(/bytes/);
+    expect(() => storedMaskToBinary(good, "other")).toThrow(/another photo/);
+    const bad = good.pixels.slice(); bad[3] = 2;
+    expect(() => storedMaskToBinary({ ...good, pixels: bad })).toThrow(/0 or 1/);
+    expect(() => binaryToStoredMask({ width: 2, height: 2, pixels: new Uint8Array(3) }, "h2", "x", 1)).toThrow();
+    const part: Part = { id: "p", slot: "tank", label: "Tank", box: [1, 1, 5, 5], maskId: "mk", area: 16, source: "point", confidence: null, stale: false };
+    expect(() => restoredPartMap({ ...PHOTO, hash: "h3" }, null, [{ part, mask: good }], "unknown")).toThrow(/another photo/);
+    const small = { ...binaryToStoredMask({ width: 4, height: 4, pixels: new Uint8Array(16) }, "h2", "s", 1) };
+    expect(() => restoredPartMap(PHOTO, bikeMask, [{ part, mask: small }], "unknown")).toThrow(/photo size/);
+    // no bike: the photo size is still enforced, fresh and stale
+    expect(() => restoredPartMap(PHOTO, null, [{ part, mask: small }], "unknown")).toThrow(/photo size/);
+    const oldSmall = { ...small, imageHash: "h1" };
+    expect(() => restoredPartMap(PHOTO, null, [{ part: { ...part, stale: true }, mask: oldSmall }], "unknown")).toThrow(/photo size/);
+    expect(() => restoredPartMap(PHOTO, { width: 4, height: 4, pixels: new Uint8Array(16) }, [], "unknown")).toThrow(/bike outline/);
+  });
+
+  it("a restored map shows 'stale', never 'pending', and runs nothing", () => {
+    const m = binaryToStoredMask(rect(40, 12, 60, 20), "h2", "mk", 1);
+    const part: Part = { id: "point:tank:1", slot: "tank", label: "Tank", box: [40, 12, 60, 20], maskId: "mk", area: 160, source: "point", confidence: null, stale: false };
+    const s = restoredPartMap(PHOTO, bikeMask, [{ part, mask: m }], "right");
+    expect(s.done).toBe(true);
+    expect(s.facing).toBe("right");
+    const v = derive(s);
+    expect(v.phrases["fuel tank"]).toBe("stale");
+    expect(v.parts.map((p) => p.id)).toEqual(["point:tank:1"]);
+    expect(v.phrases["wheel"]).toBe("stale");
+    expect(Object.values(v.phrases)).not.toContain("pending");
+    expect(hitTest(v.parts, { x: 50, y: 15 }, { width: W, height: H, hash: "h2" })?.id).toBe("point:tank:1");
+    expect(derive(restoredPartMap(PHOTO, null, [], "unknown")).phrases["wheel"]).toBe("stale");
   });
 });

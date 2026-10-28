@@ -1,18 +1,30 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { applySuggestion, editField, emptyBikeForm, type BikeFormState } from "@/lib/bikeForm";
+import {
+  applySuggestion, bikeFormFromRevision, bikeRevisionFromForm, editField, emptyBikeForm, type BikeFormState,
+} from "@/lib/bikeForm";
+import { deleteProject, listProjects, type DreamDb } from "@/lib/db";
+import { children, type PendingRef } from "@/lib/project";
 import {
   buildPartMap, derive, emptyPartMap, partMapAfterEdit, recutBike, refreshedPart, selectByPoint, type PartMapState,
 } from "@/lib/browser/partMap";
+import { AppError } from "@/lib/errors";
 import { PreflightError } from "@/lib/browser/preflight";
 import { requestEdit, type Composited, type Generated } from "@/lib/browser/renderClient";
 import { blend } from "@/lib/browser/renderFlow";
-import { requestIdentify, requestInstruction } from "@/lib/browser/sparkClient";
+import {
+  acceptEdit, cachedIdentify, closeStorage, createFromPhoto, headVersion, identifyForPhoto, jumpToVersion, newAcceptIds,
+  openProject, openStorage, persistPartMap, redoHead, saveBike, saveErrorText, undoHead,
+  type AcceptIds, type HeadView, type NavOutcome, type ProjectSession, type StorageState,
+} from "@/lib/browser/projectSession";
+import { requestInstruction } from "@/lib/browser/sparkClient";
 import { hitTest, type ImagePoint } from "@/lib/coordinates";
 import { modeAllowed } from "@/lib/editPolicy";
+import { PAIRED_SLOTS } from "@/lib/parts";
 import { slotInfo } from "@/lib/slots";
-import type { BinaryMask, InstructionData, NormalizedPhoto } from "@/lib/types";
+import type { BinaryMask, InstructionData, NormalizedPhoto, Version } from "@/lib/types";
+import { AppShell } from "./AppShell";
 import { BikeConfirm } from "./BikeConfirm";
 import { DescribeForm } from "./DescribeForm";
 import { EditReview, type RenderState } from "./EditReview";
@@ -20,10 +32,24 @@ import { ImageCanvas } from "./ImageCanvas";
 import { InstructionPreview } from "./InstructionPreview";
 import { PaintForm } from "./PaintForm";
 import { PartSelector, type PointTarget } from "./PartSelector";
+import { ProjectList, type ProjectListState } from "./ProjectList";
 import { UploadDropzone } from "./UploadDropzone";
 import { UploadNotice } from "./UploadNotice";
+import { VersionStrip } from "./VersionStrip";
 
-/** Photo area and edit panel. Projects are not persisted until T6. */
+const isStorageFull = (e: unknown) => e instanceof AppError && e.code === "STORAGE_FULL";
+
+const PREVIEW_DISCARDED = "The preview was discarded because the version shown changed. Nothing was saved and no new render was started. Render again if you still want this change; that costs a new render.";
+
+/** Header, photo area, edit panel and history. Projects are saved in this browser (SPEC 9). */
+/** What a pending render remembers: which project and head it was made for, and the IDs an accept will use. */
+type RenderEntry = { key: string; state: RenderState; newMask: BinaryMask | null; ref: PendingRef | null; ids: AcceptIds };
+
+/** Facing only changes the derived parts when a front/rear phrase was actually detected on this photo. */
+function facingChangesParts(m: PartMapState): boolean {
+  return Object.keys(PAIRED_SLOTS).some((phrase) => m.requests[phrase] === "done");
+}
+
 export function Workspace() {
   const [noticeAccepted, setNoticeAccepted] = useState(false);
   const [photo, setPhoto] = useState<NormalizedPhoto | null>(null);
@@ -36,19 +62,87 @@ export function Workspace() {
   const view = useMemo(() => derive(map), [map]);
   const [bikeForm, setBikeForm] = useState<BikeFormState>(emptyBikeForm);
   const [identify, setIdentify] = useState<{ status: "pending" | "done" | "error" | "off"; message: string | null }>({ status: "off", message: null });
+  const [identifyCachedAt, setIdentifyCachedAt] = useState<number | null>(null);
   const [editMode, setEditMode] = useState<"text" | "paint">("text");
   // A prepared instruction belongs to one part of one photo; anything else is stale.
   const [prepared, setPrepared] = useState<{ key: string; state: "busy" } | { key: string; state: "error"; message: string }
     | { key: string; state: "done"; instruction: InstructionData } | null>(null);
 
   // One render belongs to one prepared instruction; the cached generation is the resume point.
-  const [render, setRender] = useState<{ key: string; state: RenderState; newMask: BinaryMask | null } | null>(null);
+  const [render, setRender] = useState<RenderEntry | null>(null);
   const renderBusy = useRef(false);
   const [renderRunning, setRenderRunning] = useState(false);
   const renderAbort = useRef<AbortController | null>(null);
-  // Full detection and identification run only for a newly imported photo, never after an accepted edit.
+  // Full detection and identification run only for a newly imported photo, never after an accepted edit
+  // and never when a project is opened.
   const autoDetect = useRef<string | null>(null);
   const runAbort = useRef<AbortController | null>(null);
+
+  // ---- local storage and the open project (SPEC 9)
+  // Refs hold the newest value for async callbacks; React state would be a stale copy inside them.
+  const [storage, setStorage] = useState<StorageState | null>(null);
+  const storageRef = useRef<StorageState | null>(null);
+  const [session, setSessionState] = useState<ProjectSession | null>(null);
+  const sessionRef = useRef<ProjectSession | null>(null);
+  const [list, setList] = useState<ProjectListState>({ kind: "loading" });
+  const [listBusy, setListBusy] = useState<string | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
+  const [savingProject, setSavingProject] = useState(false);
+  const [saveNote, setSaveNote] = useState<string | null>(null);
+  const [staleNotice, setStaleNotice] = useState<string | null>(null);
+  const [navNote, setNavNote] = useState<string | null>(null);
+  const [navBusy, setNavBusy] = useState(false);
+  const [branchChoices, setBranchChoices] = useState<Version[] | null>(null);
+  const [accept, setAccept] = useState<{ saving: boolean; error: string | null }>({ saving: false, error: null });
+  const acceptBusy = useRef(false);
+  // Set when a save failed because storage is full: the delete-only list shows next to the preview or photo,
+  // and nothing on screen (photo, paid render, preview, session) is cleared.
+  const [storageFull, setStorageFull] = useState<"accept" | "import" | "parts" | null>(null);
+  // True when the part map holds results that are not saved yet (new detection, recut, point selection).
+  const partsDirty = useRef(false);
+  // Saves run one after another, each on the newest session, so two saves never use an old part list.
+  const persistChain = useRef<Promise<void>>(Promise.resolve());
+  const importToken = useRef(0);
+  // True from an accepted edit until its bike-outline recut has finished (found, none or error).
+  const recutPending = useRef(false);
+
+  function setSession(next: ProjectSession | null) {
+    sessionRef.current = next;
+    setSessionState(next);
+  }
+  const readyStorage = (): Extract<StorageState, { status: "ready" }> | null => (storageRef.current?.status === "ready" ? storageRef.current : null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let opened: StorageState | null = null;
+    void openStorage().then((s) => {
+      if (cancelled) { closeStorage(s); return; }
+      opened = s;
+      storageRef.current = s;
+      setStorage(s);
+    });
+    return () => {
+      cancelled = true;
+      if (opened) closeStorage(opened);
+      storageRef.current = null;
+    };
+  }, []);
+
+  // The project list shows on the start screen, and again after a project is closed.
+  async function refreshList() {
+    if (!storage) { setList({ kind: "loading" }); return; }
+    if (storage.status === "unavailable") { setList({ kind: "unavailable", message: storage.message }); return; }
+    try {
+      const found = await listProjects(storage.h);
+      setList({ kind: "ready", projects: found.projects, unreadable: found.unreadable, readOnlyReason: storage.readOnlyReason });
+    } catch (e) {
+      setList({ kind: "unavailable", message: saveErrorText(e) });
+    }
+  }
+  useEffect(() => {
+    if (!photo) void refreshList();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refreshList only reads `storage`
+  }, [storage, photo]);
 
   // A new photo starts a fresh part map. Every write checks the image hash,
   // so results for an older photo can never land on the new one.
@@ -57,34 +151,259 @@ export function Workspace() {
     const controller = new AbortController();
     runAbort.current = controller;
     void buildPartMap(photo, setMap, controller.signal);
-    // Identification runs in parallel; its suggestion fills only untouched fields.
-    void requestIdentify(photo, controller.signal).then(
-      (bike) => { if (!controller.signal.aborted) { setBikeForm((f) => applySuggestion(f, bike)); setIdentify({ status: "done", message: null }); } },
+    // Identification runs in parallel (cache first, so the same photo never pays twice);
+    // its suggestion fills only untouched fields.
+    const ready = readyStorage();
+    void identifyForPhoto(ready ? ready.h : null, photo, controller.signal).then(
+      (found) => {
+        if (controller.signal.aborted) return;
+        setBikeForm((f) => applySuggestion(f, found.bike));
+        setIdentify({ status: "done", message: null });
+        setIdentifyCachedAt(found.cachedAt);
+      },
       (error) => { if (!controller.signal.aborted) setIdentify({ status: "error", message: error instanceof PreflightError ? error.message : null }); },
     );
     return () => controller.abort();
   }, [photo]);
 
+  // Save detection or recut results on the shown version once they are complete.
+  useEffect(() => {
+    const ready = readyStorage();
+    if (!ready || ready.readOnly || !photo || !session || !partsDirty.current) return;
+    if (!map.done || map.imageHash !== photo.hash || headVersion(session).image.hash !== photo.hash) return;
+    if (recutPending.current) return; // the recut is still running; its result triggers this effect again
+    partsDirty.current = false;
+    const shown = map;
+    persistChain.current = persistChain.current.then(async () => {
+      const cur = sessionRef.current;
+      if (!cur) return;
+      try {
+        const saved = await persistPartMap(ready.h, cur, shown);
+        const now = sessionRef.current;
+        const updated = saved?.versions.find((v) => v.id === headVersion(saved).id);
+        if (saved && updated && now && now.project.id === saved.project.id) {
+          setSession({ ...now, versions: now.versions.map((v) => (v.id === updated.id ? updated : v)) });
+        }
+      } catch (e) {
+        if (isStorageFull(e)) {
+          // Keep them pending: "Save the parts" below retries for free after a project is deleted.
+          partsDirty.current = true;
+          setStorageFull((f) => f ?? "parts");
+          void refreshList();
+        } else {
+          setSaveNote(`The detected parts could not be saved: ${saveErrorText(e)} They stay on screen.`);
+        }
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refreshList only reads `storage`; saving must not rerun on it
+  }, [map, session, photo]);
+
   // The bike's facing also answers the part map's front/rear question.
   const bikeFacing = bikeForm.bike.facing;
   useEffect(() => {
-    if (bikeFacing !== "unknown") setMap((m) => (m.facing === bikeFacing ? m : { ...m, facing: bikeFacing }));
+    if (bikeFacing === "unknown") return;
+    setMap((m) => {
+      if (m.facing === bikeFacing) return m;
+      // A new facing re-derives detected front/rear parts, so they must be saved again. A restored
+      // map has no "done" phrases, so opening a project never writes. (Setting a ref here is safe
+      // to repeat if React calls this updater twice.)
+      if (facingChangesParts(m)) partsDirty.current = true;
+      return { ...m, facing: bikeFacing };
+    });
   }, [bikeFacing]);
 
-  function choosePhoto(next: NormalizedPhoto | null) {
+  /** Stop everything that belongs to the photo shown now. */
+  function resetWork() {
     pointAbort.current?.abort();
     renderAbort.current?.abort();
     runAbort.current?.abort();
-    autoDetect.current = next?.hash ?? null;
     setRender(null);
-    setPhoto(next);
-    setBikeForm(emptyBikeForm());
-    setIdentify({ status: next ? "pending" : "off", message: null });
     setPrepared(null);
-    setMap(emptyPartMap(next?.hash ?? ""));
     setSelectedId(null);
     setPointMode(null);
     setNotice(null);
+    setBranchChoices(null);
+    setAccept({ saving: false, error: null });
+    setStorageFull(null);
+  }
+
+  /** Show a saved version. Nothing paid starts: detection, identification and recut stay manual. */
+  function showView(next: HeadView, nextSession: ProjectSession) {
+    resetWork();
+    autoDetect.current = null;
+    partsDirty.current = false;
+    recutPending.current = false;
+    setSession(nextSession);
+    setPhoto(next.photo);
+    setMap(next.map);
+  }
+
+  async function choosePhoto(next: NormalizedPhoto | null) {
+    const token = ++importToken.current;
+    resetWork();
+    setStaleNotice(null);
+    setNavNote(null);
+    setSaveNote(null);
+    autoDetect.current = null;
+    recutPending.current = false;
+    if (!next) {
+      setSession(null);
+      setPhoto(null);
+      setBikeForm(emptyBikeForm());
+      setIdentify({ status: "off", message: null });
+      setIdentifyCachedAt(null);
+      setMap(emptyPartMap(""));
+      return;
+    }
+    // A new import becomes a project right away; if saving is impossible the mechanic can still work.
+    let created: ProjectSession | null = null;
+    let full = false;
+    const ready = readyStorage();
+    if (ready && !ready.readOnly) {
+      setSavingProject(true);
+      try {
+        created = await createFromPhoto(ready.h, next);
+      } catch (e) {
+        full = isStorageFull(e);
+        setSaveNote(`This photo could not be saved: ${saveErrorText(e)} You can keep working, but nothing will be saved.`);
+      } finally {
+        setSavingProject(false);
+      }
+      if (token !== importToken.current) return; // another import or open started meanwhile
+      if (full) { setStorageFull("import"); void refreshList(); }
+    } else if (ready) {
+      setSaveNote(`${ready.readOnlyReason ?? "Local storage is read-only."} You can keep working, but nothing will be saved.`);
+    } else {
+      setSaveNote("Local storage is not available in this browser. You can keep working, but nothing will be saved.");
+    }
+    autoDetect.current = next.hash;
+    partsDirty.current = true;
+    setSession(created);
+    setPhoto(next);
+    setBikeForm(emptyBikeForm());
+    setIdentify({ status: "pending", message: null });
+    setIdentifyCachedAt(null);
+    setMap(emptyPartMap(next.hash));
+  }
+
+  /** "Save this photo" after the mechanic made room: try createFromPhoto again with the photo on screen. */
+  async function saveUnsavedPhoto() {
+    const ready = readyStorage();
+    if (!ready || ready.readOnly || !photo || sessionRef.current || savingProject) return;
+    const token = importToken.current;
+    const form = bikeForm;
+    setSavingProject(true);
+    try {
+      const created = await createFromPhoto(ready.h, photo);
+      if (token !== importToken.current) return; // the photo was closed or replaced meanwhile
+      setSession(created);
+      setStorageFull(null);
+      setSaveNote(null);
+      // A confirmed bike was only in memory; save it on the new project too.
+      if (form.confirmed) void saveConfirmedBike(form);
+    } catch (e) {
+      if (token !== importToken.current) return;
+      setSaveNote(`This photo could not be saved: ${saveErrorText(e)} You can keep working, but nothing will be saved.`);
+      if (isStorageFull(e)) { setStorageFull("import"); void refreshList(); }
+    } finally {
+      setSavingProject(false);
+    }
+  }
+
+  async function openSaved(id: string) {
+    const ready = readyStorage();
+    if (!ready) return;
+    const token = ++importToken.current;
+    setListBusy(id);
+    setListError(null);
+    try {
+      const opened = await openProject(ready.h, id);
+      // Reading the identify cache is free; a missing entry is simply "no suggestion".
+      const root = opened.session.versions.find((v) => v.id === opened.session.project.rootVersionId);
+      const cached = opened.hasSavedBike || !root ? null : await cachedIdentify(ready.h, root.image.hash);
+      let form = bikeFormFromRevision(opened.session.project.bikeRevision);
+      if (cached) form = applySuggestion(form, cached.bike);
+      if (token !== importToken.current) return; // another open or import started while this one was loading
+      setStaleNotice(null);
+      setNavNote(null);
+      setSaveNote(null);
+      showView(opened.view, opened.session);
+      setBikeForm(form);
+      setIdentify({ status: cached ? "done" : "off", message: null });
+      setIdentifyCachedAt(cached?.cachedAt ?? null);
+    } catch (e) {
+      setListError(`This project could not be opened: ${saveErrorText(e)} It was not changed.`);
+    } finally {
+      setListBusy(null);
+    }
+  }
+
+  async function deleteSaved(id: string) {
+    const ready = readyStorage();
+    if (!ready) return;
+    setListBusy(id);
+    setListError(null);
+    try {
+      await deleteProject(ready.h, id);
+    } catch (e) {
+      setListError(`The project could not be deleted: ${saveErrorText(e)}`);
+    } finally {
+      setListBusy(null);
+    }
+    await refreshList();
+  }
+
+  // ---- undo, redo, and jumping to a saved step
+  async function navigate(run: (h: DreamDb, s: ProjectSession) => Promise<NavOutcome>) {
+    const ready = readyStorage();
+    if (!ready || !sessionRef.current || navBusy) return;
+    const hadPreview = render !== null;
+    setNavBusy(true);
+    setNavNote(null);
+    try {
+      // A part save after detection may still be writing; wait so the session's version list is current.
+      await persistChain.current;
+      const current = sessionRef.current;
+      if (!current) return;
+      const out = await run(ready.h, current);
+      if (out.status === "moved") {
+        // The shown version changed, so any preview made for the old one can no longer be accepted.
+        showView(out.view, out.session);
+        setStaleNotice(hadPreview ? PREVIEW_DISCARDED : null);
+      } else if (out.status === "choose_branch") {
+        setBranchChoices(out.children);
+      } else {
+        setNavNote(out.message);
+      }
+    } catch (e) {
+      setNavNote(`That step could not be shown: ${saveErrorText(e)} The project is unchanged.`);
+    } finally {
+      setNavBusy(false);
+    }
+  }
+
+  // ---- bike confirmation is saved on the project (project level, SPEC 9)
+  function changeBike(next: BikeFormState) {
+    const previous = bikeForm;
+    setBikeForm(next);
+    // A confirmation and the taking back of one are both saved, so a reopened project never shows
+    // a confirmation the mechanic withdrew. Other unconfirmed edits stay in memory until confirmed.
+    const confirmedNow = next.confirmed && (!previous.confirmed || next.revision !== previous.revision);
+    const withdrawn = previous.confirmed && !next.confirmed;
+    if (confirmedNow || withdrawn) void saveConfirmedBike(next);
+  }
+  async function saveConfirmedBike(form: BikeFormState) {
+    const ready = readyStorage();
+    const current = sessionRef.current;
+    if (!ready || !current) return; // an unsaved photo keeps the bike in memory only
+    try {
+      const saved = await saveBike(ready.h, current, bikeRevisionFromForm(form, current.project.bikeRevision.id, Date.now()));
+      const now = sessionRef.current;
+      if (now && now.project.id === saved.project.id) setSession({ ...now, project: saved.project });
+      setSaveNote(null);
+    } catch (e) {
+      setSaveNote(`The confirmed bike could not be saved: ${saveErrorText(e)} It stays on screen.`);
+    }
   }
 
   async function handleClick(point: ImagePoint) {
@@ -103,6 +422,7 @@ export function Workspace() {
     setPointBusy(true);
     try {
       const result = await selectByPoint(photo, point, target, target.kind === "bike" ? null : view.bike?.mask ?? null, controller.signal);
+      partsDirty.current = true;
       setMap((m) => {
         if (m.imageHash !== photo.hash) return m; // the photo changed meanwhile
         if ("bike" in result) return { ...m, bikePoint: result.bike, bikeChoice: "point" };
@@ -118,12 +438,14 @@ export function Workspace() {
     }
   }
 
-  const selected = view.parts.find((p) => p.id === selectedId) ?? null;
+  // A stale part (cut on an earlier picture) is shown but can never be the selected part.
+  const selected = view.parts.find((p) => p.id === selectedId && !p.stale) ?? null;
   const selectionKey = photo && selected ? `${photo.hash}:${selected.id}` : null;
   const paintOnly = selected ? !modeAllowed(selected.slot, "text") : false;
   const mode = paintOnly ? "paint" : editMode;
   // The key includes the bike as sent, so editing the bike makes an older preview stale.
-  const prepKey = `${selectionKey}:${mode}:${JSON.stringify(bikeForm.bike)}`;
+  // It also includes the shown version, so a preview never carries over to another head.
+  const prepKey = `${session?.project.headVersionId ?? "unsaved"}:${selectionKey}:${mode}:${JSON.stringify(bikeForm.bike)}`;
   const current = prepared && prepared.key === prepKey ? prepared : null;
 
   const renderEntry = render && render.key === prepKey ? render : null;
@@ -135,13 +457,18 @@ export function Workspace() {
     if (reuse && !cached) return; // "Retry blend" never turns into a paid render
     renderBusy.current = true;
     setRenderRunning(true);
+    setAccept({ saving: false, error: null });
+    setStaleNotice(null);
     const controller = new AbortController();
     renderAbort.current = controller;
     const key = prepKey, base = photo, part = selected, instruction = current.instruction;
+    // Every preview is tied to the project and head it was made for, with fresh IDs for its accept.
+    const ref: PendingRef | null = session ? { projectId: session.project.id, expectedHeadId: session.project.headVersionId } : null;
+    const ids = newAcceptIds();
     const bikeBox = view.bike?.box ?? null;
     let generated: Generated | null = reuse ? cached : null;
     const put = (state: RenderState, newMask: BinaryMask | null = null) => {
-      if (!controller.signal.aborted) setRender({ key, state, newMask });
+      if (!controller.signal.aborted) setRender({ key, state, newMask, ref, ids });
     };
     try {
       if (!generated) {
@@ -168,22 +495,62 @@ export function Workspace() {
     const generated = entry?.state.kind === "running" ? entry.state.generated : null;
     renderAbort.current?.abort();
     if (entry && generated) {
-      setRender({ key: entry.key, newMask: null, state: { kind: "error", generated, retryable: true,
+      setRender({ ...entry, newMask: null, state: { kind: "error", generated, retryable: true,
         message: "Blending cancelled. The render is kept: “Retry blend” uses it without a new render." } });
     } else {
       setRender(null);
     }
   }
 
-  /** Accept: the result becomes the working photo. History and undo arrive with T6. */
-  function acceptRender() {
-    if (!photo || !selected || renderEntry?.state.kind !== "review") return;
-    const result: Composited = renderEntry.state.result;
+  /**
+   * Accept: save the preview as a new version, then show it. A refused or failed save keeps the
+   * old head and the preview; a retry reuses the same IDs and never makes a new render.
+   */
+  async function acceptRender() {
+    if (!photo || !selected || current?.state !== "done" || renderEntry?.state.kind !== "review" || acceptBusy.current) return;
+    const entry = renderEntry;
+    if (entry.state.kind !== "review") return; // narrows the type for TypeScript
+    const result: Composited = entry.state.result;
     const next: NormalizedPhoto = { blob: result.blob, width: result.width, height: result.height, hash: result.hash, warnings: [] };
-    const sameSize = result.width === photo.width && result.height === photo.height;
-    const part = sameSize && renderEntry.newMask ? refreshedPart(selected.slot, selected.label, renderEntry.newMask, next.hash) : null;
+    // Other parts keep their masks only for a blended result of the same size (SPEC 9).
+    const sameSize = result.width === photo.width && result.height === photo.height && result.composed;
+    const part = sameSize && entry.newMask ? refreshedPart(selected.slot, selected.label, entry.newMask, next.hash) : null;
+    const ready = readyStorage();
+    const saved = sessionRef.current;
+
+    // Read-only storage takes the in-memory path below: the edit shows here, says "not saved", never offers a retry.
+    if (saved && ready && !ready.readOnly && entry.ref) {
+      acceptBusy.current = true;
+      setAccept({ saving: true, error: null });
+      try {
+        const out = await acceptEdit(ready.h, saved, {
+          ref: entry.ref, ids: entry.ids, slot: selected.slot, mode, instruction: current.instruction,
+          result, refreshed: part,
+        });
+        if (out.status === "refused") {
+          // Refused before any write: the preview is dropped and nothing is repeated automatically.
+          setRender(null);
+          setPrepared(null);
+          setAccept({ saving: false, error: null });
+          setStaleNotice(out.message);
+          return;
+        }
+        setSession(out.session);
+      } catch (e) {
+        setAccept({ saving: false, error: saveErrorText(e) });
+        if (isStorageFull(e)) { setStorageFull("accept"); void refreshList(); }
+        return;
+      } finally {
+        acceptBusy.current = false;
+      }
+    }
+
     runAbort.current?.abort();
     autoDetect.current = null; // the confirmed bike stays; only the outline and the edited part refresh
+    partsDirty.current = true;
+    setBranchChoices(null);
+    setAccept({ saving: false, error: null });
+    setStorageFull(null);
     setPhoto(next);
     setMap((m) => partMapAfterEdit(m, next.hash, part, sameSize));
     setSelectedId(part?.id ?? null);
@@ -191,7 +558,11 @@ export function Workspace() {
     setRender(null);
     const controller = new AbortController();
     runAbort.current = controller;
-    void recutBike(next, setMap, controller.signal);
+    recutPending.current = true;
+    void recutBike(next, setMap, controller.signal).finally(() => {
+      // Only the newest recut clears the flag; the no-op update re-runs the save effect.
+      if (runAbort.current === controller) { recutPending.current = false; setMap((m) => ({ ...m })); }
+    });
   }
 
   function redetect() {
@@ -199,7 +570,9 @@ export function Workspace() {
     runAbort.current?.abort();
     const controller = new AbortController();
     runAbort.current = controller;
-    setMap((m) => ({ ...m, done: false, raw: {}, errors: [], requests: Object.fromEntries(Object.keys(m.requests).map((p) => [p, "pending"])) }));
+    partsDirty.current = true;
+    recutPending.current = false; // the fresh detection now owns the bike outline
+    setMap((m) => ({ ...m, done: false, bikeCarried: false, bikeStatus: "pending", bikeCandidates: [], bikeChoice: null, raw: {}, errors: [], requests: Object.fromEntries(Object.keys(m.requests).map((p) => [p, "pending"])) }));
     void buildPartMap(photo, setMap, controller.signal);
   }
 
@@ -216,85 +589,170 @@ export function Workspace() {
         message: error instanceof PreflightError ? error.message : "Preparing the change failed." } : p));
     }
   }
+
+  const head = session ? headVersion(session) : null;
+  const readOnly = storage?.status === "ready" && storage.readOnly;
+  const redoKids = session && head ? children(session.versions, head.id) : [];
+  const projectName = session?.project.name ?? (photo ? "Unsaved photo" : null);
+  const saveStatus = !photo ? null : !session ? "Not saved" : readOnly ? "Read-only: changes are not saved" : "Saved on this device";
+  const busy = navBusy || renderRunning || accept.saving || pointBusy;
+
   return (
-    <main className="flex flex-1 gap-4 p-4">
-      <section aria-label="Photo" className="flex flex-[2] items-center justify-center rounded-card border border-hairline bg-recess p-4">
-        {photo ? (
-          <ImageCanvas photo={photo} parts={view.parts} selectedId={selectedId} onImageClick={handleClick}
-            cursor={pointMode ? "crosshair" : "default"} />
-        ) : noticeAccepted ? <UploadDropzone onPhoto={choosePhoto} />
-          : <UploadNotice onAccept={() => setNoticeAccepted(true)} />}
-      </section>
-      <aside aria-label="Edit panel" className="flex w-[360px] shrink-0 flex-col gap-4 overflow-y-auto rounded-card border border-hairline bg-surface-1 p-4">
-        <h2 className="text-[20px] leading-[1.35]">Edit</h2>
-        {!photo && <p className="text-text-muted text-[13px]">Import a photo of your own bike to start.</p>}
-        {photo && (
-          <>
-            <BikeConfirm key={photo.hash} form={bikeForm} identifyStatus={identify.status} identifyMessage={identify.message} onChange={setBikeForm} />
-            {!map.done && <p role="status" className="text-text-secondary text-[13px]">Finding the bike and its parts…</p>}
-            {map.warnings.map((w) => (
-              <p key={w} className="rounded-chip bg-warning-soft px-3 py-2 text-warning-soft-text text-[13px]">
-                <span aria-hidden="true" className="mr-1 font-semibold">⚠</span>{w}
-              </p>
-            ))}
-            {map.errors.length > 0 && (
-              <div role="alert" className="rounded-chip bg-danger-soft px-3 py-2 text-danger-soft-text text-[13px]">
-                <span aria-hidden="true" className="mr-1 font-semibold">✕</span>
-                {map.errors.length === 1 ? map.errors[0] : `${map.errors.length} detection requests failed. ${map.errors[0]}`}
-              </div>
-            )}
-            {notice && <p role="status" className="rounded-chip bg-neutral-soft px-3 py-2 text-neutral-soft-text text-[13px]">{notice}</p>}
-            <PartSelector map={map} view={view} selected={selected} pointMode={pointMode} busy={!map.done || pointBusy}
-              onSelect={setSelectedId} onStartPoint={setPointMode} onCancelPoint={() => setPointMode(null)}
-              onFacing={(facing) => { setMap((m) => ({ ...m, facing })); setBikeForm((f) => editField(f, "facing", facing)); }}
-              onRedetect={redetect}
-              onSwapFacing={() => {
-                const next = map.facing === "left" ? "right" : "left";
-                setMap((m) => ({ ...m, facing: next }));
-                setBikeForm((f) => editField(f, "facing", next));
-              }}
-              onNextBike={() => setMap((m) => ({ ...m, bikeChoice: ((typeof m.bikeChoice === "number" ? m.bikeChoice : 0) + 1) % m.bikeCandidates.length }))} />
-            {selected && (
-              <section aria-label="Change the selected part" className="flex flex-col gap-3 border-t border-hairline pt-3">
-                <h3 className="text-[15px] font-semibold">Change: {selected.label}</h3>
-                {paintOnly ? (
-                  <p className="text-text-muted text-[12px]">{slotInfo(selected.slot).label} allows paint changes only.</p>
-                ) : (
-                  <div role="tablist" aria-label="Kind of change" className="flex gap-1">
-                    {(["text", "paint"] as const).map((m) => (
-                      <button key={m} type="button" role="tab" aria-selected={mode === m} onClick={() => setEditMode(m)}
-                        className={`rounded-full px-3 py-1 text-[13px] ${mode === m ? "bg-primary text-on-fill" : "border border-hairline"}`}>
-                        {m === "text" ? "Describe" : "Paint"}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {mode === "text"
-                  ? <DescribeForm key={`d-${selectionKey}`} partLabel={selected.label} busy={current?.state === "busy"} onPrepare={prepare} />
-                  : <PaintForm key={`p-${selectionKey}`} partLabel={selected.label} busy={current?.state === "busy"} onPrepare={prepare} />}
-                {current?.state === "busy" && <p role="status" className="text-text-secondary text-[13px]">Preparing the change…</p>}
-                {current?.state === "error" && (
+    <AppShell projectName={projectName} saveStatus={saveStatus} busy={busy}
+      canUndo={!!head && head.parentId !== null && !readOnly} canRedo={redoKids.length > 0 && !readOnly}
+      undoHint={readOnly ? "Local storage is read-only" : undefined} redoHint={readOnly ? "Local storage is read-only" : undefined}
+      onUndo={() => void navigate((h, s) => undoHead(h, s))}
+      onRedo={() => void navigate((h, s) => redoHead(h, s))}>
+      <main className="flex flex-1 gap-4 p-4">
+        <div className="flex min-w-0 flex-[2] flex-col gap-4">
+          <section aria-label="Photo" className="flex flex-1 items-center justify-center rounded-card border border-hairline bg-recess p-4">
+            {photo ? (
+              <ImageCanvas photo={photo} parts={view.parts} selectedId={selectedId} onImageClick={handleClick}
+                cursor={pointMode ? "crosshair" : "default"} />
+            ) : noticeAccepted ? <UploadDropzone onPhoto={(p) => void choosePhoto(p)} />
+              : <UploadNotice onAccept={() => setNoticeAccepted(true)} />}
+          </section>
+          {saveNote && (
+            <p role="alert" className="rounded-chip bg-warning-soft px-3 py-2 text-warning-soft-text text-[13px]">
+              <span aria-hidden="true" className="mr-1 font-semibold">⚠</span>{saveNote}
+            </p>
+          )}
+          {staleNotice && (
+            <p role="status" className="rounded-chip bg-neutral-soft px-3 py-2 text-neutral-soft-text text-[13px]">
+              <span aria-hidden="true" className="mr-1 font-semibold">ⓘ</span>{staleNotice}
+            </p>
+          )}
+          {navNote && (
+            <p role="status" className="rounded-chip bg-neutral-soft px-3 py-2 text-neutral-soft-text text-[13px]">
+              <span aria-hidden="true" className="mr-1 font-semibold">ⓘ</span>{navNote}
+            </p>
+          )}
+          {session && head && (
+            <VersionStrip versions={session.versions} headId={head.id} branchChoices={branchChoices} disabled={busy || readOnly}
+              onJump={(id) => void navigate((h, s) => jumpToVersion(h, s, id))}
+              onChooseBranch={(id) => { setBranchChoices(null); void navigate((h, s) => redoHead(h, s, id)); }}
+              onCancelChoice={() => setBranchChoices(null)} />
+          )}
+        </div>
+        <aside aria-label="Edit panel" className="flex w-[360px] shrink-0 flex-col gap-4 overflow-y-auto rounded-card border border-hairline bg-surface-1 p-4">
+          <h2 className="text-[20px] leading-[1.35]">Edit</h2>
+          {!photo && (
+            <>
+              <p className="text-text-muted text-[13px]">Import a photo of your own bike to start, or open a saved project.</p>
+              {savingProject && <p role="status" className="text-text-secondary text-[13px]">Saving the project…</p>}
+              <ProjectList state={list} busyId={listBusy} error={listError} onOpen={(id) => void openSaved(id)} onDelete={(id) => void deleteSaved(id)} />
+            </>
+          )}
+          {photo && (
+            <>
+              <BikeConfirm key={photo.hash} form={bikeForm} identifyStatus={identify.status} identifyMessage={identify.message} onChange={changeBike} />
+              {identifyCachedAt !== null && (
+                <p className="tabular text-text-muted text-[12px]">
+                  Suggestion reused from {new Date(identifyCachedAt).toLocaleDateString()} (saved on this device). No new AI call was made.
+                </p>
+              )}
+              {!map.done && <p role="status" className="text-text-secondary text-[13px]">Finding the bike and its parts…</p>}
+              {map.warnings.map((w) => (
+                <p key={w} className="rounded-chip bg-warning-soft px-3 py-2 text-warning-soft-text text-[13px]">
+                  <span aria-hidden="true" className="mr-1 font-semibold">⚠</span>{w}
+                </p>
+              ))}
+              {map.errors.length > 0 && (
+                <div role="alert" className="rounded-chip bg-danger-soft px-3 py-2 text-danger-soft-text text-[13px]">
+                  <span aria-hidden="true" className="mr-1 font-semibold">✕</span>
+                  {map.errors.length === 1 ? map.errors[0] : `${map.errors.length} detection requests failed. ${map.errors[0]}`}
+                </div>
+              )}
+              {notice && <p role="status" className="rounded-chip bg-neutral-soft px-3 py-2 text-neutral-soft-text text-[13px]">{notice}</p>}
+              <PartSelector map={map} view={view} selected={selected} pointMode={pointMode} busy={!map.done || pointBusy}
+                onSelect={setSelectedId} onStartPoint={setPointMode} onCancelPoint={() => setPointMode(null)}
+                onFacing={(facing) => { if (facingChangesParts(map)) partsDirty.current = true; setMap((m) => ({ ...m, facing })); setBikeForm((f) => editField(f, "facing", facing)); }}
+                onRedetect={redetect}
+                onSwapFacing={() => {
+                  const next = map.facing === "left" ? "right" : "left";
+                  if (facingChangesParts(map)) partsDirty.current = true;
+                  setMap((m) => ({ ...m, facing: next }));
+                  setBikeForm((f) => editField(f, "facing", next));
+                }}
+                onNextBike={() => { partsDirty.current = true; setMap((m) => ({ ...m, bikeChoice: ((typeof m.bikeChoice === "number" ? m.bikeChoice : 0) + 1) % m.bikeCandidates.length })); }} />
+              {selected && (
+                <section aria-label="Change the selected part" className="flex flex-col gap-3 border-t border-hairline pt-3">
+                  <h3 className="text-[15px] font-semibold">Change: {selected.label}</h3>
+                  {paintOnly ? (
+                    <p className="text-text-muted text-[12px]">{slotInfo(selected.slot).label} allows paint changes only.</p>
+                  ) : (
+                    <div role="tablist" aria-label="Kind of change" className="flex gap-1">
+                      {(["text", "paint"] as const).map((m) => (
+                        <button key={m} type="button" role="tab" aria-selected={mode === m} onClick={() => setEditMode(m)}
+                          className={`rounded-full px-3 py-1 text-[13px] ${mode === m ? "bg-primary text-on-fill" : "border border-hairline"}`}>
+                          {m === "text" ? "Describe" : "Paint"}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {mode === "text"
+                    ? <DescribeForm key={`d-${selectionKey}`} partLabel={selected.label} busy={current?.state === "busy"} onPrepare={prepare} />
+                    : <PaintForm key={`p-${selectionKey}`} partLabel={selected.label} busy={current?.state === "busy"} onPrepare={prepare} />}
+                  {current?.state === "busy" && <p role="status" className="text-text-secondary text-[13px]">Preparing the change…</p>}
+                  {current?.state === "error" && (
+                    <p role="alert" className="rounded-chip bg-danger-soft px-3 py-2 text-danger-soft-text text-[13px]">
+                      <span aria-hidden="true" className="mr-1 font-semibold">✕</span>{current.message}
+                    </p>
+                  )}
+                  {current?.state === "done" && (
+                    <InstructionPreview instruction={current.instruction} slotLabel={selected.label}
+                      rendering={renderRunning} onRender={() => void runRender(false)} />
+                  )}
+                  {current?.state === "done" && renderEntry && (
+                    <EditReview base={photo} state={renderEntry.state} onAccept={() => void acceptRender()}
+                      onReject={() => { setRender(null); setAccept({ saving: false, error: null }); setStorageFull((f) => (f === "accept" ? null : f)); }}
+                      onRetryBlend={() => void runRender(true)} onRenderAgain={() => void runRender(false)} onCancel={cancelRender}
+                      saving={accept.saving} saveError={accept.error} unsaved={!session || readOnly} readOnly={readOnly && !!session} />
+                  )}
+                </section>
+              )}
+              {storageFull && (
+                <section aria-label="Storage is full" className="flex flex-col gap-2 border-t border-hairline pt-3">
                   <p role="alert" className="rounded-chip bg-danger-soft px-3 py-2 text-danger-soft-text text-[13px]">
-                    <span aria-hidden="true" className="mr-1 font-semibold">✕</span>{current.message}
+                    <span aria-hidden="true" className="mr-1 font-semibold">✕</span>
+                    {storageFull === "accept"
+                      ? "Browser storage is full, so this change is not saved yet. What you see, including the paid preview, is kept in this tab only. Delete another saved project below, then press “Try saving again”; no new render is made."
+                      : storageFull === "parts"
+                      ? "Browser storage is full, so the detected parts are not saved. They stay on screen in this tab. Delete another saved project below, then press “Save the parts”."
+                      : "Browser storage is full, so this photo is not saved. What you see is kept in this tab only and is lost when you close the page. Delete a saved project below, then save this photo."}
                   </p>
-                )}
-                {current?.state === "done" && (
-                  <InstructionPreview instruction={current.instruction} slotLabel={selected.label}
-                    rendering={renderRunning} onRender={() => void runRender(false)} />
-                )}
-                {current?.state === "done" && renderEntry && (
-                  <EditReview base={photo} state={renderEntry.state} onAccept={acceptRender} onReject={() => setRender(null)}
-                    onRetryBlend={() => void runRender(true)} onRenderAgain={() => void runRender(false)} onCancel={cancelRender} />
-                )}
-              </section>
-            )}
-            <button type="button" onClick={() => choosePhoto(null)} disabled={pointBusy}
-              className="self-start rounded-full border border-hairline px-4 py-1.5 text-[13px] disabled:opacity-50">
-              Use a different photo
-            </button>
-          </>
-        )}
-      </aside>
-    </main>
+                  <ProjectList state={list} busyId={listBusy} error={listError} deleteOnly excludeId={session?.project.id ?? null}
+                    emptyText="There is no other saved project to delete. This project alone is too large to save here, so keep working unsaved."
+                    onOpen={() => undefined} onDelete={(id) => void deleteSaved(id)} />
+                  {storageFull === "parts" && (
+                    <button type="button" onClick={() => { partsDirty.current = true; setStorageFull(null); setMap((m) => ({ ...m })); }}
+                      className="self-start rounded-full bg-primary px-4 py-1.5 text-[13px] text-on-fill">
+                      Save the parts
+                    </button>
+                  )}
+                  {storageFull === "import" && (
+                    <>
+                      {/* Saving gives the photo a project, which ends any open preview; finish that first. */}
+                      {(render !== null || renderRunning || prepared?.state === "busy") && (
+                        <p className="text-text-muted text-[12px]">Accept or discard the preview first, then save this photo.</p>
+                      )}
+                      <button type="button" onClick={() => void saveUnsavedPhoto()}
+                        disabled={savingProject || render !== null || renderRunning || prepared?.state === "busy"}
+                        className="self-start rounded-full bg-primary px-4 py-1.5 text-[13px] text-on-fill disabled:opacity-50">
+                        {savingProject ? "Saving…" : "Save this photo"}
+                      </button>
+                    </>
+                  )}
+                </section>
+              )}
+              <button type="button" onClick={() => void choosePhoto(null)} disabled={pointBusy || renderRunning || accept.saving}
+                className="self-start rounded-full border border-hairline px-4 py-1.5 text-[13px] disabled:opacity-50">
+                Close project
+              </button>
+            </>
+          )}
+        </aside>
+      </main>
+    </AppShell>
   );
 }

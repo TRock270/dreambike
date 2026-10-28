@@ -18,10 +18,12 @@ function seriesRgb(n: number): [number, number, number] {
 }
 
 const FILL_ALPHA = 0.35;
+const STALE_ALPHA = 0.6;
 
 /**
  * Draws part masks at image resolution: 35% fill and an opaque outline in the
  * fixed slot color, about 2 screen px wide (the selected part gets twice that).
+ * Stale parts (not checked on this version) get only a dashed, lighter outline.
  * The parent stretches the canvas over exactly the displayed photo rectangle.
  */
 export function PartOverlay({ parts, selectedId, width, height, shownWidth, imageHash }: Props) {
@@ -36,9 +38,16 @@ export function PartOverlay({ parts, selectedId, width, height, shownWidth, imag
     const image = ctx.createImageData(width, height);
     const out = image.data;
     const imagePxPerScreenPx = width / shownWidth;
-    const ordered = [...parts.filter((p) => p.id !== selectedId), ...parts.filter((p) => p.id === selectedId)];
+    // Stale parts are drawn first (underneath), then current ones, the selected part last.
+    const ordered = [
+      ...parts.filter((p) => p.stale),
+      ...parts.filter((p) => !p.stale && p.id !== selectedId),
+      ...parts.filter((p) => !p.stale && p.id === selectedId),
+    ];
     for (const part of ordered) {
-      if (part.stale || part.imageHash !== imageHash || part.mask.width !== width || part.mask.height !== height) continue;
+      if (part.mask.width !== width || part.mask.height !== height) continue;
+      // A stale part keeps the mask of an earlier picture, so its hash differs by design.
+      if (!part.stale && part.imageHash !== imageHash) continue;
       const [r, g, b] = seriesRgb(slotInfo(part.slot).series);
       const screenPx = part.id === selectedId ? 4 : 2;
       const [l, t, rr, bb] = part.box;
@@ -48,7 +57,10 @@ export function PartOverlay({ parts, selectedId, width, height, shownWidth, imag
         for (let x = l; x < rr; x++) {
           const i = y * width + x;
           if (!part.mask.pixels[i]) continue;
-          const a = edge[(y - t) * bw + (x - l)] ? 1 : FILL_ALPHA;
+          const onEdge = edge[(y - t) * bw + (x - l)];
+          // Stale: dashed, half-transparent outline only, no fill. Not checked on this version.
+          const a = part.stale ? (onEdge && (((x + y) >> 3) & 1) === 0 ? STALE_ALPHA : 0) : onEdge ? 1 : FILL_ALPHA;
+          if (a === 0) continue;
           const o = i * 4;
           // Straight-alpha "over" on whatever earlier parts left in the buffer.
           const prevA = out[o + 3]! / 255;

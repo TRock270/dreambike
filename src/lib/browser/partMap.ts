@@ -8,7 +8,7 @@
 import { PAIRED_SLOTS, acceptableAsPart, assignFrontRear, clipToBike, maskArea, maskBox, unionMasks } from "../parts";
 import { runLimited } from "../queue";
 import { CORE_PHRASES, SLOTS } from "../slots";
-import type { BinaryMask, MapPart, PhotoRef, PhraseStatus, SegmentedObject, SlotId } from "../types";
+import type { BinaryMask, MapPart, Part, PhotoRef, PhraseStatus, SegmentedObject, SlotId, StoredMask } from "../types";
 import { PreflightError } from "./preflight";
 import { requestSegment } from "./segmentClient";
 
@@ -32,9 +32,13 @@ export type PartMapState = {
   errors: string[];
   warnings: string[];
   done: boolean;
+  /** The bike outline comes from the previous photo until recutBike replaces it; never persisted. */
+  bikeCarried?: boolean;
 };
 
-export type DerivedMap = { bike: MapPart | null; parts: MapPart[]; phrases: Record<string, PhraseStatus> };
+export type DerivedMap = { bike: MapPart | null; parts: MapPart[]; phrases: Record<string, PhraseStatus>;
+  /** True while the bike outline is the one carried over from the previous photo (not yet recut). */
+  bikeCarried?: boolean };
 
 export function emptyPartMap(imageHash = ""): PartMapState {
   return {
@@ -121,7 +125,8 @@ export function derive(state: PartMapState): DerivedMap {
       part: bikeObj ? makePart("bike", "custom", "Motorcycle", bikeObj.mask, source, bikeObj.confidence, state.imageHash) : null };
   }
   const bike = bikeCache.part;
-  const pointSlots = new Set(state.pointParts.filter((p) => p.slot !== "custom").map((p) => p.slot));
+  // Stale parts (carried over from an earlier photo) never replace a fresh detection.
+  const pointSlots = new Set(state.pointParts.filter((p) => p.slot !== "custom" && !p.stale).map((p) => p.slot));
   const parts: MapPart[] = [];
   const phrases: Record<string, PhraseStatus> = {};
   for (const phrase of CORE_PHRASES) {
@@ -132,14 +137,20 @@ export function derive(state: PartMapState): DerivedMap {
     // A point selection for a slot replaces the detected part for that slot.
     parts.push(...r.parts.filter((p) => !pointSlots.has(p.slot)));
   }
-  parts.push(...state.pointParts.filter((p) => p.imageHash === state.imageHash)
-    .map((p) => (bike ? clipPointPart(p, bike.mask) : p)).filter((p): p is MapPart => p !== null));
-  return { bike, parts, phrases };
+  // Fresh parts must belong to this photo. Stale parts keep their old hash and stay as they are
+  // (visible, never selectable); a slot that has a fresh part drops its stale one.
+  const fresh = state.pointParts.filter((p) => !p.stale && p.imageHash === state.imageHash)
+    .map((p) => (bike ? clipPointPart(p, bike.mask) : p)).filter((p): p is MapPart => p !== null);
+  parts.push(...fresh);
+  const freshSlots = new Set(parts.map((p) => p.slot));
+  parts.push(...state.pointParts.filter((p) => p.stale && (p.slot === "custom" || !freshSlots.has(p.slot))));
+  return { bike, parts, phrases, bikeCarried: !!state.bikeCarried && state.bikeChoice !== "point" };
 }
 
+// Keeps source and the stale flag; only the mask is clipped.
 function clipPointPart(part: MapPart, bike: BinaryMask): MapPart | null {
-  const mask = clipToBike(part.mask, bike);
-  return makePart(part.id, part.slot, part.label, mask, "point", part.confidence, part.imageHash);
+  const made = makePart(part.id, part.slot, part.label, clipToBike(part.mask, bike), part.source, part.confidence, part.imageHash);
+  return made && { ...made, stale: part.stale };
 }
 
 type Update = (fn: (s: PartMapState) => PartMapState) => void;
@@ -222,9 +233,14 @@ export function partMapAfterEdit(previous: PartMapState, imageHash: string, refr
   // For a same-size result the old outline stays in use until the background recut replaces it,
   // so the blend radius keeps coming from the bike, not from the photo width.
   const keep = sameSize ? currentBike(previous) : null;
+  // Other parts of a same-size result stay on the map as stale (SPEC 9): shown, not selectable.
+  // A size change drops them, because their masks no longer fit the raster.
+  const inherited = sameSize
+    ? derive(previous).parts.filter((p) => p.slot === "custom" || p.slot !== refreshed?.slot).map((p) => ({ ...p, stale: true }))
+    : [];
   return { ...emptyPartMap(imageHash), facing: previous.facing, done: true,
-    bikeCandidates: keep ? [keep] : [], bikeChoice: keep ? 0 : null, bikeStatus: keep ? "found" : "pending",
-    requests: Object.fromEntries(CORE_PHRASES.map((p) => [p, "stale"])), pointParts: refreshed ? [refreshed] : [] };
+    bikeCandidates: keep ? [keep] : [], bikeChoice: keep ? 0 : null, bikeStatus: keep ? "found" : "pending", bikeCarried: !!keep,
+    requests: Object.fromEntries(CORE_PHRASES.map((p) => [p, "stale"])), pointParts: refreshed ? [refreshed, ...inherited] : inherited };
 }
 
 /** Re-detect the outline of the bike only (after an accepted edit). */
@@ -233,7 +249,7 @@ export async function recutBike(photo: PhotoRef, update: Update, signal?: AbortS
     const cut = await requestSegment(photo, { mode: "concept", phrase: "motorcycle" }, signal);
     const ranked = rankBikes(cut.objects);
     update((s) => (s.imageHash !== photo.hash ? s : { ...s, bikeCandidates: ranked, bikeChoice: ranked.length ? 0 : null,
-      bikeStatus: ranked.length ? "found" : "none" }));
+      bikeStatus: ranked.length ? "found" : "none", bikeCarried: false }));
   } catch (error) {
     if (signal?.aborted) return;
     update((s) => (s.imageHash !== photo.hash ? s : { ...s, bikeStatus: "error", errors: [...s.errors, messageOf(error, "Bike outline")] }));
@@ -243,4 +259,74 @@ export async function recutBike(photo: PhotoRef, update: Update, signal?: AbortS
 /** Make a part from a mask (used for the edited part after an accepted render). */
 export function refreshedPart(slot: SlotId, label: string, mask: BinaryMask, imageHash: string): MapPart | null {
   return makePart(`point:${slot}:accepted:${imageHash.slice(0, 12)}`, slot, label, mask, "point", null, imageHash);
+}
+
+// ---- Persistence glue (SPEC 9): pure conversions, no IndexedDB ----
+
+/** A StoredMask to a BinaryMask; wrong size, wrong hash, or non-0/1 bytes are rejected. */
+export function storedMaskToBinary(m: StoredMask, expectedHash?: string): BinaryMask {
+  if (expectedHash !== undefined && m.imageHash !== expectedHash) throw new Error(`Mask ${m.id} belongs to another photo.`);
+  checkPixels(m.id, m.width, m.height, m.pixels);
+  return { width: m.width, height: m.height, pixels: m.pixels.slice() };
+}
+
+/** A BinaryMask to a StoredMask for one image hash; bytes are copied and checked. */
+export function binaryToStoredMask(mask: BinaryMask, imageHash: string, id: string, now: number): StoredMask {
+  checkPixels(id, mask.width, mask.height, mask.pixels);
+  return { id, imageHash, width: mask.width, height: mask.height, pixels: mask.pixels.slice(), createdAt: now };
+}
+
+function checkPixels(id: string, width: number, height: number, pixels: Uint8Array): void {
+  if (pixels.length !== width * height) throw new Error(`Mask ${id} has ${pixels.length} bytes, expected ${width * height}.`);
+  for (let i = 0; i < pixels.length; i++) if (pixels[i] !== 0 && pixels[i] !== 1) throw new Error(`Mask ${id} has a byte that is not 0 or 1.`);
+}
+
+export type RestoredPart = { part: Part; mask: StoredMask };
+
+/**
+ * The map for a reopened version. Nothing runs automatically: phrases without a restored part
+ * stay "stale", which shows "Detect parts again". Non-stale parts must have a mask for this exact
+ * photo; stale ones keep their old mask (older hash) and are shown disabled.
+ */
+export function restoredPartMap(photo: { hash: string; width: number; height: number }, bike: BinaryMask | null,
+  parts: RestoredPart[], facing: Facing): PartMapState {
+  const imageHash = photo.hash;
+  const fits = (m: BinaryMask) => m.width === photo.width && m.height === photo.height;
+  if (bike && !fits(bike)) throw new Error("The bike outline does not match the photo size.");
+  const mapParts: MapPart[] = parts.map(({ part, mask }) => {
+    const binary = storedMaskToBinary(mask, part.stale ? undefined : imageHash);
+    if (!fits(binary)) throw new Error(`Mask ${mask.id} does not match the photo size.`);
+    return { id: part.id, slot: part.slot, label: part.label, mask: binary, area: part.area, box: part.box, source: part.source,
+      confidence: part.confidence, stale: part.stale, imageHash: part.stale ? mask.imageHash : imageHash };
+  });
+  const bikeBox = bike ? maskBox(bike) : null;
+  const candidate: SegmentedObject | null = bike && bikeBox ? { mask: bike, box: bikeBox, confidence: null } : null;
+  return { ...emptyPartMap(imageHash), facing, done: true,
+    bikeCandidates: candidate ? [candidate] : [], bikeChoice: candidate ? 0 : null, bikeStatus: candidate ? "found" : "none",
+    requests: Object.fromEntries(CORE_PHRASES.map((p) => [p, "stale"])), pointParts: mapParts };
+}
+
+export type PersistedParts = { bikeMask: StoredMask | null; parts: Part[]; masks: StoredMask[] };
+
+/**
+ * The derived view as Part[] plus StoredMask records for attachParts. Fresh masks are stored
+ * under imageHash. A stale part reuses its old maskId from existingMaskIds (no new record);
+ * without one, its mask is stored under the part's own older hash.
+ */
+export function partsToPersisted(view: DerivedMap, imageHash: string, newId: () => string, now: number,
+  existingMaskIds: ReadonlyMap<string, string> = new Map()): PersistedParts {
+  const masks: StoredMask[] = [];
+  const bikeMask = view.bike && !view.bikeCarried ? binaryToStoredMask(view.bike.mask, imageHash, newId(), now) : null;
+  const parts: Part[] = view.parts.map((p) => {
+    let maskId = p.stale ? existingMaskIds.get(p.id) : undefined;
+    if (!maskId) {
+      if (!p.stale && p.imageHash !== imageHash) throw new Error(`Part ${p.id} belongs to another photo.`);
+      const stored = binaryToStoredMask(p.mask, p.stale ? p.imageHash : imageHash, newId(), now);
+      masks.push(stored);
+      maskId = stored.id;
+    }
+    return { id: p.id, slot: p.slot, label: p.label, box: p.box, maskId, area: p.area, source: p.source,
+      confidence: p.confidence, stale: p.stale };
+  });
+  return { bikeMask, parts, masks };
 }
