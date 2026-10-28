@@ -1,0 +1,63 @@
+@import "tailwindcss";
+@import "../styles/tokens.css";
+
+/* Tailwind utilities generated from the Nordlicht tokens (no raw colors here). */
+@theme inline {
+  --color-canvas: var(--nl-canvas);
+  --color-surface-1: var(--nl-surface-1);
+  --color-surface-2: var(--nl-surface-2);
+  --color-surface-3: var(--nl-surface-3);
+  --color-recess: var(--nl-recess);
+  --color-hairline: var(--nl-hairline);
+  --color-text: var(--nl-text);
+  --color-text-secondary: var(--nl-text-secondary);
+  --color-text-muted: var(--nl-text-muted);
+  --color-on-fill: var(--nl-text-on-fill);
+  --color-primary: var(--nl-primary-fill);
+  --color-primary-ink: var(--nl-primary-ink);
+  --color-primary-soft: var(--nl-primary-soft);
+  --color-primary-soft-text: var(--nl-primary-soft-text);
+  --color-accent-fill: var(--nl-accent-fill);
+  --color-accent-soft: var(--nl-accent-soft);
+  --color-accent-soft-text: var(--nl-accent-soft-text);
+  --color-success-soft: var(--nl-success-soft);
+  --color-success-soft-text: var(--nl-success-soft-text);
+  --color-warning-soft: var(--nl-warning-soft);
+  --color-warning-soft-text: var(--nl-warning-soft-text);
+  --color-danger-fill: var(--nl-danger-fill);
+  --color-danger-soft: var(--nl-danger-soft);
+  --color-danger-soft-text: var(--nl-danger-soft-text);
+  --color-neutral-soft: var(--nl-neutral-soft);
+  --color-neutral-soft-text: var(--nl-neutral-soft-text);
+
+  --radius-inner: var(--nl-radius-inner);
+  --radius-chip: var(--nl-radius-chip);
+  --radius-card: var(--nl-radius-card);
+  --radius-dialog: var(--nl-radius-dialog);
+
+  --font-sans: var(--font-plex-sans);
+  --font-mono: var(--font-plex-mono);
+}
+
+html,
+body {
+  background: var(--nl-canvas);
+  color: var(--nl-text);
+  font-size: var(--nl-text-body);
+  line-height: var(--nl-leading-body);
+}
+
+h1 { font-size: var(--nl-text-h1); line-height: var(--nl-leading-h1); font-weight: 600; }
+h2 { font-size: var(--nl-text-h2); line-height: var(--nl-leading-h2); font-weight: 600; }
+h3 { font-size: var(--nl-text-h3); line-height: var(--nl-leading-h3); font-weight: 600; }
+
+/* Flat: no shadows anywhere; surfaces are separated by the hairline border. */
+* { box-shadow: none; }
+
+/* Hard visible focus ring in primary, never a glow. */
+:focus-visible {
+  outline: 2px solid var(--nl-primary-fill);
+  outline-offset: 2px;
+}
+
+.tabular { font-family: var(--font-plex-mono); font-variant-numeric: tabular-nums; }

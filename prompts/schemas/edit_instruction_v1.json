@@ -15,6 +15,7 @@
           "maxLength": 4000
         },
         "spec": {
+          "maxItems": 20,
           "type": "array",
           "items": {
             "type": "object",
@@ -35,8 +36,7 @@
               "value"
             ],
             "additionalProperties": false
-          },
-          "maxItems": 20
+          }
         },
         "intent": {
           "type": "string",
@@ -47,12 +47,12 @@
           ]
         },
         "warnings": {
+          "maxItems": 8,
           "type": "array",
           "items": {
             "type": "string",
             "maxLength": 2000
-          },
-          "maxItems": 8
+          }
         }
       },
       "required": [

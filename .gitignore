@@ -33,3 +33,6 @@ __pycache__/
 
 # Local copy of the official participant guide (not republished)
 RULES.md
+
+# Owner photo drop folder (private originals, never committed)
+my_bike/

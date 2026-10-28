@@ -1,0 +1,96 @@
+/*
+ * Nordlicht tokens, light and flat (PLAN.md 8.4).
+ * Token values predate the hackathon (owner's design system); this stylesheet
+ * was written during the event. This is the only file with hex color values.
+ */
+:root {
+  /* Surfaces */
+  --nl-canvas: #d3e3f5;
+  --nl-surface-1: #e2edfb;
+  --nl-surface-2: #eff6fe;
+  --nl-surface-3: #f7fbff;
+  --nl-recess: #c3d8f0;
+  --nl-hairline: rgba(13, 26, 43, 0.13);
+
+  /* Text */
+  --nl-text: #0d1a2b;
+  --nl-text-secondary: #395067;
+  --nl-text-muted: #4a6378;
+  --nl-text-on-fill: #ffffff;
+
+  /* Roles: fill carries white text, ink is colored text, soft is a ground with soft-text on it */
+  --nl-primary-fill: #0a7c9e;
+  --nl-primary-ink: #0b6076;
+  --nl-primary-soft: #b9eef8;
+  --nl-primary-soft-text: #07485a;
+
+  --nl-accent-fill: #5b50f0;
+  --nl-accent-ink: #4338ca;
+  --nl-accent-soft: #dad8ff;
+  --nl-accent-soft-text: #312e81;
+
+  --nl-success-fill: #15803d;
+  --nl-success-ink: #116b33;
+  --nl-success-soft: #bdf0d1;
+  --nl-success-soft-text: #0e5c2c;
+
+  --nl-warning-fill: #c2410c;
+  --nl-warning-ink: #9a4708;
+  --nl-warning-soft: #fde6b8;
+  --nl-warning-soft-text: #7a3706;
+
+  --nl-danger-fill: #d11440;
+  --nl-danger-ink: #a50f34;
+  --nl-danger-soft: #ffd3dc;
+  --nl-danger-soft-text: #93102f;
+
+  --nl-neutral-soft: #c8daee;
+  --nl-neutral-soft-text: #25384d;
+
+  /* Part-map series, fixed order, never reassigned (SPEC 10) */
+  --nl-series-1: #0891b2;
+  --nl-series-2: #5b50f0;
+  --nl-series-3: #e11d48;
+  --nl-series-4: #0d9488;
+  --nl-series-5: #d2600b;
+  --nl-series-6: #8b5cf6;
+  --nl-series-7: #4d7c0f;
+  --nl-series-8: #475569;
+
+  /* Radius */
+  --nl-radius-inner: 6px;
+  --nl-radius-chip: 10px;
+  --nl-radius-card: 14px;
+  --nl-radius-dialog: 18px;
+  --nl-radius-pill: 9999px;
+
+  /* Type scale: size / line-height */
+  --nl-text-h1: 34px;
+  --nl-leading-h1: 1.18;
+  --nl-text-h2: 26px;
+  --nl-leading-h2: 1.25;
+  --nl-text-h3: 20px;
+  --nl-leading-h3: 1.35;
+  --nl-text-body: 15px;
+  --nl-leading-body: 1.6;
+  --nl-text-small: 13px;
+  --nl-leading-small: 1.5;
+  --nl-text-caption: 12px;
+  --nl-leading-caption: 1.45;
+
+  /* shadcn-compatible semantic names point at Nordlicht tokens */
+  --background: var(--nl-canvas);
+  --card: var(--nl-surface-1);
+  --muted: var(--nl-surface-2);
+  --accent: var(--nl-surface-2); /* shadcn "accent" is a hover ground, not the brand accent */
+  --popover: var(--nl-surface-3);
+  --foreground: var(--nl-text);
+  --muted-foreground: var(--nl-text-muted);
+  --primary: var(--nl-primary-fill);
+  --ring: var(--nl-primary-fill);
+  --primary-foreground: var(--nl-text-on-fill);
+  --destructive: var(--nl-danger-fill);
+  --border: var(--nl-hairline);
+  --input: var(--nl-hairline);
+  --radius: var(--nl-radius-card);
+}

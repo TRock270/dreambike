@@ -1,0 +1,174 @@
+{
+  "type": "object",
+  "properties": {
+    "products": {
+      "maxItems": 5,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "brand": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "partNumber": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 2048,
+            "pattern": "^https:\\/\\/.*"
+          },
+          "imageUrl": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048,
+                "pattern": "^https:\\/\\/.*"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "priceText": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "priceEurCents": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100000000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "taxBasis": {
+            "type": "string",
+            "enum": [
+              "gross",
+              "net",
+              "unknown"
+            ]
+          },
+          "approval": {
+            "type": "string",
+            "enum": [
+              "abe",
+              "e_mark",
+              "teilegutachten",
+              "none",
+              "unknown"
+            ]
+          },
+          "approvalText": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fulfillmentRegion": {
+            "type": "string",
+            "enum": [
+              "eu",
+              "outside_eu",
+              "unknown"
+            ]
+          },
+          "source": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string",
+                "maxLength": 2048,
+                "pattern": "^https:\\/\\/.*"
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "supports": {
+                "type": "string",
+                "maxLength": 2000
+              }
+            },
+            "required": [
+              "url",
+              "title",
+              "supports"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "name",
+          "brand",
+          "partNumber",
+          "url",
+          "imageUrl",
+          "priceText",
+          "priceEurCents",
+          "taxBasis",
+          "approval",
+          "approvalText",
+          "fulfillmentRegion",
+          "source"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "warnings": {
+      "maxItems": 8,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 2000
+      }
+    }
+  },
+  "required": [
+    "products",
+    "warnings"
+  ],
+  "additionalProperties": false
+}
