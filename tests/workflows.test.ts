@@ -378,3 +378,61 @@ describe("fix-until-green models", () => {
     expect(result.status).toBe("needs_lead");
   });
 });
+
+describe("fix-until-green keeps Opus wherever review-changes calls security-reviewer", () => {
+  // Every literal security path from the review-changes RULES, plus suffixed
+  // variants, because some rules there have no end anchor.
+  const SECURITY_PATHS = [
+    "budget/reserve.lua", "src/lib/server/budget.ts", "src/lib/server/config.ts", "src/lib/server/fetch-product.ts",
+    "src/lib/server/meta.ts", "src/lib/server/http.ts", "src/lib/server/paid.ts", "tests/budget.test.ts",
+    "src/app/api/edit/route.ts", "spike/ledger.py", "spike/common.py", "spike/deployment.py", "spike/run_all.py",
+    "spike/responses_sam.py", "spike/responses_spark.py", "spike/images_edits.py", "spike/asr_transcribe.py",
+    "spike/files.py", "spike/requirements.txt", "next.config.ts", ".env.example", ".gitignore",
+    ".claude/workflows/x.js", ".claude/agents/x.md", "src/middleware.ts", "src/proxy.ts", "src/lib/contracts.ts",
+    "src/lib/errors.ts", "package.json", "package-lock.json", "vercel.json", "vitest.config.ts", "eslint.config.mjs",
+    "tests/config.test.ts", "tests/fetch-product.test.ts", "tests/http.test.ts", "tests/deployment.test.ts",
+    "tests/workflows.test.ts", "tests/paid.test.ts", "tests/support/workflowHarness.ts",
+    "src/components/BudgetBanner.tsx", "src/components/ErrorNotice.tsx", "src/components/DemoBanner.tsx",
+    "src/components/ModeBanner.tsx",
+  ];
+  const probes = SECURITY_PATHS.flatMap((p) => [p, `${p}x`, `${p}.bak`]);
+
+  it.each(probes)("%s", async (file) => {
+    const { calls: reviewCalls } = await review({ paths: [file] }, { files: [file] });
+    const routed = Boolean(reviewCall(reviewCalls, "security-reviewer"));
+    // The listed paths themselves must route to security; suffixed variants only where a rule has no end anchor.
+    if (SECURITY_PATHS.includes(file)) expect(routed).toBe(true);
+    if (!routed) return;
+    const { calls } = await fixUntilGreen({ file });
+    expect(calls.find((c) => c.label === "review fixes")).toMatchObject({ model: undefined, effort: "medium" });
+  });
+
+  it("a suffixed server path fails on the card review even when Sonnet would approve", async () => {
+    const file = "src/lib/server/meta.tsx";
+    const { result, calls } = await runWorkflow("fix-until-green.js", undefined, (opts: AgentOpts) => {
+      const label = opts.label ?? "";
+      if (label === "check r1") {
+        return {
+          checks: FIX_CHECKS.map((command) => ({ command, result: command === "npm test" ? "fail" : "pass", output: "o" })),
+          failures: [{ check: "npm test", file, message: "m" }],
+        };
+      }
+      if (label.startsWith("check")) return { checks: FIX_CHECKS.map((command) => ({ command, result: "pass", output: "ok" })), failures: [] };
+      if (label.startsWith("fix")) return { filesChanged: [file], fixed: ["x"], notFixed: [] };
+      if (label === "review fixes") {
+        return opts.model === "sonnet" ? approve : changes([finding("F1", "major", file)]);
+      }
+      return null;
+    });
+    expect(calls.find((c) => c.label === "review fixes")?.model).toBeUndefined();
+    expect(result.status).toBe("green_fix_review_failed");
+  });
+});
+
+describe("malformed JSON args are blocked", () => {
+  it.each(["build-ticket.js", "fix-until-green.js", "review-changes.js"])("%s", async (name) => {
+    const { result, calls } = await runWorkflow(name, "{", () => null);
+    expect(result.status).toBe("blocked");
+    expect(calls).toHaveLength(0);
+  });
+});

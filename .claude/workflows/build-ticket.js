@@ -31,11 +31,15 @@ const MAX_REVIEWERS_PER_UNIT = 3
 function parseArgs(raw) {
   if (typeof raw !== 'string') return raw || {}
   const text = raw.trim()
-  if (text.startsWith('{')) return JSON.parse(text)
+  if (text.startsWith('{')) {
+    try { return JSON.parse(text) }
+    catch (error) { return { parseError: error.message } }
+  }
   const words = text.split(/\s+/)
   return { ticket: words[0], goal: words.slice(1).join(' ') }
 }
 const input = parseArgs(args)
+if (input.parseError) return { status: 'blocked', blockers: [`args are not valid JSON: ${input.parseError}`] }
 if (!input.ticket) throw new Error('build-ticket needs a ticket id, e.g. "T2" or {ticket: "T2"}')
 const ticket = input.ticket
 const goal = input.goal ? `Lead's goal for this run: ${input.goal}` : ''

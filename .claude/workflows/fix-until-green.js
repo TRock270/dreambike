@@ -22,17 +22,22 @@ const BUILDERS = [
 const builderFor = (file) => (BUILDERS.find((b) => b.re.test(file)) || { builder: 'general-builder' }).builder
 // ../CLAUDE.md wants an Opus review for security work. These are the spend-cap,
 // secret and route paths of the security-reviewer RULES in review-changes.js;
-// keep both lists in step. Fix reviews of other files run on Sonnet.
-const OPUS_REVIEW_RE = /^(budget\/|src\/lib\/server\/(budget|config|fetch-product|meta|http|paid)\.ts$|src\/app\/api\/|spike\/(ledger|common|deployment|run_all|responses_sam|responses_spark|images_edits|asr_transcribe|files)\.py$|spike\/requirements\.txt$|next\.config\.ts$|vercel\.json$|\.env\.example$|\.gitignore$|\.claude\/|package(-lock)?\.json$|src\/(middleware|proxy)\.ts$|src\/lib\/(contracts|errors)\.ts$|vitest\.config\.ts$|eslint\.config\.mjs$|src\/components\/(BudgetBanner|ErrorNotice|DemoBanner|ModeBanner)\.tsx$|tests\/(budget|config|fetch-product)|tests\/(http|deployment|paid|workflows)[^/]*\.test\.ts$|tests\/support\/workflowHarness\.ts$)/
+// keep both lists in step. Where a rule has no end anchor, this one has none
+// either, so it stays a superset. Fix reviews of other files run on Sonnet.
+const OPUS_REVIEW_RE = /^(budget\/|src\/lib\/server\/(budget|config|fetch-product|meta|http|paid)\.ts|src\/app\/api\/|spike\/(ledger|common|deployment|run_all|responses_sam|responses_spark|images_edits|asr_transcribe|files)\.py|spike\/requirements\.txt$|next\.config\.ts|vercel\.json$|\.env\.example$|\.gitignore$|\.claude\/|package(-lock)?\.json$|src\/(middleware|proxy)\.ts|src\/lib\/(contracts|errors)\.ts$|vitest\.config\.ts$|eslint\.config\.mjs$|src\/components\/(BudgetBanner|ErrorNotice|DemoBanner|ModeBanner)\.tsx$|tests\/(budget|config|fetch-product)|tests\/(http|deployment|paid|workflows)[^/]*\.test\.ts$|tests\/support\/workflowHarness\.ts$)/
 
 // Args arrive as an object, a JSON string, or one plain check command like "npm test".
 function parseArgs(raw) {
   if (typeof raw !== 'string') return raw || {}
   const text = raw.trim()
-  if (text.startsWith('{')) return JSON.parse(text)
+  if (text.startsWith('{')) {
+    try { return JSON.parse(text) }
+    catch (error) { return { parseError: error.message } }
+  }
   return text ? { checks: [text] } : {}
 }
 const input = parseArgs(args)
+if (input.parseError) return { status: 'blocked', blockers: [`args are not valid JSON: ${input.parseError}`] }
 const checks = input.checks || ['npm run typecheck', 'npm run lint', 'npm test', 'npm run build']
 const maxRounds = Math.min(Math.max(input.maxRounds || 3, 1), 4)
 if (!Array.isArray(checks) || !checks.length || checks.some((c) => typeof c !== 'string' || !c.trim())
