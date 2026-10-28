@@ -768,3 +768,47 @@ For each completed ticket append actual date/time ET, files changed, checks and 
   Gemini was not asked.
 - Follow-ups: the owner adds VISITOR_HASH_SECRET to .env.local; point clicks (T3); T8/T9 flag brake, axle and final-drive fit as "verify" on wheel references; there is no DOM test for the dropzone gating; reference renders vary a lot from run to run (7 renders for 2 accepts), so the demo should budget retries.
 
+
+### T7 owner follow-ups — 2026-10-28, about 17:00–18:00 ET (build-ticket workflow, lead fixes, mock browser check)
+
+- Owner's own live session (owner-run, BUDGET_TICKET=T8, caps $1): no banner, notice, import and detection fine, describe "works perfectly", Close project fine; point selection does not work (known, T3). The owner added VISITOR_HASH_SECRET to .env.local (checked by length only, value never printed). Owner asks: a larger preview before Accept or Render again, a "Do the same for the other wheel?" step, and a Download button (results otherwise live only in the browser's IndexedDB "dreambike"). Owner choice: Yes does everything up to Render.
+- Files:
+  - src/components/BeforeAfter.tsx: "View larger" (also a click on the image) opens a native modal dialog with Fit / Actual size, Download image and Close. Download re-encodes the after image as JPEG on the device. A mock result gets MOCK in its file name and a label band in its pixels.
+  - src/components/EditReview.tsx: passes the mock flag.
+  - src/lib/browser/partMap.ts: otherWheelSlot, followUpPart.
+  - src/lib/editPolicy.ts: paintRequestText, retargetPaintText (PaintForm uses the same helper).
+  - src/components/Workspace.tsx: offer card after a wheel accept. Yes re-detects (skipped when the other wheel is already fresh), selects the other wheel in the same mode, and prepares once (text; paint retargeted). Reference mode only prefills and asks for the other wheel's own reference photo. Render stays a manual click. Accepting the follow-up wheel makes no new offer. A manual selection, point pick or Prepare ends the follow-up.
+  - src/components/DescribeForm.tsx, PaintForm.tsx, ReferenceDropzone.tsx: initialText or the shared paint helper.
+  - tests/partmap.test.ts, tests/spark.test.ts: new helper tests.
+- Workflow: build-ticket, 4 units (A, B1, B2 split off as editPolicy, B3), all approved; B3 needed round 2 (shop-reviewer: the front/rear offer loop, fixed). Verify checks all passed. The done-when gate did not run (the account's spend limit was hit); this work adds no T7 acceptance items, so the gate is not needed for it.
+- Lead fixes of reviewer minors after the run:
+  - reference-off notice order;
+  - prefill cleared in resetWork;
+  - Yes skips a second detection;
+  - point pick and manual Prepare end the follow-up;
+  - "not found" vs "detection failed" notice;
+  - step 2 waits while saving or navigating;
+  - the dialog fit uses both aspects and 70vh;
+  - no aria-pressed on the swapping label;
+  - delayed revoke of the download URL;
+  - mock text uses MOCK_LABEL.
+  review-changes quick: green with two minors, then the mock label band and the slot clear were added; review-changes quick again: green; minors recorded, not changed: no test drives the two follow-up effects (no DOM test setup; the helpers are tested and the mock browser run covered the flow), and toJpeg has no white fill under transparent pixels (renders are opaque).
+- Browser check ($0, MOCK=1, headless Chrome, fresh profile deleted after):
+  - The dialog opens with Close focused, Actual size / Fit toggle.
+  - Download gives dreambike-preview-MOCK-20261028-1739.jpg, image/jpeg, 2048x1536. Headless Chrome does not write files, so the anchor was intercepted. This was before the label band, which is untested in a browser.
+  - Front accept shows "Do the same for the rear wheel?". Yes selects Rear wheel, prefills the same text and prepares it.
+  - Requests: instruction 2 (front manual, rear automatic once), edit 1 until the manual Render click.
+  - Rear accept: no new offer. History Start, Step 1, Step 2.
+- Checks: typecheck, lint, build pass; npm test 417 passed in 19 files; local_images.py --fixture-set all 71 passed.
+- Consultants: PAL chat nim-nemotron35 on BeforeAfter.tsx, editPolicy.ts and a follow-up excerpt of Workspace.tsx. 15 points, each checked against the code:
+  - Adopted: clear the remembered follow-up slot when the wheel is not found. It was harmless, because every manual selection clears it too.
+  - Rejected:
+    - "the dialog opens empty": tested, the content and the focus are there;
+    - "clickable div not keyboard reachable": the View larger button is the keyboard path;
+    - "Yes always re-detects": misread, the detection runs only when the wheel is missing;
+    - "stuck followUpSent flag" and "effect overrides a manual choice": the follow-up is cleared in the same pass, and manual selection clears it;
+    - "mode mismatch": caught by the first branch;
+    - "unhandled prepare rejection": prepare catches internally;
+    - the rest are flicker, performance or abort nits with no user-visible failure.
+  Gemini was not asked.
+- Open: an owner check in a real browser (the Download file in Finder, and the follow-up with real parts, about $0.07); point clicks (T3).

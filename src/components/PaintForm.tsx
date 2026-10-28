@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { paintRequestText } from "@/lib/editPolicy";
 
 type Props = { partLabel: string; busy: boolean; onPrepare: (text: string) => void };
 
@@ -13,7 +14,7 @@ export function PaintForm({ partLabel, busy, onPrepare }: Props) {
   const [details, setDetails] = useState("");
   const text = [`${finish} ${color.trim()}`.trim(), details.trim()].filter(Boolean).join(", ");
   return (
-    <form className="flex flex-col gap-2" onSubmit={(e) => { e.preventDefault(); if (color.trim()) onPrepare(`Paint the ${partLabel.toLowerCase()}: ${text}`); }}>
+    <form className="flex flex-col gap-2" onSubmit={(e) => { e.preventDefault(); if (color.trim()) onPrepare(paintRequestText(partLabel, text)); }}>
       <label className="flex flex-col gap-1 text-[13px]">
         Color
         <input value={color} onChange={(e) => setColor(e.target.value)} maxLength={100} placeholder="For example: black, deep red"

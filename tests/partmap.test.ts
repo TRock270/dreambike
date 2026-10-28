@@ -1,6 +1,6 @@
 // Pure part-map derivation: facing and bike choices survive late detection results.
 import { describe, expect, it } from "vitest";
-import { binaryToStoredMask, derive, emptyPartMap, partMapAfterEdit, partsForPhrase, partsToPersisted, restoredPartMap, storedMaskToBinary, type PartMapState } from "@/lib/browser/partMap";
+import { binaryToStoredMask, derive, emptyPartMap, followUpPart, otherWheelSlot, partMapAfterEdit, partsForPhrase, partsToPersisted, restoredPartMap, storedMaskToBinary, type PartMapState } from "@/lib/browser/partMap";
 import { hitTest } from "@/lib/coordinates";
 import { maskArea, maskBox } from "@/lib/parts";
 import { CORE_PHRASES } from "@/lib/slots";
@@ -180,5 +180,46 @@ describe("stale parts and persistence", () => {
     expect(Object.values(v.phrases)).not.toContain("pending");
     expect(hitTest(v.parts, { x: 50, y: 15 }, { width: W, height: H, hash: "h2" })?.id).toBe("point:tank:1");
     expect(derive(restoredPartMap(PHOTO, null, [], "unknown")).phrases["wheel"]).toBe("stale");
+  });
+});
+
+describe("other-wheel helpers", () => {
+  it("maps the wheel pair both ways and gives null for other slots", () => {
+    expect(otherWheelSlot("wheel_front")).toBe("wheel_rear");
+    expect(otherWheelSlot("wheel_rear")).toBe("wheel_front");
+    expect(otherWheelSlot("fender_front")).toBeNull();
+    expect(otherWheelSlot("fender_rear")).toBeNull();
+    expect(otherWheelSlot("tank")).toBeNull();
+    expect(otherWheelSlot("custom")).toBeNull();
+  });
+
+  const bikeMask = rect(10, 10, 90, 45);
+  const detected = (facing: "unknown" | "right"): PartMapState =>
+    withResults({ ...emptyPartMap("h1"), facing, bikeCandidates: [obj(bikeMask)], bikeChoice: 0, bikeStatus: "found" }, "wheel", wheels);
+
+  it("needs facing first, then returns the right wheel for this photo", () => {
+    const unknown = derive(detected("unknown"));
+    expect(unknown.phrases.wheel).toBe("needs_facing");
+    expect(followUpPart(unknown.parts, "wheel_rear", "h1")).toBeNull();
+    const view = derive(detected("right"));
+    const rear = followUpPart(view.parts, "wheel_rear", "h1")!;
+    expect(rear.id).toBe("wheel:wheel_rear");
+    expect(rear.box[0]).toBe(12); // facing right: rear on the left
+    expect(followUpPart(view.parts, "wheel_front", "h1")!.box[0]).toBe(68);
+  });
+
+  it("ignores a part of another photo", () => {
+    const view = derive(detected("right"));
+    expect(followUpPart(view.parts, "wheel_rear", "other")).toBeNull();
+  });
+
+  it("ignores a stale part left by partMapAfterEdit (same-size path)", () => {
+    const view = derive(detected("right"));
+    const next = partMapAfterEdit(detected("right"), "h2", null, true);
+    const after = derive(next);
+    expect(view.parts.length).toBe(2);
+    expect(after.parts.some((p) => p.slot === "wheel_rear" && p.stale)).toBe(true);
+    expect(followUpPart(after.parts, "wheel_rear", "h2")).toBeNull();
+    expect(followUpPart(after.parts, "wheel_rear", "h1")).toBeNull();
   });
 });

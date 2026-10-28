@@ -7,7 +7,7 @@ import {
 import { deleteProject, listProjects, type DreamDb } from "@/lib/db";
 import { children, type PendingRef } from "@/lib/project";
 import {
-  buildPartMap, derive, emptyPartMap, partMapAfterEdit, recutBike, refreshedPart, selectByPoint, type PartMapState,
+  buildPartMap, derive, emptyPartMap, followUpPart, otherWheelSlot, partMapAfterEdit, recutBike, refreshedPart, selectByPoint, type PartMapState,
 } from "@/lib/browser/partMap";
 import { AppError } from "@/lib/errors";
 import { PreflightError } from "@/lib/browser/preflight";
@@ -20,10 +20,10 @@ import {
 } from "@/lib/browser/projectSession";
 import { requestInstruction } from "@/lib/browser/sparkClient";
 import { hitTest, type ImagePoint } from "@/lib/coordinates";
-import { modeAllowed } from "@/lib/editPolicy";
+import { modeAllowed, retargetPaintText } from "@/lib/editPolicy";
 import { PAIRED_SLOTS } from "@/lib/parts";
 import { slotInfo } from "@/lib/slots";
-import type { BinaryMask, InstructionData, NormalizedPhoto, Version } from "@/lib/types";
+import type { BinaryMask, InstructionData, NormalizedPhoto, SlotId, Version } from "@/lib/types";
 import { AppShell } from "./AppShell";
 import { BikeConfirm } from "./BikeConfirm";
 import { DescribeForm } from "./DescribeForm";
@@ -73,7 +73,17 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
   const [referenceOff, setReferenceOff] = useState<string | null>(null);
   // A prepared instruction belongs to one part of one photo; anything else is stale.
   const [prepared, setPrepared] = useState<{ key: string; state: "busy" } | { key: string; state: "error"; message: string }
-    | { key: string; state: "done"; instruction: InstructionData } | null>(null);
+    | { key: string; state: "done"; instruction: InstructionData; requestText: string } | null>(null);
+  // "Do the same for the other wheel?": the offer after an accepted wheel change, then the follow-up it starts.
+  // fromLabel is the accepted part's label (needed to retarget a paint request); label is the other wheel's.
+  const [offer, setOffer] = useState<{ slot: SlotId; label: string; fromLabel: string; mode: "text" | "paint" | "reference"; text: string } | null>(null);
+  const [followUp, setFollowUp] = useState<(NonNullable<typeof offer> & { imageHash: string }) | null>(null);
+  // Set before the one automatic prepare call, so a re-render or StrictMode can never send a second request.
+  const followUpSent = useRef(false);
+  // Slot of the wheel a started follow-up targets: accepting that wheel finishes the flow, so no new offer (no front/rear loop).
+  const followUpSlot = useRef<SlotId | null>(null);
+  // Text to show in the form of one selected part (key = selectionKey).
+  const [prefill, setPrefill] = useState<{ selectionKey: string; text: string } | null>(null);
 
   // One render belongs to one prepared instruction; the cached generation is the resume point.
   const [render, setRender] = useState<RenderEntry | null>(null);
@@ -219,6 +229,19 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
     });
   }, [bikeFacing]);
 
+  /** Drop the other-wheel offer and any follow-up in progress. */
+  function clearFollowUp() {
+    setOffer(null);
+    setFollowUp(null);
+    followUpSlot.current = null;
+  }
+
+  /** A selection the mechanic made by hand ends the follow-up flow. */
+  function selectByUser(id: string | null) {
+    clearFollowUp();
+    setSelectedId(id);
+  }
+
   /** Stop everything that belongs to the photo shown now. */
   function resetWork() {
     pointAbort.current?.abort();
@@ -227,6 +250,8 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
     setRender(null);
     setPrepared(null);
     setRefState(null);
+    clearFollowUp();
+    setPrefill(null);
     setSelectedId(null);
     setPointMode(null);
     setNotice(null);
@@ -419,7 +444,7 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
     setNotice(null);
     if (!pointMode) {
       const hit = hitTest(view.parts, point, photo);
-      if (hit) setSelectedId(hit.id);
+      if (hit) selectByUser(hit.id);
       else setNotice("No detected part here. Use “Select by point” below.");
       return;
     }
@@ -437,7 +462,7 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
         const replaced = m.pointParts.filter((p) => p.slot === "custom" || p.slot !== result.part.slot);
         return { ...m, pointParts: [...replaced, result.part] };
       });
-      if ("part" in result) setSelectedId(result.part.id);
+      if ("part" in result) selectByUser(result.part.id);
       setPointMode(null);
     } catch (error) {
       if (!controller.signal.aborted) setNotice(error instanceof PreflightError ? error.message : "Point selection failed.");
@@ -538,6 +563,10 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
     const part = sameSize && entry.newMask ? refreshedPart(selected.slot, selected.label, entry.newMask, next.hash) : null;
     const ready = readyStorage();
     const saved = sessionRef.current;
+    // Captured now: the state below resets, and the offer is only made after a successful accept.
+    const otherSlot = otherWheelSlot(selected.slot);
+    const finishesFollowUp = followUpSlot.current === selected.slot;
+    const nextOffer = otherSlot && !finishesFollowUp ? { slot: otherSlot, label: slotInfo(otherSlot).label, fromLabel: selected.label, mode, text: current.requestText } : null;
 
     // Read-only storage takes the in-memory path below: the edit shows here, says "not saved", never offers a retry.
     if (saved && ready && !ready.readOnly && entry.ref) {
@@ -574,6 +603,9 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
     setStorageFull(null);
     setPhoto(next);
     setMap((m) => partMapAfterEdit(m, next.hash, part, sameSize));
+    setFollowUp(null);
+    setOffer(nextOffer);
+    if (finishesFollowUp) followUpSlot.current = null;
     setSelectedId(part?.id ?? null);
     setPrepared(null);
     setRender(null);
@@ -598,6 +630,25 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
     void buildPartMap(photo, setMap, controller.signal);
   }
 
+  /** Yes on the offer: find the parts again; the effects below select the other wheel and prepare. */
+  function acceptOffer() {
+    if (!offer || !photo || busy || !map.done) return;
+    followUpSent.current = false;
+    followUpSlot.current = offer.slot;
+    setFollowUp({ ...offer, imageHash: photo.hash });
+    setOffer(null);
+    setNotice(null);
+    // A finished manual "Detect parts again" already found the other wheel: no second paid detection.
+    if (!followUpPart(view.parts, offer.slot, photo.hash)) redetect();
+  }
+
+  /** A Prepare the mechanic clicks during the follow-up ends it, so its selection is never moved afterwards. */
+  function prepareByUser(text: string) {
+    // Only while a follow-up is pending: after it, the remembered slot must stay (no front/rear offer loop).
+    if (followUp) clearFollowUp();
+    void prepare(text);
+  }
+
   async function prepare(text: string) {
     if (!photo || !selected || !selectionKey) return;
     if (mode === "reference" && !reference) return;
@@ -606,7 +657,7 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
     try {
       const instruction = await requestInstruction({ slot: selected.slot, box: selected.box, bike: bikeForm.bike,
         mode, text, width: photo.width, height: photo.height }, undefined, mode === "reference" ? reference?.blob ?? null : null);
-      setPrepared((p) => (p?.key === key ? { key, state: "done", instruction } : p));
+      setPrepared((p) => (p?.key === key ? { key, state: "done", instruction, requestText: text } : p));
     } catch (error) {
       if (error instanceof PreflightError && error.code === "FEATURE_DISABLED") setReferenceOff(error.message);
       setPrepared((p) => (p?.key === key ? { key, state: "error",
@@ -614,6 +665,51 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
     }
   }
 
+  // Follow-up step 1: once the new detection is complete, select the other wheel in the same mode.
+  useEffect(() => {
+    if (!followUp || !photo || !map.done) return;
+    if (map.imageHash !== followUp.imageHash || photo.hash !== followUp.imageHash) return;
+    const part = followUpPart(view.parts, followUp.slot, map.imageHash);
+    if (!part) {
+      const wheel = followUp.label.toLowerCase();
+      setNotice(map.errors.length > 0
+        ? `Detecting the parts failed, so the ${wheel} was not selected. Try “Detect parts again”, or pick it from the list.`
+        : `The ${wheel} was not found on the new picture. Pick it from the list or set which side the front wheel is on.`);
+      setFollowUp(null);
+      followUpSlot.current = null;
+      return;
+    }
+    if (selected?.id === part.id && editMode === followUp.mode) return; // step 2 takes over
+    setSelectedId(part.id);
+    setEditMode(followUp.mode);
+    setPrefill({ selectionKey: `${photo.hash}:${part.id}`, text: followUp.text });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reacts to the new detection and the follow-up only
+  }, [followUp, map, photo, view]);
+
+  // Follow-up step 2: prepare once (text, paint) or ask for the missing reference. Render stays a manual click.
+  useEffect(() => {
+    if (!followUp || !map.done || !selected || selected.slot !== followUp.slot || editMode !== followUp.mode) return;
+    if (current !== null || followUpSent.current || navBusy || accept.saving) return;
+    followUpSent.current = true;
+    const wheel = followUp.label.toLowerCase();
+    if (mode !== followUp.mode) {
+      // The server turned reference photos off meanwhile: the form shows text mode instead.
+      setNotice(`The ${wheel} is selected. Use Prepare to continue.`);
+    } else if (followUp.mode === "reference") {
+      // The front reference must never be sent for the other wheel: no prepare, no reference.
+      setNotice(`Add the ${wheel} reference photo, then Prepare.`);
+    } else if (followUp.mode === "text") {
+      void prepare(followUp.text);
+    } else {
+      const retargeted = retargetPaintText(followUp.text, followUp.fromLabel, selected.label);
+      if (retargeted) void prepare(retargeted);
+      else setNotice(`The ${wheel} is selected. Fill in the paint form, then Prepare.`);
+    }
+    setFollowUp(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when the selection and mode are ready; prepare uses the same render's values
+  }, [followUp, map.done, selected, editMode, current, navBusy, accept.saving]);
+
+  const prefillFor = (key: string | null) => (key && prefill?.selectionKey === key ? prefill.text : undefined);
   const head = session ? headVersion(session) : null;
   const readOnly = storage?.status === "ready" && storage.readOnly;
   const redoKids = session && head ? children(session.versions, head.id) : [];
@@ -689,7 +785,7 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
               )}
               {notice && <p role="status" className="rounded-chip bg-neutral-soft px-3 py-2 text-neutral-soft-text text-[13px]">{notice}</p>}
               <PartSelector map={map} view={view} selected={selected} pointMode={pointMode} busy={!map.done || pointBusy}
-                onSelect={setSelectedId} onStartPoint={setPointMode} onCancelPoint={() => setPointMode(null)}
+                onSelect={selectByUser} onStartPoint={setPointMode} onCancelPoint={() => setPointMode(null)}
                 onFacing={(facing) => { if (facingChangesParts(map)) partsDirty.current = true; setMap((m) => ({ ...m, facing })); setBikeForm((f) => editField(f, "facing", facing)); }}
                 onRedetect={redetect}
                 onSwapFacing={() => {
@@ -719,11 +815,11 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
                       {referenceOff ?? "Reference photos are switched off on this server. Describe the part in text instead."}
                     </p>
                   )}
-                  {mode === "text" && <DescribeForm key={`d-${selectionKey}`} partLabel={selected.label} busy={current?.state === "busy"} onPrepare={prepare} />}
-                  {mode === "paint" && <PaintForm key={`p-${selectionKey}`} partLabel={selected.label} busy={current?.state === "busy"} onPrepare={prepare} />}
+                  {mode === "text" && <DescribeForm key={`d-${selectionKey}`} partLabel={selected.label} initialText={prefillFor(selectionKey)} busy={current?.state === "busy"} onPrepare={prepareByUser} />}
+                  {mode === "paint" && <PaintForm key={`p-${selectionKey}`} partLabel={selected.label} busy={current?.state === "busy"} onPrepare={prepareByUser} />}
                   {mode === "reference" && (
-                    <ReferenceDropzone key={`r-${selectionKey}`} partLabel={selected.label} reference={reference}
-                      busy={current?.state === "busy"} onPrepare={prepare}
+                    <ReferenceDropzone key={`r-${selectionKey}`} partLabel={selected.label} reference={reference} initialText={prefillFor(selectionKey)}
+                      busy={current?.state === "busy"} onPrepare={prepareByUser}
                       onReference={(p) => setRefState(p && selectionKey ? { key: selectionKey, photo: p } : null)} />
                   )}
                   {current?.state === "busy" && <p role="status" className="text-text-secondary text-[13px]">Preparing the change…</p>}
@@ -742,6 +838,18 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
                       onRetryBlend={() => void runRender(true)} onRenderAgain={() => void runRender(false)} onCancel={cancelRender}
                       saving={accept.saving} saveError={accept.error} unsaved={!session || readOnly} readOnly={readOnly && !!session} />
                   )}
+                </section>
+              )}
+              {offer && (
+                <section aria-label="Do the same for the other wheel" className="flex flex-col gap-2 rounded-card border border-hairline bg-surface-3 p-3">
+                  <p className="text-[13px] font-semibold">Do the same for the {offer.label.toLowerCase()}?</p>
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" onClick={acceptOffer} disabled={busy || !map.done}
+                      className="rounded-full bg-primary px-4 py-1.5 text-on-fill text-[13px] disabled:opacity-50">
+                      Yes: find the parts and prepare the same change (about $0.04)
+                    </button>
+                    <button type="button" onClick={clearFollowUp} className="rounded-full border border-hairline px-4 py-1.5 text-[13px]">No</button>
+                  </div>
                 </section>
               )}
               {storageFull && (

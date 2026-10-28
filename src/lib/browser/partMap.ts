@@ -271,6 +271,19 @@ export function refreshedPart(slot: SlotId, label: string, mask: BinaryMask, ima
   return makePart(`point:${slot}:accepted:${imageHash.slice(0, 12)}`, slot, label, mask, "point", null, imageHash);
 }
 
+/** The other wheel of a pair (front <-> rear); null for every other slot. Uses PAIRED_SLOTS.wheel. */
+export function otherWheelSlot(slot: SlotId): SlotId | null {
+  const [front, rear] = PAIRED_SLOTS.wheel!;
+  if (slot === front) return rear;
+  if (slot === rear) return front;
+  return null;
+}
+
+/** The first fresh part of a slot that belongs to this photo, or null (stale or other-photo parts never count). */
+export function followUpPart(parts: MapPart[], slot: SlotId, imageHash: string): MapPart | null {
+  return parts.find((p) => p.slot === slot && !p.stale && p.imageHash === imageHash) ?? null;
+}
+
 // ---- Persistence glue (SPEC 9): pure conversions, no IndexedDB ----
 
 /** A StoredMask to a BinaryMask; wrong size, wrong hash, or non-0/1 bytes are rejected. */

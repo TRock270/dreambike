@@ -2,11 +2,12 @@
 
 import { useState } from "react";
 
-type Props = { partLabel: string; busy: boolean; onPrepare: (text: string) => void };
+type Props = { partLabel: string; busy: boolean; onPrepare: (text: string) => void;
+  /** Text to start with (the other-wheel follow-up); the mechanic can still edit it. */ initialText?: string };
 
 /** Free-text change for the selected part (replacement or shape change). */
-export function DescribeForm({ partLabel, busy, onPrepare }: Props) {
-  const [text, setText] = useState("");
+export function DescribeForm({ partLabel, busy, onPrepare, initialText }: Props) {
+  const [text, setText] = useState(initialText ?? "");
   const trimmed = text.trim();
   return (
     <form className="flex flex-col gap-2" onSubmit={(e) => { e.preventDefault(); if (trimmed) onPrepare(trimmed); }}>

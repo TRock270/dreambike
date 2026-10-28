@@ -14,6 +14,8 @@ type Props = {
   onReference: (photo: NormalizedPhoto | null) => void;
   /** The mechanic's description of what the reference shows (never empty). */
   onPrepare: (description: string) => void;
+  /** Description to start with (the other-wheel follow-up); the reference photo itself is never carried over. */
+  initialText?: string;
 };
 
 type Upload = { kind: "idle" } | { kind: "busy"; step: string } | { kind: "error"; message: string };
@@ -22,9 +24,9 @@ type Upload = { kind: "idle" } | { kind: "busy"; step: string } | { kind: "error
  * Reference mode input: one photo of a part, plus a description of what it shows.
  * The base photo's upload notice does not cover this second upload, so it is repeated here.
  */
-export function ReferenceDropzone({ partLabel, reference, busy, onReference, onPrepare }: Props) {
+export function ReferenceDropzone({ partLabel, reference, busy, onReference, onPrepare, initialText }: Props) {
   const [owned, setOwned] = useState(false);
-  const [text, setText] = useState("");
+  const [text, setText] = useState(initialText ?? "");
   const [upload, setUpload] = useState<Upload>({ kind: "idle" });
   const input = useRef<HTMLInputElement>(null);
   // An upload can finish after this form was closed (another part was selected). Then it must do nothing.

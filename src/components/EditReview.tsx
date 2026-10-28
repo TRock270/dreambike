@@ -3,6 +3,7 @@
 import { FALLBACK_TEXT } from "@/lib/browser/renderFlow";
 import type { Composited, Generated } from "@/lib/browser/renderClient";
 import type { PhotoRef } from "@/lib/types";
+import { MOCK_LABEL } from "@/lib/mocks";
 import { BeforeAfter } from "./BeforeAfter";
 import { ProgressStatus, type RenderStage } from "./ProgressStatus";
 
@@ -64,7 +65,7 @@ export function EditReview({ base, state, onAccept, onReject, onRetryBlend, onRe
           <span aria-hidden="true" className="mr-1 font-semibold">ⓘ</span>Made from your reference photo. The AI redraws the whole image, so check the rest of the bike, such as brakes, fork, and fender, against your photo.
         </p>
       )}
-      <BeforeAfter before={base} after={result} aligned={result.aligned} />
+      <BeforeAfter before={base} after={result} aligned={result.aligned} mock={generated.warnings.some((w) => w.includes(MOCK_LABEL))} />
       {fallback && (
         <p className="rounded-chip bg-warning-soft px-3 py-2 text-warning-soft-text">
           <span aria-hidden="true" className="mr-1 font-semibold">⚠</span>{fallback}

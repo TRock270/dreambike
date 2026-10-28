@@ -60,3 +60,18 @@ export function withBikeWarnings(instruction: InstructionData, bike: BikeData): 
   const warnings = [...new Set([...instruction.warnings, ...bikeLimitations(bike)])].slice(0, 8);
   return { ...instruction, warnings };
 }
+
+/** Request text the paint form sends: "Paint the <label lowercased>: <body>". */
+export function paintRequestText(label: string, body: string): string {
+  return `Paint the ${label.toLowerCase()}: ${body}`;
+}
+
+/**
+ * Point a paint request at another part. Only the exact leading prefix is
+ * swapped; any other text returns null instead of a guess.
+ */
+export function retargetPaintText(text: string, fromLabel: string, toLabel: string): string | null {
+  const prefix = paintRequestText(fromLabel, "");
+  if (!text.startsWith(prefix)) return null;
+  return paintRequestText(toLabel, text.slice(prefix.length));
+}
