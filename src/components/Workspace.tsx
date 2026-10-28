@@ -1,11 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { applySuggestion, editField, emptyBikeForm, type BikeFormState } from "@/lib/bikeForm";
 import { buildPartMap, derive, emptyPartMap, selectByPoint, type PartMapState } from "@/lib/browser/partMap";
 import { PreflightError } from "@/lib/browser/preflight";
+import { requestIdentify, requestInstruction } from "@/lib/browser/sparkClient";
 import { hitTest, type ImagePoint } from "@/lib/coordinates";
-import type { NormalizedPhoto } from "@/lib/types";
+import { modeAllowed } from "@/lib/editPolicy";
+import { slotInfo } from "@/lib/slots";
+import type { InstructionData, NormalizedPhoto } from "@/lib/types";
+import { BikeConfirm } from "./BikeConfirm";
+import { DescribeForm } from "./DescribeForm";
 import { ImageCanvas } from "./ImageCanvas";
+import { InstructionPreview } from "./InstructionPreview";
+import { PaintForm } from "./PaintForm";
 import { PartSelector, type PointTarget } from "./PartSelector";
 import { UploadDropzone } from "./UploadDropzone";
 import { UploadNotice } from "./UploadNotice";
@@ -21,6 +29,12 @@ export function Workspace() {
   const [pointBusy, setPointBusy] = useState(false);
   const pointAbort = useRef<AbortController | null>(null);
   const view = useMemo(() => derive(map), [map]);
+  const [bikeForm, setBikeForm] = useState<BikeFormState>(emptyBikeForm);
+  const [identify, setIdentify] = useState<{ status: "pending" | "done" | "error" | "off"; message: string | null }>({ status: "off", message: null });
+  const [editMode, setEditMode] = useState<"text" | "paint">("text");
+  // A prepared instruction belongs to one part of one photo; anything else is stale.
+  const [prepared, setPrepared] = useState<{ key: string; state: "busy" } | { key: string; state: "error"; message: string }
+    | { key: string; state: "done"; instruction: InstructionData } | null>(null);
 
   // A new photo starts a fresh part map. Every write checks the image hash,
   // so results for an older photo can never land on the new one.
@@ -28,12 +42,26 @@ export function Workspace() {
     if (!photo) return;
     const controller = new AbortController();
     void buildPartMap(photo, setMap, controller.signal);
+    // Identification runs in parallel; its suggestion fills only untouched fields.
+    void requestIdentify(photo, controller.signal).then(
+      (bike) => { if (!controller.signal.aborted) { setBikeForm((f) => applySuggestion(f, bike)); setIdentify({ status: "done", message: null }); } },
+      (error) => { if (!controller.signal.aborted) setIdentify({ status: "error", message: error instanceof PreflightError ? error.message : null }); },
+    );
     return () => controller.abort();
   }, [photo]);
+
+  // The bike's facing also answers the part map's front/rear question.
+  const bikeFacing = bikeForm.bike.facing;
+  useEffect(() => {
+    if (bikeFacing !== "unknown") setMap((m) => (m.facing === bikeFacing ? m : { ...m, facing: bikeFacing }));
+  }, [bikeFacing]);
 
   function choosePhoto(next: NormalizedPhoto | null) {
     pointAbort.current?.abort();
     setPhoto(next);
+    setBikeForm(emptyBikeForm());
+    setIdentify({ status: next ? "pending" : "off", message: null });
+    setPrepared(null);
     setMap(emptyPartMap(next?.hash ?? ""));
     setSelectedId(null);
     setPointMode(null);
@@ -72,6 +100,26 @@ export function Workspace() {
   }
 
   const selected = view.parts.find((p) => p.id === selectedId) ?? null;
+  const selectionKey = photo && selected ? `${photo.hash}:${selected.id}` : null;
+  const paintOnly = selected ? !modeAllowed(selected.slot, "text") : false;
+  const mode = paintOnly ? "paint" : editMode;
+  // The key includes the bike as sent, so editing the bike makes an older preview stale.
+  const prepKey = `${selectionKey}:${mode}:${JSON.stringify(bikeForm.bike)}`;
+  const current = prepared && prepared.key === prepKey ? prepared : null;
+
+  async function prepare(text: string) {
+    if (!photo || !selected || !selectionKey) return;
+    const key = prepKey;
+    setPrepared({ key, state: "busy" });
+    try {
+      const instruction = await requestInstruction({ slot: selected.slot, box: selected.box, bike: bikeForm.bike,
+        mode, text, width: photo.width, height: photo.height });
+      setPrepared((p) => (p?.key === key ? { key, state: "done", instruction } : p));
+    } catch (error) {
+      setPrepared((p) => (p?.key === key ? { key, state: "error",
+        message: error instanceof PreflightError ? error.message : "Preparing the change failed." } : p));
+    }
+  }
   return (
     <main className="flex flex-1 gap-4 p-4">
       <section aria-label="Photo" className="flex flex-[2] items-center justify-center rounded-card border border-hairline bg-recess p-4">
@@ -86,6 +134,7 @@ export function Workspace() {
         {!photo && <p className="text-text-muted text-[13px]">Import a photo of your own bike to start.</p>}
         {photo && (
           <>
+            <BikeConfirm key={photo.hash} form={bikeForm} identifyStatus={identify.status} identifyMessage={identify.message} onChange={setBikeForm} />
             {!map.done && <p role="status" className="text-text-secondary text-[13px]">Finding the bike and its parts…</p>}
             {map.warnings.map((w) => (
               <p key={w} className="rounded-chip bg-warning-soft px-3 py-2 text-warning-soft-text text-[13px]">
@@ -101,9 +150,40 @@ export function Workspace() {
             {notice && <p role="status" className="rounded-chip bg-neutral-soft px-3 py-2 text-neutral-soft-text text-[13px]">{notice}</p>}
             <PartSelector map={map} view={view} selected={selected} pointMode={pointMode} busy={!map.done || pointBusy}
               onSelect={setSelectedId} onStartPoint={setPointMode} onCancelPoint={() => setPointMode(null)}
-              onFacing={(facing) => setMap((m) => ({ ...m, facing }))}
-              onSwapFacing={() => setMap((m) => ({ ...m, facing: m.facing === "left" ? "right" : m.facing === "right" ? "left" : m.facing }))}
+              onFacing={(facing) => { setMap((m) => ({ ...m, facing })); setBikeForm((f) => editField(f, "facing", facing)); }}
+              onSwapFacing={() => {
+                const next = map.facing === "left" ? "right" : "left";
+                setMap((m) => ({ ...m, facing: next }));
+                setBikeForm((f) => editField(f, "facing", next));
+              }}
               onNextBike={() => setMap((m) => ({ ...m, bikeChoice: ((typeof m.bikeChoice === "number" ? m.bikeChoice : 0) + 1) % m.bikeCandidates.length }))} />
+            {selected && (
+              <section aria-label="Change the selected part" className="flex flex-col gap-3 border-t border-hairline pt-3">
+                <h3 className="text-[15px] font-semibold">Change: {selected.label}</h3>
+                {paintOnly ? (
+                  <p className="text-text-muted text-[12px]">{slotInfo(selected.slot).label} allows paint changes only.</p>
+                ) : (
+                  <div role="tablist" aria-label="Kind of change" className="flex gap-1">
+                    {(["text", "paint"] as const).map((m) => (
+                      <button key={m} type="button" role="tab" aria-selected={mode === m} onClick={() => setEditMode(m)}
+                        className={`rounded-full px-3 py-1 text-[13px] ${mode === m ? "bg-primary text-on-fill" : "border border-hairline"}`}>
+                        {m === "text" ? "Describe" : "Paint"}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {mode === "text"
+                  ? <DescribeForm key={`d-${selectionKey}`} partLabel={selected.label} busy={current?.state === "busy"} onPrepare={prepare} />
+                  : <PaintForm key={`p-${selectionKey}`} partLabel={selected.label} busy={current?.state === "busy"} onPrepare={prepare} />}
+                {current?.state === "busy" && <p role="status" className="text-text-secondary text-[13px]">Preparing the change…</p>}
+                {current?.state === "error" && (
+                  <p role="alert" className="rounded-chip bg-danger-soft px-3 py-2 text-danger-soft-text text-[13px]">
+                    <span aria-hidden="true" className="mr-1 font-semibold">✕</span>{current.message}
+                  </p>
+                )}
+                {current?.state === "done" && <InstructionPreview instruction={current.instruction} slotLabel={selected.label} />}
+              </section>
+            )}
             <button type="button" onClick={() => choosePhoto(null)} disabled={pointBusy}
               className="self-start rounded-full border border-hairline px-4 py-1.5 text-[13px] disabled:opacity-50">
               Use a different photo

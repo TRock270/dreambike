@@ -183,3 +183,12 @@ export async function pngToMask(png: Uint8Array, width: number, height: number):
   if (info.width !== width || info.height !== height) throw new AppError("INVALID_IMAGE", "Mask size does not match the image.");
   return { width, height, pixels: Uint8Array.from(data, (v) => (v > 127 ? 1 : 0)) };
 }
+
+/** A normalized WebP upload must decode to exactly the declared size (one coordinate space). */
+export async function assertWebpSize(bytes: Uint8Array, width: number, height: number): Promise<void> {
+  const meta = await sharp(bytes).metadata().catch(() => null);
+  if (!meta || meta.format !== "webp" || (meta.pages ?? 1) > 1) throw new AppError("INVALID_IMAGE");
+  if (meta.width !== width || meta.height !== height) {
+    throw new AppError("INVALID_REQUEST", "Declared size does not match the image.");
+  }
+}

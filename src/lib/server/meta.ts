@@ -8,6 +8,9 @@ import {
   buildObjectPrompt, decodeMaskToRaster,
   frameIndexOf, parseImageStream, recordsOfKind, type ImageSegmentationResult,
 } from "@meta-sam/parser";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { modelJsonSchema } from "../contracts";
 import { AppError } from "../errors";
 import { MOCKS, type MockName } from "../mocks";
 import { loadConfig } from "./config";
@@ -146,4 +149,107 @@ export function samRecords(result: ImageSegmentationResult): SamResult {
 
 function isAbort(error: unknown): boolean {
   return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
+}
+
+// ------------------------------------------------- Muse Spark (6.3), no tools
+
+export type SparkFormat = "bike_identification_v1" | "edit_instruction_v1";
+
+/** Trusted instructions: the versioned prompt file, read from disk (traced into the bundle). */
+export function promptText(file: string): string {
+  return readFileSync(path.join(process.cwd(), "prompts", file), "utf8");
+}
+
+export function sparkBody(model: string, promptFile: string, format: SparkFormat, task: unknown, imageUrl: string | null) {
+  const content: unknown[] = [{ type: "input_text", text: JSON.stringify(task) }];
+  if (imageUrl) content.push({ type: "input_image", image_url: imageUrl });
+  return {
+    model, stream: false, store: false, max_output_tokens: 4096,
+    instructions: promptText(promptFile),
+    input: [{ type: "message", role: "user", content }],
+    text: { format: { type: "json_schema", name: format, strict: true, schema: modelJsonSchema(format) } },
+  };
+}
+
+export type SparkUsage = { input_tokens?: unknown; output_tokens?: unknown; total_tokens?: unknown;
+  output_tokens_details?: { reasoning_tokens?: unknown } };
+export type SparkOutput = { json: unknown };
+
+type SparkItem = { type?: unknown; content?: unknown };
+
+/**
+ * Read a non-streaming Responses answer: status first, then every
+ * output_text block across all output items (reasoning or tool items may come
+ * before the message; never assume output[0]). Refusal, failure, incomplete,
+ * malformed shape, and non-JSON output are safe route errors; no repair call.
+ */
+export function readSparkResponse(body: unknown): SparkOutput {
+  if (!body || typeof body !== "object") throw new AppError("SCHEMA_INVALID");
+  const r = body as { status?: unknown; output?: unknown };
+  if (r.status === "failed" || r.status === "cancelled") throw new AppError("UPSTREAM_REJECTED");
+  if (!Array.isArray(r.output) || !r.output.every((i) => i && typeof i === "object")) throw new AppError("SCHEMA_INVALID");
+  const blocks = (r.output as SparkItem[]).flatMap((item) => (Array.isArray(item.content) ? item.content : []))
+    .filter((b): b is { type?: unknown; text?: unknown } => Boolean(b) && typeof b === "object");
+  if (blocks.some((b) => b.type === "refusal")) throw new AppError("UPSTREAM_REJECTED", "The AI model declined this request.");
+  if (r.status !== "completed") throw new AppError("SCHEMA_INVALID", "The AI answer was incomplete.");
+  const text = blocks.filter((b) => b.type === "output_text").map((b) => (typeof b.text === "string" ? b.text : "")).join("");
+  if (!text) throw new AppError("SCHEMA_INVALID");
+  try {
+    return { json: JSON.parse(text) as unknown };
+  } catch {
+    throw new AppError("SCHEMA_INVALID");
+  }
+}
+
+const count = (v: unknown): number | null => (typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : null);
+
+/**
+ * Charge from reported usage without cache discounts. null (unknown: keep the
+ * full reservation) when usage is missing or does not add up, for example
+ * reasoning tokens that are not inside output_tokens.
+ */
+export function sparkCharge(usage: unknown, prices: { inputMicroUsdPerMillionTokens: number;
+  outputMicroUsdPerMillionTokens: number }): number | null {
+  if (!usage || typeof usage !== "object") return null;
+  const u = usage as SparkUsage;
+  const input = count(u.input_tokens), output = count(u.output_tokens);
+  if (input === null || output === null) return null;
+  const total = u.total_tokens === undefined ? null : count(u.total_tokens);
+  if (u.total_tokens !== undefined && (total === null || total > input + output)) return null;
+  const reasoning = u.output_tokens_details?.reasoning_tokens;
+  if (reasoning !== undefined && (count(reasoning) === null || count(reasoning)! > output)) return null;
+  return Math.ceil((input * prices.inputMicroUsdPerMillionTokens + output * prices.outputMicroUsdPerMillionTokens) / 1_000_000);
+}
+
+/** The usage object of a raw answer, if any (read before the answer is judged). */
+export function usageOf(body: unknown): unknown {
+  return body && typeof body === "object" ? (body as { usage?: unknown }).usage : undefined;
+}
+
+/**
+ * POST /v1/responses for Spark (no tools); returns the raw JSON body. The
+ * caller settles the charge from its usage first and judges the answer with
+ * readSparkResponse afterwards, so a refused or invalid answer still settles
+ * its real cost instead of the whole reservation.
+ */
+export async function fetchSparkJson(body: unknown, signal: AbortSignal): Promise<unknown> {
+  let res: Response;
+  try {
+    res = await fetch(`${META_BASE}/responses`, {
+      method: "POST", signal, redirect: "error",
+      headers: { ...authHeader(), "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (error) {
+    throw new AppError(signal.aborted || isAbort(error) ? "UPSTREAM_TIMEOUT" : "UPSTREAM_UNAVAILABLE");
+  }
+  if (res.status !== 200) {
+    await res.body?.cancel().catch(() => {});
+    throw upstreamError(res.status, res.headers.get("retry-after"));
+  }
+  try {
+    return await res.json();
+  } catch {
+    throw new AppError(signal.aborted ? "UPSTREAM_TIMEOUT" : "UPSTREAM_UNAVAILABLE");
+  }
 }

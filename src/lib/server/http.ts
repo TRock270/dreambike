@@ -78,3 +78,40 @@ export async function parseMultipart(req: Request, body: Uint8Array<ArrayBuffer>
     throw new AppError("INVALID_REQUEST");
   }
 }
+
+/**
+ * Multipart with one JSON "payload" part and named file parts (SPEC 5). Every
+ * part must be expected and present exactly once; unexpected parts fail.
+ */
+export function payloadAndFiles(form: FormData, required: readonly string[], optional: readonly string[] = []):
+  { payload: unknown; files: Record<string, File> } {
+  const allowed = new Set(["payload", ...required, ...optional]);
+  for (const key of form.keys()) if (!allowed.has(key)) throw new AppError("INVALID_REQUEST");
+  for (const key of allowed) if (form.getAll(key).length > 1) throw new AppError("INVALID_REQUEST");
+  const raw = form.get("payload");
+  let payload: unknown;
+  try {
+    payload = typeof raw === "string" ? JSON.parse(raw) : undefined;
+  } catch {
+    throw new AppError("INVALID_REQUEST");
+  }
+  if (payload === undefined) throw new AppError("INVALID_REQUEST");
+  const files: Record<string, File> = {};
+  for (const name of [...required, ...optional]) {
+    const value = form.get(name);
+    if (value === null) {
+      if (required.includes(name)) throw new AppError("INVALID_REQUEST");
+      continue;
+    }
+    if (!(value instanceof File)) throw new AppError("INVALID_REQUEST");
+    files[name] = value;
+  }
+  return { payload, files };
+}
+
+/** X-Request-Id is required on Meta handlers and must be a UUID. */
+export function requireRequestId(req: Request): string {
+  const header = req.headers.get("x-request-id");
+  if (!header || !Id.safeParse(header).success) throw new AppError("INVALID_REQUEST", "X-Request-Id must be a UUID.");
+  return header;
+}

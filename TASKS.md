@@ -56,6 +56,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 
 ## T4 — Bike confirmation and edit instruction
 
+- Status: DONE OFFLINE AND IN MOCK 2026-10-28. Live Spark answers are gated on U02 (strict JSON on this account). See log.
 - Priority: MVP. Estimate: 2h, Oct 30. Depends on: T3 and U02 identify/instruction profiles.
 - Files: prompts/identify.v1.md/instruction.v1.md/paint.v1.md/compose.v1.md, src/app/api/identify/route.ts/instruction/route.ts, src/lib/server/meta.ts, src/components/BikeConfirm.tsx/DescribeForm.tsx/PaintForm.tsx.
 - Work: exact Spark text.format schema; editable one-panel bike ID; allow unknown ABS/year/facing; instruction preview and geometry intent; paint-only engine/frame. Model response traversal handles reasoning/tool items before message output.
@@ -381,3 +382,50 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Remaining gates:
   - U01: owned off-origin overlays.
   - Then set `VERIFIED_SAM_PLACEMENT`, run one live segment smoke with BUDGET_TICKET=T3, and recheck "a wheel click highlights its real pixels".
+
+### T4 — 2026-10-28, 01:20–01:34 ET (about 0.25 h of build plus review rounds)
+
+- Status: offline and mock scope done. Live identify and instruction run through withReservation (local, BUDGET_TICKET required), but their answers are unverified until U02.
+- Files:
+  - New: src/app/api/identify/route.ts, src/app/api/instruction/route.ts, src/lib/editPolicy.ts, src/lib/bikeForm.ts, src/lib/browser/sparkClient.ts, src/components/BikeConfirm.tsx, DescribeForm.tsx, PaintForm.tsx, InstructionPreview.tsx, tests/spark.test.ts.
+  - Changed: src/lib/server/meta.ts (sparkBody, readSparkResponse, sparkCharge, usageOf, fetchSparkJson, promptText), src/lib/server/http.ts (payloadAndFiles, requireRequestId), src/lib/server/images.ts (assertWebpSize), src/components/Workspace.tsx, prompts/instruction.v1.md (trust boundary; no live call had used v1 yet, so the text was revised in place).
+- Checks run:
+  - typecheck: ok. lint: ok.
+  - `npm test`: 89 passed in 10 files.
+  - `npm run build`: ok; client bundle canary clean; no hex outside tokens.css.
+  - Headless Chrome 156 (CDP), MOCK=1, 1440×900:
+    - The identify hint appears.
+    - Typing "2", "20", "201", "2018" keeps each value; an error shows and Confirm is disabled until the year is complete.
+    - Confirm bike works and lists the limitations.
+    - Tank → Describe → Prepare gives the mock instruction (replace).
+    - "Render change" is disabled with "not built yet".
+    - Paint tab: the paint form appears.
+    - The T3 flow is intact.
+- Live-path tests use a fake Upstash and a fake Meta: a refusal, or a bike with reversed years, settles the real token charge (400 µ$) and returns a safe error. The bike's limitation text is never sent to the model.
+- Review round 1:
+  - models-reviewer: 1 major (bike free text trusted in the prompt) and 7 minors.
+  - general-reviewer, also covering security: 2 majors (year typing broken; a late suggestion overwrote confirmed values) and 5 minors.
+  - Gemini: 3 high-severity items, all real (year touch, confirm lock, handlebar regex).
+- Fixed:
+  - Prompt trust boundary; bike.limitations not sent.
+  - Year input keeps what was typed; confirm error clears on edit; panel keyed by photo.
+  - Suggestions ignored after any confirmation.
+  - The real charge is settled before the answer is judged; reasoning and total token sanity checks.
+  - Malformed answer shapes are handled; status is read first.
+  - Intent rules: fork and wheel size or replacement words force geometry; a finish change stays paint.
+  - Broader handlebar keyword list (English and German, with word boundaries).
+  - The preview is tied to the bike state.
+  - aria attributes added; the doubled period removed.
+- Review round 2 (general-reviewer): approved all 10 items. Its minors were fixed too (finish words, limitations test, test for the German "höher").
+- Rejected:
+  - "No test that committed schemas match the generator": tests/contracts.test.ts already compares them.
+  - "Recompute limitations on suggestion": the model's notes are kept and confirm recomputes the unknowns.
+  - "Do not trim to null": only a fully blank field becomes unknown.
+- Deferred:
+  - SPEC 10 manual retry with estimated cost and a cancel note: T5 and T13.
+  - A prepared preview stays visible while the request is retyped: cosmetic.
+- Process note: the round-1 models-reviewer ran `npx tsx` for a one-off check. That downloaded tsx into the npm cache only; nothing in the project changed. It broke the subagent no-install rule, so later prompts forbid npx downloads.
+- Cost ledger: $0.00 (no paid calls).
+- Remaining gates:
+  - U02: live identify and instruction smoke with BUDGET_TICKET=T4, owned photo, strict schema acceptance including minLength/maxLength/min/max.
+  - If strict mode rejects those keywords, fall back to stripping them in modelJsonSchema; Zod still enforces the limits after the call.
