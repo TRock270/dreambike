@@ -1,6 +1,6 @@
 "use client";
 
-import { activeItems, children, pathFromRoot } from "@/lib/project";
+import { activeItems, children, laterSteps, pathFromRoot } from "@/lib/project";
 import { slotInfo } from "@/lib/slots";
 import type { Version } from "@/lib/types";
 
@@ -31,18 +31,21 @@ export function VersionStrip({ versions, headId, branchChoices, disabled, onJump
   const head = path[path.length - 1]!; // pathFromRoot ends at the head and is never empty
   const later = children(versions, headId);
   const items = activeItems(head);
+  const ahead = laterSteps(versions, headId);
 
   return (
-    <section aria-label="Version history" className="flex flex-col gap-3 rounded-card border border-hairline bg-surface-1 p-4">
+    // Steps on the left, the sheet on the right: History stays short, so the photo gets the height.
+    <section aria-label="Version history" className="flex shrink-0 gap-6 rounded-card border border-hairline bg-surface-1 p-4">
+      <div className="flex min-w-0 flex-1 flex-col gap-3">
       <div className="flex items-baseline justify-between gap-2">
         <h2 className="text-[15px] font-semibold">History</h2>
         {later.length > 0 && (
           <span className="text-text-muted text-[12px]">
-            {later.length === 1 ? "1 later step (Redo)" : `${later.length} branches after this step (Redo asks which)`}
+            {later.length === 1 ? "Redo goes to the next later step" : `${later.length} branches after this step (Redo asks which)`}
           </span>
         )}
       </div>
-      {path.length === 1 && <p className="text-text-muted text-[13px]">No accepted changes yet. Accept a preview to add the first step.</p>}
+      {path.length === 1 && ahead.steps.length === 0 && <p className="text-text-muted text-[13px]">No accepted changes yet. Accept a preview to add the first step.</p>}
       <ol aria-label="Steps from the first photo" className="flex flex-wrap gap-2">
         {path.map((v, i) => {
           const current = v.id === headId;
@@ -62,6 +65,24 @@ export function VersionStrip({ versions, headId, branchChoices, disabled, onJump
                   <span className="text-warning-soft-text"><span aria-hidden="true">⚠</span> Full image, not blended</span>
                 )}
                 {branches > 1 && <span className="tabular text-text-muted">{branches} branches</span>}
+              </button>
+            </li>
+          );
+        })}
+        {ahead.steps.map((v, j) => {
+          const n = path.length - 1 + j + 1; // numbering continues from the head's index
+          const others = ahead.otherBranches[j]!;
+          return (
+            <li key={v.id}>
+              <button type="button" disabled={disabled} onClick={() => onJump(v.id)}
+                aria-label={`Go to later step ${n}: ${stepLabel(v)}`}
+                className="flex max-w-[220px] flex-col items-start rounded-chip border border-dashed border-hairline bg-surface-1 px-3 py-1.5 text-left text-[12px] text-text-muted">
+                <span className="font-semibold">
+                  <span aria-hidden="true" className="mr-1">◌</span>
+                  {`Step ${n} (later)`}
+                </span>
+                <span className="max-w-full truncate">{stepLabel(v)}</span>
+                {others > 0 && <span className="tabular">{`+${others} other ${others === 1 ? "branch" : "branches"}`}</span>}
               </button>
             </li>
           );
@@ -87,7 +108,8 @@ export function VersionStrip({ versions, headId, branchChoices, disabled, onJump
         </div>
       )}
 
-      <div>
+      </div>
+      <div className="w-[260px] shrink-0 border-l border-hairline pl-4">
         <h3 className="text-[13px] font-semibold">Sheet for the version shown</h3>
         {items.length === 0 ? (
           <p className="text-text-muted text-[13px]">No parts on the sheet yet.</p>

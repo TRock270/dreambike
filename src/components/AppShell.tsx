@@ -22,7 +22,7 @@ const button = "rounded-full border border-hairline px-4 py-1.5 text-[13px] disa
 export function AppShell({ projectName, saveStatus, canUndo, canRedo, undoHint, redoHint, busy, onUndo, onRedo, children }: Props) {
   return (
     <>
-      <header className="flex items-center gap-4 border-b border-hairline bg-surface-1 px-6 py-3">
+      <header className="flex shrink-0 items-center gap-4 border-b border-hairline bg-surface-1 px-6 py-3">
         <h1 className="text-[20px] leading-[1.35] font-semibold">DreamBike</h1>
         <span className="text-text-secondary text-[13px]" data-testid="project-name">{projectName ?? "No project open"}</span>
         {saveStatus && <span className="rounded-chip bg-neutral-soft px-2 py-0.5 text-neutral-soft-text text-[12px]">{saveStatus}</span>}
@@ -33,7 +33,7 @@ export function AppShell({ projectName, saveStatus, canUndo, canRedo, undoHint, 
         </div>
       </header>
       {children}
-      <nav aria-label="Sheet and estimate" className="flex gap-2 border-t border-hairline bg-surface-1 px-6 py-3">
+      <nav aria-label="Sheet and estimate" className="flex shrink-0 gap-2 border-t border-hairline bg-surface-1 px-6 py-3">
         <button type="button" className="rounded-full bg-primary px-4 py-1.5 text-[13px] text-on-fill">Build sheet</button>
         <button type="button" className="rounded-full border border-hairline px-4 py-1.5 text-[13px]">Estimate</button>
       </nav>

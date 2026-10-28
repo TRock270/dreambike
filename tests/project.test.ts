@@ -4,7 +4,7 @@ import {
   BikeRevision, ImageRef, Project as ProjectSchema, StoredImage, StoredMask, Version as VersionSchema,
 } from "@/lib/contracts";
 import {
-  activeItems, canAcceptPending, children, defaultProjectName, newProject, newRootVersion,
+  activeItems, canAcceptPending, children, defaultProjectName, laterSteps, newProject, newRootVersion,
   pathFromRoot, redoTargets, undoTarget, visualChild, type VisualChildInput,
 } from "@/lib/project";
 import type { Part, Version } from "@/lib/types";
@@ -198,5 +198,47 @@ describe("persisted validators", () => {
   ])("rejects %s", (_name, bad) => {
     expect(VersionSchema.safeParse(v1).success).toBe(true);
     expect(VersionSchema.safeParse(bad).success).toBe(false);
+  });
+});
+
+describe("laterSteps", () => {
+  const ids = (vs: Version[]) => vs.map((v) => v.id);
+
+  it("returns a straight chain after the head, in order", () => {
+    const v1 = visualChild(root, input({ slot: "tank", createdAt: 1 }));
+    const v2 = visualChild(v1, input({ slot: "seat", createdAt: 2 }));
+    const r = laterSteps([root, v1, v2], root.id);
+    expect(ids(r.steps)).toEqual([v1.id, v2.id]);
+    expect(r.otherBranches).toEqual([0, 0]);
+  });
+
+  it("is empty when the head is a leaf", () => {
+    const v1 = visualChild(root, input({ slot: "tank", createdAt: 1 }));
+    expect(laterSteps([root, v1], v1.id)).toEqual({ steps: [], otherBranches: [] });
+  });
+
+  it("a fork with no deeper work follows the newest direct child and reports the other branch", () => {
+    const b = visualChild(root, input({ slot: "tank", createdAt: 1 }));
+    const d = visualChild(root, input({ slot: "seat", createdAt: 2 }));
+    const r = laterSteps([root, b, d], root.id);
+    expect(ids(r.steps)).toEqual([d.id]);
+    expect(r.otherBranches).toEqual([1]);
+  });
+
+  it("follows the subtree with the newest work: A->B->C beats a newer sibling D", () => {
+    const b = visualChild(root, input({ slot: "tank", createdAt: 1 }));
+    const d = visualChild(root, input({ slot: "seat", createdAt: 2 }));
+    const c = visualChild(b, input({ slot: "exhaust", createdAt: 3 }));
+    const r = laterSteps([root, b, d, c], root.id);
+    expect(ids(r.steps)).toEqual([b.id, c.id]);
+    expect(r.otherBranches).toEqual([1, 0]);
+  });
+
+  it("terminates on a corrupt parent cycle", () => {
+    const a = { ...root, id: id(), parentId: null as string | null, createdAt: 1 };
+    const b = { ...root, id: id(), parentId: a.id as string | null, createdAt: 2 };
+    a.parentId = b.id;
+    const r = laterSteps([a, b], a.id);
+    expect(ids(r.steps)).toEqual([b.id]);
   });
 });

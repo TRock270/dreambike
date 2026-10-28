@@ -40,6 +40,29 @@ import { VersionStrip } from "./VersionStrip";
 
 const isStorageFull = (e: unknown) => e instanceof AppError && e.code === "STORAGE_FULL";
 
+type FoldKey = "bike" | "parts" | "change" | "project";
+
+/**
+ * A right-panel section that folds. It uses the browser's own <details>; the open state lives in
+ * Workspace (not saved anywhere) so code can fold or re-open a section. onToggle fires after the
+ * user clicks the summary; e.currentTarget.open is the new state.
+ */
+function Fold({ title, open, onToggle, className = "", children }: {
+  title: string; open: boolean; onToggle: (open: boolean) => void; className?: string; children: React.ReactNode;
+}) {
+  return (
+    <details open={open} onToggle={(e) => onToggle(e.currentTarget.open)} className={`group ${className}`}>
+      <summary className="flex cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden">
+        <svg aria-hidden="true" viewBox="0 0 12 12" className="size-3 shrink-0 transition-transform group-open:rotate-90">
+          <path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        <h3 className="text-[15px] font-semibold">{title}</h3>
+      </summary>
+      <div className="mt-3 flex flex-col gap-3">{children}</div>
+    </details>
+  );
+}
+
 const PREVIEW_DISCARDED = "The preview was discarded because the version shown changed. Nothing was saved and no new render was started. Render again if you still want this change; that costs a new render.";
 
 /** Header, photo area, edit panel and history. Projects are saved in this browser (SPEC 9). */
@@ -86,6 +109,9 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
   // Slot of the wheel a started follow-up targets: accepting that wheel finishes the flow, so no new offer (no front/rear loop).
   const followUpSlot = useRef<SlotId | null>(null);
   // Text to show in the form of one selected part (key = selectionKey).
+  // Which right-panel sections are open. Session only; every section starts open.
+  const [fold, setFold] = useState<Record<FoldKey, boolean>>({ bike: true, parts: true, change: true, project: true });
+  const setFolded = (key: FoldKey, open: boolean) => setFold((f) => (f[key] === open ? f : { ...f, [key]: open }));
   const [prefill, setPrefill] = useState<{ selectionKey: string; text: string } | null>(null);
 
   // One render belongs to one prepared instruction; the cached generation is the resume point.
@@ -318,6 +344,7 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
     setSession(created);
     setPhoto(next);
     setBikeForm(emptyBikeForm());
+    setFolded("bike", true);
     setIdentify({ status: "pending", message: null });
     setIdentifyCachedAt(null);
     setMap(emptyPartMap(next.hash));
@@ -366,6 +393,8 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
       setSaveNote(null);
       showView(opened.view, opened.session);
       setBikeForm(form);
+      // A saved, confirmed bike opens folded; anything else needs the mechanic's eyes.
+      setFolded("bike", !form.confirmed);
       setIdentify({ status: cached ? "done" : "off", message: null });
       setIdentifyCachedAt(cached?.cachedAt ?? null);
     } catch (e) {
@@ -428,6 +457,8 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
     const confirmedNow = next.confirmed && (!previous.confirmed || next.revision !== previous.revision);
     const withdrawn = previous.confirmed && !next.confirmed;
     if (confirmedNow || withdrawn) void saveConfirmedBike(next);
+    // Folding happens here, in the click handler path, never in an effect that also runs when a project opens.
+    if (confirmedNow) setFolded("bike", false);
   }
   async function saveConfirmedBike(form: BikeFormState) {
     const ready = readyStorage();
@@ -553,6 +584,13 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
   }, [selectionKey]);
 
   const renderEntry = render && render.key === prepKey ? render : null;
+
+  // Re-open the change section when the selection changes or a prepare or render starts or finishes,
+  // so a paid preview and its Accept button never sit inside a folded section.
+  const preparedState = prepared?.state, renderKind = render?.state.kind;
+  useEffect(() => {
+    setFolded("change", true);
+  }, [selectionKey, preparedState, renderKind, renderRunning, accept.saving, accept.error]);
 
   /** One explicit click = one paid render; `reuse` blends the cached render again without paying. */
   async function runRender(reuse: boolean) {
@@ -789,14 +827,15 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
       undoHint={readOnly ? "Local storage is read-only" : undefined} redoHint={readOnly ? "Local storage is read-only" : undefined}
       onUndo={() => void navigate((h, s) => undoHead(h, s))}
       onRedo={() => void navigate((h, s) => redoHead(h, s))}>
-      <main className="flex flex-1 gap-4 p-4">
-        <div className="flex min-w-0 flex-[2] flex-col gap-4">
-          <section aria-label="Photo" className="flex flex-1 items-center justify-center rounded-card border border-hairline bg-recess p-4">
+      <main className="flex min-h-0 flex-1 gap-4 p-4">
+        <div className="flex min-h-0 min-w-0 flex-[2] flex-col gap-4 overflow-y-auto">
+          {/* The photo takes the height History leaves; without a photo the notice scrolls here instead of being cut off. */}
+          <section aria-label="Photo" className={`flex flex-col rounded-card border border-hairline bg-recess p-4 ${photo ? "min-h-[300px] flex-1" : "min-h-0 flex-1 overflow-y-auto"}`}>
             {photo ? (
               <ImageCanvas photo={photo} parts={view.parts} selectedId={selectedId} onImageClick={handleClick} boxMode={boxMode !== null} onBox={handleBox}
                 cursor={pointMode ? "crosshair" : "default"} />
-            ) : noticeAccepted ? <UploadDropzone onPhoto={(p) => void choosePhoto(p)} />
-              : <UploadNotice onAccept={() => setNoticeAccepted(true)} />}
+            ) : <div className="m-auto">{noticeAccepted ? <UploadDropzone onPhoto={(p) => void choosePhoto(p)} />
+              : <UploadNotice onAccept={() => setNoticeAccepted(true)} />}</div>}
           </section>
           {saveNote && (
             <p role="alert" className="rounded-chip bg-warning-soft px-3 py-2 text-warning-soft-text text-[13px]">
@@ -820,7 +859,7 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
               onCancelChoice={() => setBranchChoices(null)} />
           )}
         </div>
-        <aside aria-label="Edit panel" className="flex w-[360px] shrink-0 flex-col gap-4 overflow-y-auto rounded-card border border-hairline bg-surface-1 p-4">
+        <aside aria-label="Edit panel" className="flex min-h-0 w-[360px] shrink-0 flex-col gap-4 overflow-y-auto rounded-card border border-hairline bg-surface-1 p-4">
           <h2 className="text-[20px] leading-[1.35]">Edit</h2>
           {!photo && (
             <>
@@ -831,7 +870,8 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
           )}
           {photo && (
             <>
-              <BikeConfirm key={photo.hash} form={bikeForm} identifyStatus={identify.status} identifyMessage={identify.message} onChange={changeBike} />
+              <BikeConfirm key={photo.hash} form={bikeForm} identifyStatus={identify.status} identifyMessage={identify.message} onChange={changeBike}
+                open={fold.bike} onToggle={(o) => setFolded("bike", o)} />
               {identifyCachedAt !== null && (
                 <p className="tabular text-text-muted text-[12px]">
                   Suggestion reused from {new Date(identifyCachedAt).toLocaleDateString()} (saved on this device). No new AI call was made.
@@ -850,6 +890,7 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
                 </div>
               )}
               {notice && <p role="status" className="rounded-chip bg-neutral-soft px-3 py-2 text-neutral-soft-text text-[13px]">{notice}</p>}
+              <Fold title="Parts" open={fold.parts} onToggle={(o) => setFolded("parts", o)}>
               <PartSelector map={map} view={view} selected={selected} pointMode={pointMode} boxMode={boxMode} busy={!map.done || pointBusy}
                 onSelect={selectByUser} onStartPoint={startPoint} onCancelPoint={cancelPoint}
                 onStartBox={startBox} onCancelBox={() => setBoxMode(null)} onToggleAbsent={toggleAbsent}
@@ -862,9 +903,9 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
                   setBikeForm((f) => editField(f, "facing", next));
                 }}
                 onNextBike={() => { partsDirty.current = true; setMap((m) => ({ ...m, bikeChoice: ((typeof m.bikeChoice === "number" ? m.bikeChoice : 0) + 1) % m.bikeCandidates.length })); }} />
+              </Fold>
               {selected && (
-                <section aria-label="Change the selected part" className="flex flex-col gap-3 border-t border-hairline pt-3">
-                  <h3 className="text-[15px] font-semibold">Change: {selected.label}</h3>
+                <Fold title={`Change: ${selected.label}`} open={fold.change} onToggle={(o) => setFolded("change", o)} className="border-t border-hairline pt-3">
                   {absent ? (
                     <p className="text-text-muted text-[12px]">This part is not on the bike yet, so describe it in text. The box marks where it goes.</p>
                   ) : paintOnly ? (
@@ -907,7 +948,7 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
                       onRetryBlend={() => void runRender(true)} onRenderAgain={() => void runRender(false)} onCancel={cancelRender}
                       saving={accept.saving} saveError={accept.error} unsaved={!session || readOnly} readOnly={readOnly && !!session} />
                   )}
-                </section>
+                </Fold>
               )}
               {offer && (
                 <section aria-label="Do the same for the other wheel" className="flex flex-col gap-2 rounded-card border border-hairline bg-surface-3 p-3">
@@ -955,10 +996,12 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
                   )}
                 </section>
               )}
-              <button type="button" onClick={() => void choosePhoto(null)} disabled={pointBusy || renderRunning || accept.saving}
-                className="self-start rounded-full border border-hairline px-4 py-1.5 text-[13px] disabled:opacity-50">
-                Close project
-              </button>
+              <Fold title="Project" open={fold.project} onToggle={(o) => setFolded("project", o)} className="border-t border-hairline pt-3">
+                <button type="button" onClick={() => void choosePhoto(null)} disabled={pointBusy || renderRunning || accept.saving}
+                  className="self-start rounded-full border border-hairline px-4 py-1.5 text-[13px] disabled:opacity-50">
+                  Close project
+                </button>
+              </Fold>
             </>
           )}
         </aside>

@@ -98,15 +98,16 @@ export function ImageCanvas({ photo, parts, selectedId, onImageClick, cursor = "
   }
 
   return (
-    <div className="flex h-full w-full flex-col gap-2">
+    <div className="flex h-full min-h-0 w-full flex-col gap-2">
       {photo.warnings.map((w) => (
-        <p key={w} role="status" className="rounded-chip bg-warning-soft px-3 py-2 text-warning-soft-text text-[13px]">
+        <p key={w} role="status" className="shrink-0 rounded-chip bg-warning-soft px-3 py-2 text-warning-soft-text text-[13px]">
           <span aria-hidden="true" className="mr-2 font-semibold">⚠</span>{w}
         </p>
       ))}
       <div ref={box} onClick={handleClick} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp} onPointerCancel={() => setDrag(null)}
-        className="relative flex-1 min-h-[420px]"
+        // The box takes all free height of the photo section; the photo is contain-fitted inside it (place).
+        className="relative min-h-[240px] flex-1"
         style={{ cursor: boxMode ? "crosshair" : cursor, touchAction: boxMode ? "none" : undefined }}>
         {/* eslint-disable-next-line @next/next/no-img-element -- local blob URL, no optimization wanted */}
         <img ref={img} alt="Normalized bike photo" className="absolute select-none" style={place} draggable={false} />
@@ -119,7 +120,7 @@ export function ImageCanvas({ photo, parts, selectedId, onImageClick, cursor = "
             style={live} />
         )}
       </div>
-      <p className="tabular text-text-muted text-[12px]">
+      <p className="tabular shrink-0 text-text-muted text-[12px]">
         {photo.width} × {photo.height} px · normalized WebP · {photo.hash.slice(0, 12)}
       </p>
     </div>

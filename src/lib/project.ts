@@ -154,6 +154,53 @@ export function children(versions: readonly Version[], id: string): Version[] {
     .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
 }
 
+/** Newest createdAt anywhere in the subtree under (and including) v. The visited set stops cycles. */
+function newestInSubtree(versions: readonly Version[], v: Version): number {
+  let newest = v.createdAt;
+  const seen = new Set<string>([v.id]);
+  const stack = [v.id];
+  while (stack.length > 0) {
+    for (const c of children(versions, stack.pop()!)) {
+      if (seen.has(c.id)) continue;
+      seen.add(c.id);
+      newest = Math.max(newest, c.createdAt);
+      stack.push(c.id);
+    }
+  }
+  return newest;
+}
+
+/**
+ * The steps after the head that the History strip keeps showing, so going back does not hide them.
+ * At a fork we follow the child whose subtree holds the most recently created version, not simply
+ * the newest direct child: with A->B, A->D (newer) and later B->C, the work the mechanic just did
+ * (B, C) stays visible after undo to A. Ties go to the later createdAt, then the later id.
+ * otherBranches[i] is how many other children the node before steps[i] had.
+ */
+export function laterSteps(versions: readonly Version[], headId: string): { steps: Version[]; otherBranches: number[] } {
+  const steps: Version[] = [];
+  const otherBranches: number[] = [];
+  const visited = new Set<string>([headId]);
+  let cur = headId;
+  for (;;) {
+    const kids = children(versions, cur);
+    if (kids.length === 0) break;
+    let best = kids[0]!;
+    let bestNewest = newestInSubtree(versions, best);
+    for (const k of kids.slice(1)) {
+      const n = newestInSubtree(versions, k);
+      // kids are sorted oldest first, so on a full tie the later one wins.
+      if (n >= bestNewest) { best = k; bestNewest = n; }
+    }
+    if (visited.has(best.id)) break; // corrupt tree: never loop
+    visited.add(best.id);
+    steps.push(best);
+    otherBranches.push(kids.length - 1);
+    cur = best.id;
+  }
+  return { steps, otherBranches };
+}
+
 /** Undo selects the parent; null at the root. Never creates a node. */
 export function undoTarget(version: Version): string | null {
   return version.parentId;

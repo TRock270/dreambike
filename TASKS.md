@@ -863,3 +863,45 @@ For each completed ticket append actual date/time ET, files changed, checks and 
   - instruction.v2 has no live evidence yet. All live instruction calls now use it, so the owner's paid check covers it (about $0.06, BUDGET_TICKET=T3): mark the tail and paint it, then add a sissy bar.
   - The absent flag is stored with the part.
   - Run 2: fitted layout, folding sections, later steps in History.
+
+### Owner requests run 2 — 2026-10-28, about 18:52–19:20 ET (fitted layout, folding sections, later steps in History)
+
+- Owner decisions:
+  - the photo stays fixed and fitted, with History directly under it, and the right panel scrolls on its own;
+  - every right-panel section folds;
+  - Bike folds itself after Confirm with a one-line summary;
+  - "the steps should not disappear if I go back".
+- Files:
+  - project.ts: laterSteps follows the newest subtree at forks and has a cycle guard.
+  - VersionStrip.tsx: "Step n (later)" chips with a dashed border and words, clickable through onJump; "+k other branches"; the sheet sits beside the steps.
+  - page.tsx, AppShell.tsx: one h-dvh layout; header, banner and nav do not shrink.
+  - Workspace.tsx: the photo section takes the free height; native details folds for Parts, Change and Project. Change reopens on a new selection, prepare, render or accept state, so Accept and its errors are never hidden.
+  - ImageCanvas.tsx: the photo box fills the section; the contain-fit and click math are unchanged.
+  - BikeConfirm.tsx: a details fold; the summary is "<make model>, confirmed", plus "· N notes, open to read" when limitations exist. The old "Hide details" toggle is gone.
+  - tests/project.test.ts: 5 laterSteps tests.
+- Workflow build-ticket T6:
+  - U4 approved in round 1;
+  - U5 approved in round 3 (photo height floor and fit fixes);
+  - Verify checks passed.
+  - The gate was not met only on "inspect in the browser"; done below.
+- Lead fixes after the browser check:
+  - the photo used a guessed reserve of 400 px and pushed History under the nav. Now it is flex-1 with a min of 300 px, and the canvas box fills it;
+  - History is two columns (steps and sheet);
+  - the "No accepted changes yet" note is hidden when later steps exist;
+  - the duplicate "N branches" label on later steps is removed;
+  - the no-photo notice scrolls instead of being cut off at the top;
+  - Change also reopens on accept saving or error;
+  - the Bike summary says when notes are inside the fold.
+  review-changes quick: green, with 2 minors not changed:
+  - h-full needs a definite parent height; the browser check shows the photo filling it;
+  - a year error is hidden when Bike is folded by hand.
+- Browser check ($0, MOCK=1, headless Chrome, inner size 1440x813, profile deleted after):
+  - The document does not scroll (scrollHeight 813). The photo is 392 px tall, filling the free height. History is fully above the nav (bottom 740, nav top 755), and the aside scrolls on its own.
+  - Confirm bike folded Bike to "Bike, confirmed · 4 notes, open to read".
+  - Two accepted steps, then Undo twice: Start (shown now), Step 1 (later), Step 2 (later), "Redo goes to the next later step". A click on Step 2 (later) jumped there.
+  - Clicking the summaries opened Bike and closed Parts and Project.
+- Checks: typecheck, lint, build pass; npm test 439 passed in 19 files; local_images.py --fixture-set all 71 passed.
+- Consultants: no PAL call. The two calls for this owner request were used in run 1; the review subagents carry this review. Gemini was not asked.
+- Open:
+  - The owner checks the layout on their own screen.
+  - Minor: the Next dev overlay badge covers the "Build sheet" button in dev only.
