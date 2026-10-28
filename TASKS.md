@@ -224,4 +224,5 @@ For each completed ticket append actual date/time ET, files changed, checks and 
   - `python spike/ledger.py status`: connected. All buckets missing, as expected before init. No halt flag, 0 ledger entries.
   - `python spike/ledger.py selftest`: 8 of 8 passed. Covered: missing lifetime fails closed, duplicate ID refused (pending and settled), settle refunds the difference, unknown outcome keeps the full reservation, released 429 keeps the attempt count, concurrent reservations stay under the cap (granted=8, used=940000 µ$), and a charge above the reservation halts further calls.
   - After the selftest: DBSIZE 0, no `{dreambike:selftest-*` keys left.
-- Still open for U06: Meta Billing spend limit, owner reconciliation, then `ledger.py init`, PRICING_VERIFIED_AT, and the per-request search bound before grounded calls.
+- Owner reports setting a $50 Meta Billing spend limit on 2026-10-28 ("for now"). Claude can't see the Billing page. The ledger caps are still the defaults ($5/ticket, $5/day, $50 development, $100 project), so the ledger stops before Billing would. The $100 project cap can't be reached until the owner raises the Billing limit.
+- Still open for U06: owner reconciliation, then `ledger.py init`, PRICING_VERIFIED_AT, and the per-request search bound before grounded calls.
