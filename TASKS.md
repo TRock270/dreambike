@@ -64,6 +64,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 
 ## T5 — One render, compositing, drift, and preview acceptance
 
+- Status: DONE OFFLINE AND IN MOCK 2026-10-28. A live render is gated on U04 (and real masks on U01). Accept works in memory; history and persistence come with T6. See log.
 - Priority: MVP. Estimate: 3h, Oct 30. Depends on: T4 and U04 edit profile; U01 for composition.
 - Files: src/app/api/edit/route.ts/composite/route.ts, src/lib/server/meta.ts/images.ts, src/components/ProgressStatus.tsx/EditReview.tsx/BeforeAfter.tsx, tests/composite.test.ts.
 - Work: single-shot JSON edit; no mask field; one render per click; bounded result cached before new masks; selected-slot SAM refresh; local composite route with exact dilation/feather/drift; clear full-image fallback. Implement the staged progress UI and manual resume after a mask/composite failure.
@@ -429,3 +430,62 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Remaining gates:
   - U02: live identify and instruction smoke with BUDGET_TICKET=T4, owned photo, strict schema acceptance including minLength/maxLength/min/max.
   - If strict mode rejects those keywords, fall back to stripping them in modelJsonSchema; Zod still enforces the limits after the call.
+
+### T5 — 2026-10-28, 01:36–01:53 ET (build plus two review rounds)
+
+- Status: offline and mock scope done.
+  - /api/edit live goes through withReservation (local, BUDGET_TICKET) but is unverified until U04.
+  - Live re-segmentation of the edited part is off until U01, so live renders take the documented missing_mask full-image path.
+- Files:
+  - New: src/app/api/edit/route.ts, src/app/api/composite/route.ts, prompts/edit.v1.md (added to the SPEC 8 table), src/lib/browser/renderClient.ts, src/lib/browser/renderFlow.ts, src/components/EditReview.tsx, BeforeAfter.tsx, ProgressStatus.tsx, tests/composite.test.ts, tests/edit.test.ts, tests/renderflow.test.ts.
+  - Changed:
+    - src/lib/server/images.ts: composite math port, decodeRgb, encodeRgbBounded, webpSize.
+    - src/lib/server/meta.ts: Muse Image wire, renderTemplate, readJsonLimited.
+    - src/lib/parts.ts: boxIoU, chooseCandidate, interiorPoint.
+    - src/lib/browser/partMap.ts: stale state after accept, recutBike, refreshedPart.
+    - src/lib/types.ts; src/components/Workspace.tsx, PartSelector.tsx, InstructionPreview.tsx.
+    - SPEC.md 8 (edit.v1 row); docs/api-evidence.md (U04 row).
+- Checks run:
+  - typecheck: ok. lint: ok.
+  - `npm test`: 108 passed in 13 files. The Python parity test against spike/imaging.py ran: dilation exact, feather within 1 step, drift within 1e-9, blend within 1 step, including a non-zero drift case.
+  - `npm run build`: ok; client bundle canary clean; no hex outside tokens.css.
+  - Headless Chrome 156 over CDP, MOCK=1, 1440×900:
+    - Prepare → Render change. The stages showed, with exactly 1 /api/edit.
+    - Preview "Blended: everything outside the part is kept from your photo." with the slider.
+    - Accept gives a new image hash. Only the refreshed Tank is selectable, and "Other parts are not checked on this version yet" appears.
+    - "Detect parts again" restores the map.
+    - No re-identification: 1 /api/identify in total.
+    - 33 /api/segment in total: 15 initial, 1 point, 1 edited-part refresh, 1 bike recut, 15 manual re-detect.
+- Review round 1:
+  - imaging-reviewer, 3 majors:
+    - the protection test could pass even with wrong feather settings;
+    - bike width fell back to the photo width after an accept;
+    - the resized raster could exceed 1.25 MB.
+  - models/security reviewer: approved with 6 minors.
+  - general-reviewer, 1 major: the same oversized raster, plus Safari PNG instead of WebP.
+- Fixed:
+  - The protection test now differs everywhere (+8 outside the part) and asserts both the band and the drift range; the parity test has a non-zero drift case.
+  - Bike width: no bike outline means the full edit; the old outline is carried forward for same-size results until the recut replaces it.
+  - Raster size: quality ladder, WebP type check, otherwise the full edit.
+  - The template inserts text verbatim (no "$" patterns).
+  - Upstream bodies are capped at 40 MB.
+  - Edit route: 12 s kept for post-processing; bad generated output is INVALID_IMAGE.
+  - Composite route checks the real WebP format and animation; encodeRgbBounded never resizes silently.
+  - A non-blended result shows the render at its own size.
+  - "Retry blend" can never turn into a paid render; cancelling keeps a paid render for Retry blend.
+  - Cancel button with a billing note; "Render again" only for retryable errors, with cost notes.
+  - Wording: "nothing changes until you accept".
+  - Render disabled while any render runs.
+- Round 2 (general-reviewer): approved all items. Its N1 (tests for the upstream cap and animated WebP) and N2 (keep the paid render on cancel) were fixed.
+- Recorded, not changed:
+  - SPEC 7 deviation, for the owner: the browser resizes the render to the base size with canvas smoothing, not Lanczos3. The effect is small, well under the drift threshold. A sharp Lanczos3 raster would need an EditResponse contract change.
+  - The client does not know COMPOSITE_ENABLED, so SAM may run before a "disabled" answer.
+  - Grayscale drift misses a hue-only global shift (U04 note).
+  - Stale masks are dropped after accept; T6 owns stale flags.
+  - N3: after a failed recut, the carried-forward outline may be off for a drift-fallback result.
+  - N4: switching parts during a render hides its progress.
+  - N5: an oversized blend gives INVALID_IMAGE rather than the full edit.
+- Cost ledger: $0.00 (no paid calls).
+- Remaining gates:
+  - U04: one live render with BUDGET_TICKET=T5 on an owned photo and an owner before/after review.
+  - U01: real masks, which enable real composition.

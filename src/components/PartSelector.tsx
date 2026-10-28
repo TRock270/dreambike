@@ -18,16 +18,17 @@ type Props = {
   onCancelPoint: () => void;
   onFacing: (facing: "left" | "right") => void;
   onSwapFacing: () => void;
+  onRedetect: () => void;
   onNextBike: () => void;
 };
 
 const STATUS_TEXT: Record<PhraseStatus, string> = {
   pending: "Looking…", found: "Found", none: "Not found", needs_point: "Select by point",
-  needs_facing: "Needs front/rear", error: "Failed",
+  needs_facing: "Needs front/rear", error: "Failed", stale: "Not checked on this version",
 };
 
 /** Edit-panel list of detected parts, bike choice, front/rear, and point selection. */
-export function PartSelector({ map, view, selected, pointMode, busy, onSelect, onStartPoint, onCancelPoint, onFacing, onSwapFacing, onNextBike }: Props) {
+export function PartSelector({ map, view, selected, pointMode, busy, onSelect, onStartPoint, onCancelPoint, onFacing, onSwapFacing, onRedetect, onNextBike }: Props) {
   const [target, setTarget] = useState<SlotId | "bike">("custom");
   const [customName, setCustomName] = useState("");
   const needsFacing = Object.values(view.phrases).includes("needs_facing");
@@ -88,6 +89,13 @@ export function PartSelector({ map, view, selected, pointMode, busy, onSelect, o
           </li>
         ))}
       </ul>
+
+      {Object.values(view.phrases).includes("stale") && (
+        <p className="rounded-chip bg-neutral-soft px-3 py-2 text-neutral-soft-text text-[13px]">
+          <span aria-hidden="true" className="mr-1 font-semibold">ⓘ</span>Other parts are not checked on this version yet.
+          <button type="button" onClick={onRedetect} disabled={busy} className="ml-2 underline underline-offset-2 disabled:opacity-50">Detect parts again</button>
+        </p>
+      )}
 
       <details className="text-[13px]">
         <summary className="cursor-pointer text-text-secondary">Detection status</summary>

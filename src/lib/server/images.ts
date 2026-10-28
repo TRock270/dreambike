@@ -192,3 +192,192 @@ export async function assertWebpSize(bytes: Uint8Array, width: number, height: n
     throw new AppError("INVALID_REQUEST", "Declared size does not match the image.");
   }
 }
+
+// ------------------------------------------------- composite and drift (SPEC 7)
+// A port of spike/imaging.py; tests/composite.test.ts checks pixel equality
+// against the Python reference. Every operand must share dimensions.
+
+export const DRIFT_THRESHOLD = 0.05;
+export const ASPECT_LIMIT = 0.02;
+export const SMALL_EDGE = 1024;
+
+/** Python round_half_up: floor(x + 0.5). */
+const roundHalfUp = (x: number) => Math.floor(x + 0.5);
+const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x));
+
+function sameSize(...masks: { width: number; height: number }[]): void {
+  const [first, ...rest] = masks;
+  for (const m of rest) {
+    if (m.width !== first!.width || m.height !== first!.height) {
+      throw new AppError("INVALID_IMAGE", "Mask and image sizes differ; masks are never resized silently.");
+    }
+  }
+}
+
+export function unionMask(a: BinaryMask, b: BinaryMask): BinaryMask {
+  sameSize(a, b);
+  const pixels = new Uint8Array(a.pixels.length);
+  for (let i = 0; i < pixels.length; i++) pixels[i] = a.pixels[i]! | b.pixels[i]!;
+  return { width: a.width, height: a.height, pixels };
+}
+
+/** Binary dilation with a disk: for each row offset dy, a horizontal run of half-width isqrt(r² − dy²). */
+export function dilate(mask: BinaryMask, radius: number): BinaryMask {
+  const { width: w, height: h } = mask;
+  if (radius <= 0) return { width: w, height: h, pixels: mask.pixels.slice() };
+  // prefix[y * (w + 1) + x] = number of set pixels in row y before column x
+  const prefix = new Int32Array(h * (w + 1));
+  for (let y = 0; y < h; y++) {
+    let run = 0;
+    for (let x = 0; x < w; x++) { run += mask.pixels[y * w + x]!; prefix[y * (w + 1) + x + 1] = run; }
+  }
+  const out = new Uint8Array(w * h);
+  for (let dy = Math.max(-radius, 1 - h); dy <= Math.min(radius, h - 1); dy++) {
+    const half = Math.floor(Math.sqrt(radius * radius - dy * dy) + 1e-9);
+    for (let y = Math.max(0, -dy); y < Math.min(h, h - dy); y++) {
+      const src = (y + dy) * (w + 1);
+      for (let x = 0; x < w; x++) {
+        if (out[y * w + x]) continue;
+        const x0 = Math.max(0, x - half), x1 = Math.min(w, x + half + 1);
+        if (prefix[src + x1]! - prefix[src + x0]! > 0) out[y * w + x] = 1;
+      }
+    }
+  }
+  return { width: w, height: h, pixels: out };
+}
+
+export function gaussianKernel(sigma: number): Float64Array {
+  const radius = Math.ceil(3 * sigma);
+  const k = new Float64Array(2 * radius + 1);
+  let sum = 0;
+  for (let i = 0; i < k.length; i++) { const x = i - radius; k[i] = Math.exp(-(x * x) / (2 * sigma * sigma)); sum += k[i]!; }
+  for (let i = 0; i < k.length; i++) k[i] = k[i]! / sum;
+  return k;
+}
+
+/** Separable Gaussian blur of a 0/1 mask (rows, then columns; edge pixels replicated) to 0..255 alpha. */
+export function feather(mask: BinaryMask, sigma = 1.5): Uint8Array {
+  const { width: w, height: h } = mask;
+  const k = gaussianKernel(sigma);
+  const r = (k.length - 1) / 2;
+  const rows = new Float64Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let acc = 0;
+      // Same accumulation order as the numpy reference (kernel index ascending).
+      for (let i = 0; i < k.length; i++) acc += k[i]! * mask.pixels[y * w + clamp(x - r + i, 0, w - 1)]!;
+      rows[y * w + x] = acc;
+    }
+  }
+  const alpha = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let acc = 0;
+      for (let i = 0; i < k.length; i++) acc += k[i]! * rows[clamp(y - r + i, 0, h - 1) * w + x]!;
+      alpha[y * w + x] = clamp(roundHalfUp(acc * 255), 0, 255);
+    }
+  }
+  return alpha;
+}
+
+/** Mean absolute grayscale difference outside `excluded`, divided by 255; null with no outside pixels. */
+export function driftCheck(base: Uint8Array, edited: Uint8Array, excluded: BinaryMask): { score: number | null; outsidePixels: number } {
+  const n = excluded.width * excluded.height;
+  if (base.length !== n * 3 || edited.length !== n * 3) throw new AppError("INVALID_IMAGE", "Drift operands differ in size.");
+  let sum = 0, count = 0;
+  for (let i = 0; i < n; i++) {
+    if (excluded.pixels[i]) continue;
+    const gb = 0.299 * base[i * 3]! + 0.587 * base[i * 3 + 1]! + 0.114 * base[i * 3 + 2]!;
+    const ge = 0.299 * edited[i * 3]! + 0.587 * edited[i * 3 + 1]! + 0.114 * edited[i * 3 + 2]!;
+    sum += Math.abs(gb - ge);
+    count++;
+  }
+  return { score: count === 0 ? null : sum / count / 255, outsidePixels: count };
+}
+
+export function compositeParams(bikeWidth: number): { radius: number; sigma: number } {
+  return { radius: roundHalfUp(clamp(0.015 * bikeWidth, 6, 24)), sigma: clamp(0.005 * bikeWidth, 3, 8) };
+}
+
+export function aspectDifference(genW: number, genH: number, baseW: number, baseH: number): number {
+  return Math.abs((genW / genH) / (baseW / baseH) - 1);
+}
+
+/** Reasons decided before any pixel work (SPEC 7 order), or null when blending may proceed. */
+export function compositeSkipReason(enabled: boolean, intent: "paint" | "replace" | "geometry",
+  generated: { width: number; height: number }, base: { width: number; height: number }): "disabled" | "geometry" | "small" | "aspect" | null {
+  if (!enabled) return "disabled";
+  if (intent === "geometry") return "geometry";
+  if (Math.min(generated.width, generated.height) < SMALL_EDGE) return "small";
+  if (aspectDifference(generated.width, generated.height, base.width, base.height) > ASPECT_LIMIT) return "aspect";
+  return null;
+}
+
+export type CompositeReason = "composited" | "disabled" | "geometry" | "small" | "aspect" | "drift" | "missing_mask" | "no_outside_area";
+export type RawRgb = { width: number; height: number; data: Uint8Array };
+export type CompositeOutcome = { image: RawRgb; composed: boolean; aligned: boolean; drift: number | null; reason: CompositeReason };
+
+/**
+ * Protect pixels outside the edited part (SPEC 7 order of checks). `edited`
+ * must already be resized to the base size when composition is possible;
+ * generated size is the raw model output size.
+ */
+export function compositeRgb(base: RawRgb, edited: RawRgb, oldMask: BinaryMask | null, newMask: BinaryMask | null,
+  bikeWidth: number, intent: "paint" | "replace" | "geometry", generated: { width: number; height: number },
+  enabled = true): CompositeOutcome {
+  const full = (reason: CompositeReason, drift: number | null = null): CompositeOutcome =>
+    ({ image: edited, composed: false, aligned: false, drift, reason });
+  const skip = compositeSkipReason(enabled, intent, generated, base);
+  if (skip) return full(skip);
+  if (!oldMask || !newMask) return full("missing_mask");
+  if (edited.width !== base.width || edited.height !== base.height) {
+    throw new AppError("INVALID_IMAGE", "The edited image must be resized to the base size first.");
+  }
+  sameSize(base, oldMask, newMask);
+  const { radius, sigma } = compositeParams(bikeWidth);
+  const region = dilate(unionMask(oldMask, newMask), radius);
+  const { score } = driftCheck(base.data, edited.data, region);
+  if (score === null) return full("no_outside_area");
+  if (score > DRIFT_THRESHOLD) return full("drift", score);
+  const alpha = feather(region, sigma);
+  const out = new Uint8Array(base.data.length);
+  for (let i = 0; i < alpha.length; i++) {
+    const a = alpha[i]!;
+    for (let c = 0; c < 3; c++) {
+      const b = base.data[i * 3 + c]!;
+      // Same arithmetic as numpy: b + (e − b) × a / 255, then round half up; a = 0 keeps the base pixel.
+      out[i * 3 + c] = clamp(Math.floor(b + ((edited.data[i * 3 + c]! - b) * a) / 255 + 0.5), 0, 255);
+    }
+  }
+  return { image: { width: base.width, height: base.height, data: out }, composed: true, aligned: true, drift: score, reason: "composited" };
+}
+
+/** Decode an encoded image to raw RGB (3 channels), refusing anything over 40 MP. */
+export async function decodeRgb(bytes: Uint8Array): Promise<RawRgb> {
+  try {
+    const { data, info } = await sharp(bytes, { limitInputPixels: MAX_INPUT_PIXELS, failOn: "error" })
+      .timeout({ seconds: SHARP_TIMEOUT_S }).removeAlpha().toColourspace("srgb").raw().toBuffer({ resolveWithObject: true });
+    if (info.channels !== 3) throw new Error("channels");
+    return { width: info.width, height: info.height, data: new Uint8Array(data) };
+  } catch {
+    throw new AppError("INVALID_IMAGE", "An image could not be decoded.");
+  }
+}
+
+/** Encode raw RGB as WebP within the byte limit (quality ladder, no resize: composites stay base-sized). */
+export async function encodeRgbBounded(raw: RawRgb): Promise<NormalizedImage> {
+  for (const quality of qualitySteps()) {
+    const out = await sharp(Buffer.from(raw.data), { raw: { width: raw.width, height: raw.height, channels: 3 } })
+      .timeout({ seconds: SHARP_TIMEOUT_S }).webp({ quality, effort: 4 }).toBuffer();
+    if (out.byteLength <= MAX_BYTES) return result(out, { width: raw.width, height: raw.height }, quality, []);
+  }
+  // Never shrink silently: a composite must keep the base size, so a raster that does not fit fails visibly.
+  throw new AppError("INVALID_IMAGE", "The blended image is too large to send.");
+}
+
+/** A WebP upload's real size; refuses other formats and animation whatever the declared MIME. */
+export async function webpSize(bytes: Uint8Array): Promise<{ width: number; height: number }> {
+  const meta = await sharp(bytes).metadata().catch(() => null);
+  if (!meta || meta.format !== "webp" || (meta.pages ?? 1) > 1 || !meta.width || !meta.height) throw new AppError("INVALID_IMAGE");
+  return { width: meta.width, height: meta.height };
+}

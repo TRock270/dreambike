@@ -9,7 +9,8 @@ const INTENT_TEXT: Record<InstructionData["intent"], string> = {
 };
 
 /** The prepared instruction: what will be rendered and what goes on the build sheet. */
-export function InstructionPreview({ instruction, slotLabel }: { instruction: InstructionData; slotLabel: string }) {
+export function InstructionPreview({ instruction, slotLabel, rendering, onRender }: {
+  instruction: InstructionData; slotLabel: string; rendering: boolean; onRender: () => void }) {
   return (
     <section aria-label="Prepared change" className="flex flex-col gap-2 rounded-card border border-hairline bg-surface-2 p-3 text-[13px]">
       <p className="text-text-muted text-[12px]">Prepared change · {slotLabel}</p>
@@ -43,10 +44,11 @@ export function InstructionPreview({ instruction, slotLabel }: { instruction: In
         <summary className="cursor-pointer text-text-secondary">Image instruction</summary>
         <p className="mt-1 whitespace-pre-wrap text-text-secondary">{instruction.editPrompt}</p>
       </details>
-      <button type="button" disabled className="self-start rounded-full bg-accent-fill px-4 py-1.5 text-on-fill disabled:opacity-50">
+      <button type="button" disabled={rendering} onClick={onRender}
+        className="self-start rounded-full bg-accent-fill px-4 py-1.5 text-on-fill disabled:opacity-50">
         Render change
       </button>
-      <p className="text-text-muted text-[12px]">Image rendering is not built yet.</p>
+      <p className="text-text-muted text-[12px]">One click makes one AI render (about $0.01). Nothing changes until you accept it.</p>
     </section>
   );
 }

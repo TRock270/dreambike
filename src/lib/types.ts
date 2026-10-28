@@ -102,4 +102,4 @@ export type MapPart = {
   box: [number, number, number, number]; source: "concept" | "point"; confidence: number | null;
   stale: boolean; imageHash: string;
 };
-export type PhraseStatus = "pending" | "found" | "none" | "needs_point" | "needs_facing" | "error";
+export type PhraseStatus = "pending" | "found" | "none" | "needs_point" | "needs_facing" | "error" | "stale";

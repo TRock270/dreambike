@@ -25,7 +25,8 @@ export type PartMapState = {
   bikePoint: SegmentedObject | null;
   bikeStatus: "pending" | "found" | "none" | "error";
   raw: Record<string, SegmentedObject[]>;
-  requests: Record<string, "pending" | "done" | "error">;
+  /** "stale": not detected on this version (after an accepted edit); detection is a manual step. */
+  requests: Record<string, "pending" | "done" | "error" | "stale">;
   pointParts: MapPart[];
   facing: Facing;
   errors: string[];
@@ -125,7 +126,7 @@ export function derive(state: PartMapState): DerivedMap {
   const phrases: Record<string, PhraseStatus> = {};
   for (const phrase of CORE_PHRASES) {
     const req = state.requests[phrase];
-    if (req === "pending" || req === "error") { phrases[phrase] = req; continue; }
+    if (req === "pending" || req === "error" || req === "stale") { phrases[phrase] = req; continue; }
     const r = cachedPartsForPhrase(phrase, state.raw[phrase] ?? EMPTY, bike?.mask ?? null, state.facing, state.imageHash);
     phrases[phrase] = r.status;
     // A point selection for a slot replaces the detected part for that slot.
@@ -213,4 +214,33 @@ export async function selectByPoint(photo: PhotoRef, point: { x: number; y: numb
 
 function messageOf(error: unknown, what: string): string {
   return `${what}: ${error instanceof PreflightError ? error.message : "detection failed"}`;
+}
+
+/** The part map for an accepted edit: no automatic re-detection (PLAN 9.3), only the refreshed part. */
+export function partMapAfterEdit(previous: PartMapState, imageHash: string, refreshed: MapPart | null,
+  sameSize: boolean): PartMapState {
+  // For a same-size result the old outline stays in use until the background recut replaces it,
+  // so the blend radius keeps coming from the bike, not from the photo width.
+  const keep = sameSize ? currentBike(previous) : null;
+  return { ...emptyPartMap(imageHash), facing: previous.facing, done: true,
+    bikeCandidates: keep ? [keep] : [], bikeChoice: keep ? 0 : null, bikeStatus: keep ? "found" : "pending",
+    requests: Object.fromEntries(CORE_PHRASES.map((p) => [p, "stale"])), pointParts: refreshed ? [refreshed] : [] };
+}
+
+/** Re-detect the outline of the bike only (after an accepted edit). */
+export async function recutBike(photo: PhotoRef, update: Update, signal?: AbortSignal): Promise<void> {
+  try {
+    const cut = await requestSegment(photo, { mode: "concept", phrase: "motorcycle" }, signal);
+    const ranked = rankBikes(cut.objects);
+    update((s) => (s.imageHash !== photo.hash ? s : { ...s, bikeCandidates: ranked, bikeChoice: ranked.length ? 0 : null,
+      bikeStatus: ranked.length ? "found" : "none" }));
+  } catch (error) {
+    if (signal?.aborted) return;
+    update((s) => (s.imageHash !== photo.hash ? s : { ...s, bikeStatus: "error", errors: [...s.errors, messageOf(error, "Bike outline")] }));
+  }
+}
+
+/** Make a part from a mask (used for the edited part after an accepted render). */
+export function refreshedPart(slot: SlotId, label: string, mask: BinaryMask, imageHash: string): MapPart | null {
+  return makePart(`point:${slot}:accepted:${imageHash.slice(0, 12)}`, slot, label, mask, "point", null, imageHash);
 }

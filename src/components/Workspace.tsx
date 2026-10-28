@@ -2,15 +2,20 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { applySuggestion, editField, emptyBikeForm, type BikeFormState } from "@/lib/bikeForm";
-import { buildPartMap, derive, emptyPartMap, selectByPoint, type PartMapState } from "@/lib/browser/partMap";
+import {
+  buildPartMap, derive, emptyPartMap, partMapAfterEdit, recutBike, refreshedPart, selectByPoint, type PartMapState,
+} from "@/lib/browser/partMap";
 import { PreflightError } from "@/lib/browser/preflight";
+import { requestEdit, type Composited, type Generated } from "@/lib/browser/renderClient";
+import { blend } from "@/lib/browser/renderFlow";
 import { requestIdentify, requestInstruction } from "@/lib/browser/sparkClient";
 import { hitTest, type ImagePoint } from "@/lib/coordinates";
 import { modeAllowed } from "@/lib/editPolicy";
 import { slotInfo } from "@/lib/slots";
-import type { InstructionData, NormalizedPhoto } from "@/lib/types";
+import type { BinaryMask, InstructionData, NormalizedPhoto } from "@/lib/types";
 import { BikeConfirm } from "./BikeConfirm";
 import { DescribeForm } from "./DescribeForm";
+import { EditReview, type RenderState } from "./EditReview";
 import { ImageCanvas } from "./ImageCanvas";
 import { InstructionPreview } from "./InstructionPreview";
 import { PaintForm } from "./PaintForm";
@@ -36,11 +41,21 @@ export function Workspace() {
   const [prepared, setPrepared] = useState<{ key: string; state: "busy" } | { key: string; state: "error"; message: string }
     | { key: string; state: "done"; instruction: InstructionData } | null>(null);
 
+  // One render belongs to one prepared instruction; the cached generation is the resume point.
+  const [render, setRender] = useState<{ key: string; state: RenderState; newMask: BinaryMask | null } | null>(null);
+  const renderBusy = useRef(false);
+  const [renderRunning, setRenderRunning] = useState(false);
+  const renderAbort = useRef<AbortController | null>(null);
+  // Full detection and identification run only for a newly imported photo, never after an accepted edit.
+  const autoDetect = useRef<string | null>(null);
+  const runAbort = useRef<AbortController | null>(null);
+
   // A new photo starts a fresh part map. Every write checks the image hash,
   // so results for an older photo can never land on the new one.
   useEffect(() => {
-    if (!photo) return;
+    if (!photo || autoDetect.current !== photo.hash) return;
     const controller = new AbortController();
+    runAbort.current = controller;
     void buildPartMap(photo, setMap, controller.signal);
     // Identification runs in parallel; its suggestion fills only untouched fields.
     void requestIdentify(photo, controller.signal).then(
@@ -58,6 +73,10 @@ export function Workspace() {
 
   function choosePhoto(next: NormalizedPhoto | null) {
     pointAbort.current?.abort();
+    renderAbort.current?.abort();
+    runAbort.current?.abort();
+    autoDetect.current = next?.hash ?? null;
+    setRender(null);
     setPhoto(next);
     setBikeForm(emptyBikeForm());
     setIdentify({ status: next ? "pending" : "off", message: null });
@@ -107,6 +126,83 @@ export function Workspace() {
   const prepKey = `${selectionKey}:${mode}:${JSON.stringify(bikeForm.bike)}`;
   const current = prepared && prepared.key === prepKey ? prepared : null;
 
+  const renderEntry = render && render.key === prepKey ? render : null;
+
+  /** One explicit click = one paid render; `reuse` blends the cached render again without paying. */
+  async function runRender(reuse: boolean) {
+    if (!photo || !selected || current?.state !== "done" || renderBusy.current) return;
+    const cached = renderEntry && renderEntry.state.kind !== "review" ? renderEntry.state.generated : null;
+    if (reuse && !cached) return; // "Retry blend" never turns into a paid render
+    renderBusy.current = true;
+    setRenderRunning(true);
+    const controller = new AbortController();
+    renderAbort.current = controller;
+    const key = prepKey, base = photo, part = selected, instruction = current.instruction;
+    const bikeBox = view.bike?.box ?? null;
+    let generated: Generated | null = reuse ? cached : null;
+    const put = (state: RenderState, newMask: BinaryMask | null = null) => {
+      if (!controller.signal.aborted) setRender({ key, state, newMask });
+    };
+    try {
+      if (!generated) {
+        put({ kind: "running", stage: "generating", generated: null });
+        generated = await requestEdit(base, { slot: part.slot, prompt: instruction.editPrompt, mode,
+          intent: instruction.intent, quality: "high" }, crypto.randomUUID(), controller.signal);
+      }
+      const g = generated;
+      const { result, newMask } = await blend(base, g, part, bikeBox, instruction.intent,
+        (stage) => put({ kind: "running", stage, generated: g }), controller.signal);
+      put({ kind: "review", generated: g, result }, newMask);
+    } catch (error) {
+      const known = error instanceof PreflightError;
+      put({ kind: "error", message: known ? error.message : "The render failed.", retryable: known ? error.retryable : true, generated });
+    } finally {
+      renderBusy.current = false;
+      setRenderRunning(false);
+    }
+  }
+
+  /** Cancel. A render that is already paid for is kept, so "Retry blend" can use it without paying again. */
+  function cancelRender() {
+    const entry = renderEntry;
+    const generated = entry?.state.kind === "running" ? entry.state.generated : null;
+    renderAbort.current?.abort();
+    if (entry && generated) {
+      setRender({ key: entry.key, newMask: null, state: { kind: "error", generated, retryable: true,
+        message: "Blending cancelled. The render is kept: “Retry blend” uses it without a new render." } });
+    } else {
+      setRender(null);
+    }
+  }
+
+  /** Accept: the result becomes the working photo. History and undo arrive with T6. */
+  function acceptRender() {
+    if (!photo || !selected || renderEntry?.state.kind !== "review") return;
+    const result: Composited = renderEntry.state.result;
+    const next: NormalizedPhoto = { blob: result.blob, width: result.width, height: result.height, hash: result.hash, warnings: [] };
+    const sameSize = result.width === photo.width && result.height === photo.height;
+    const part = sameSize && renderEntry.newMask ? refreshedPart(selected.slot, selected.label, renderEntry.newMask, next.hash) : null;
+    runAbort.current?.abort();
+    autoDetect.current = null; // the confirmed bike stays; only the outline and the edited part refresh
+    setPhoto(next);
+    setMap((m) => partMapAfterEdit(m, next.hash, part, sameSize));
+    setSelectedId(part?.id ?? null);
+    setPrepared(null);
+    setRender(null);
+    const controller = new AbortController();
+    runAbort.current = controller;
+    void recutBike(next, setMap, controller.signal);
+  }
+
+  function redetect() {
+    if (!photo) return;
+    runAbort.current?.abort();
+    const controller = new AbortController();
+    runAbort.current = controller;
+    setMap((m) => ({ ...m, done: false, raw: {}, errors: [], requests: Object.fromEntries(Object.keys(m.requests).map((p) => [p, "pending"])) }));
+    void buildPartMap(photo, setMap, controller.signal);
+  }
+
   async function prepare(text: string) {
     if (!photo || !selected || !selectionKey) return;
     const key = prepKey;
@@ -151,6 +247,7 @@ export function Workspace() {
             <PartSelector map={map} view={view} selected={selected} pointMode={pointMode} busy={!map.done || pointBusy}
               onSelect={setSelectedId} onStartPoint={setPointMode} onCancelPoint={() => setPointMode(null)}
               onFacing={(facing) => { setMap((m) => ({ ...m, facing })); setBikeForm((f) => editField(f, "facing", facing)); }}
+              onRedetect={redetect}
               onSwapFacing={() => {
                 const next = map.facing === "left" ? "right" : "left";
                 setMap((m) => ({ ...m, facing: next }));
@@ -181,7 +278,14 @@ export function Workspace() {
                     <span aria-hidden="true" className="mr-1 font-semibold">✕</span>{current.message}
                   </p>
                 )}
-                {current?.state === "done" && <InstructionPreview instruction={current.instruction} slotLabel={selected.label} />}
+                {current?.state === "done" && (
+                  <InstructionPreview instruction={current.instruction} slotLabel={selected.label}
+                    rendering={renderRunning} onRender={() => void runRender(false)} />
+                )}
+                {current?.state === "done" && renderEntry && (
+                  <EditReview base={photo} state={renderEntry.state} onAccept={acceptRender} onReject={() => setRender(null)}
+                    onRetryBlend={() => void runRender(true)} onRenderAgain={() => void runRender(false)} onCancel={cancelRender} />
+                )}
               </section>
             )}
             <button type="button" onClick={() => choosePhoto(null)} disabled={pointBusy}

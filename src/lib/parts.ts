@@ -153,3 +153,52 @@ export const PAIRED_SLOTS: Partial<Record<string, readonly [SlotId, SlotId]>> = 
   wheel: ["wheel_front", "wheel_rear"],
   fender: ["fender_front", "fender_rear"],
 };
+
+type Box4 = [number, number, number, number];
+
+/** Intersection over union of two half-open boxes. */
+export function boxIoU(a: Box4, b: Box4): number {
+  const iw = Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0]));
+  const ih = Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
+  const inter = iw * ih;
+  const area = (x: Box4) => (x[2] - x[0]) * (x[3] - x[1]);
+  const union = area(a) + area(b) - inter;
+  return union > 0 ? inter / union : 0;
+}
+
+export const MIN_MATCH_IOU = 0.1;
+
+/**
+ * Which new SAM object is the edited part (SPEC 7): greatest box IoU with the
+ * old selection, then the closest center. No plausible match, or two
+ * candidates that cannot be told apart, gives null (missing_mask fallback).
+ * IDs are never matched across separate SAM requests.
+ */
+export function chooseCandidate(oldBox: Box4, candidates: readonly Box4[]): number | null {
+  const center = (b: Box4) => [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2] as const;
+  const [ox, oy] = center(oldBox);
+  const scored = candidates.map((b, i) => {
+    const [cx, cy] = center(b);
+    return { i, iou: boxIoU(oldBox, b), dist: Math.hypot(cx - ox, cy - oy) };
+  }).filter((s) => s.iou >= MIN_MATCH_IOU)
+    .sort((a, b) => b.iou - a.iou || a.dist - b.dist);
+  if (scored.length === 0) return null;
+  const [best, second] = scored;
+  if (second && Math.abs(best!.iou - second.iou) < 0.02 && Math.abs(best!.dist - second.dist) < 2) return null;
+  return best!.i;
+}
+
+/** A pixel inside the mask, as close to its box center as possible (for a point prompt). */
+export function interiorPoint(mask: BinaryMask, box: Box4): { x: number; y: number } | null {
+  const cx = Math.floor((box[0] + box[2]) / 2), cy = Math.floor((box[1] + box[3]) / 2);
+  let best: { x: number; y: number } | null = null;
+  let bestD = Infinity;
+  for (let y = box[1]; y < box[3]; y++) {
+    for (let x = box[0]; x < box[2]; x++) {
+      if (!mask.pixels[y * mask.width + x]) continue;
+      const d = (x - cx) * (x - cx) + (y - cy) * (y - cy);
+      if (d < bestD) { bestD = d; best = { x, y }; if (d === 0) return best; }
+    }
+  }
+  return best;
+}

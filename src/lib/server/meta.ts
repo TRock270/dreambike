@@ -226,6 +226,33 @@ export function usageOf(body: unknown): unknown {
   return body && typeof body === "object" ? (body as { usage?: unknown }).usage : undefined;
 }
 
+/** Upstream answers larger than this are refused (charge unknown) before they fill memory. */
+export const MAX_UPSTREAM_BYTES = 40_000_000;
+
+/** Read a JSON body with a byte cap, so a runaway answer cannot exhaust memory. */
+export async function readJsonLimited(res: Response, maxBytes = MAX_UPSTREAM_BYTES): Promise<unknown> {
+  const declared = Number(res.headers.get("content-length") ?? "0");
+  if (declared > maxBytes || !res.body) {
+    await res.body?.cancel().catch(() => {});
+    throw new AppError("UPSTREAM_UNAVAILABLE");
+  }
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) { await reader.cancel().catch(() => {}); throw new AppError("UPSTREAM_UNAVAILABLE"); }
+    chunks.push(value);
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+  } catch {
+    throw new AppError("UPSTREAM_UNAVAILABLE");
+  }
+}
+
 /**
  * POST /v1/responses for Spark (no tools); returns the raw JSON body. The
  * caller settles the charge from its usage first and judges the answer with
@@ -248,8 +275,70 @@ export async function fetchSparkJson(body: unknown, signal: AbortSignal): Promis
     throw upstreamError(res.status, res.headers.get("retry-after"));
   }
   try {
-    return await res.json();
-  } catch {
-    throw new AppError(signal.aborted ? "UPSTREAM_TIMEOUT" : "UPSTREAM_UNAVAILABLE");
+    return await readJsonLimited(res);
+  } catch (error) {
+    if (signal.aborted) throw new AppError("UPSTREAM_TIMEOUT");
+    throw error;
   }
+}
+
+// ------------------------------------------------------- Muse Image (6.2)
+
+/** Expand a versioned template: drop the header paragraph, insert the edit prompt. */
+export function renderTemplate(file: "paint.v1.md" | "edit.v1.md" | "compose.v1.md", editPrompt: string): string {
+  const text = promptText(file);
+  const body = text.slice(text.indexOf("\n\n") + 2);
+  // A replacer function inserts the text verbatim ("$&", "$`", "$$" keep their literal meaning).
+  return body.replace("{{editPrompt}}", () => editPrompt.trim()).trimEnd();
+}
+
+/** The server picks the template from the request mode, never from client-sent intent. */
+export function templateFor(mode: "text" | "paint"): "paint.v1.md" | "edit.v1.md" {
+  return mode === "paint" ? "paint.v1.md" : "edit.v1.md";
+}
+
+export function imageEditBody(prompt: string, imageUrl: string, width: number, height: number, quality: "high" | "low") {
+  return {
+    model: "muse-image-1.0", prompt, images: [{ image_url: imageUrl }], n: 1, size: `${width}x${height}`,
+    response_format: "b64_json", output_format: "webp", reasoning_strength: quality,
+    tool_enablement: { enable_image_search: false, enable_web_search: false, enable_shell: false },
+  };
+}
+
+/** POST /v1/images/edits; returns the raw JSON body (the caller counts returned images for the charge). */
+export async function fetchImageEdit(body: unknown, signal: AbortSignal): Promise<unknown> {
+  let res: Response;
+  try {
+    res = await fetch(`${META_BASE}/images/edits`, {
+      method: "POST", signal, redirect: "error",
+      headers: { ...authHeader(), "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (error) {
+    throw new AppError(signal.aborted || isAbort(error) ? "UPSTREAM_TIMEOUT" : "UPSTREAM_UNAVAILABLE");
+  }
+  if (res.status !== 200) {
+    await res.body?.cancel().catch(() => {});
+    throw upstreamError(res.status, res.headers.get("retry-after"));
+  }
+  try {
+    return await readJsonLimited(res);
+  } catch (error) {
+    if (signal.aborted) throw new AppError("UPSTREAM_TIMEOUT");
+    throw error;
+  }
+}
+
+/** Number of returned images, or null when the answer has no data array (unknown charge). */
+export function returnedImages(body: unknown): number | null {
+  const data = body && typeof body === "object" ? (body as { data?: unknown }).data : undefined;
+  return Array.isArray(data) ? data.length : null;
+}
+
+/** The first returned image's bytes; NO_RESULT when there is none. */
+export function firstImageBytes(body: unknown): Uint8Array {
+  const data = (body as { data?: { b64_json?: unknown }[] }).data;
+  const b64 = Array.isArray(data) ? data[0]?.b64_json : undefined;
+  if (typeof b64 !== "string" || b64.length === 0) throw new AppError("NO_RESULT");
+  return new Uint8Array(Buffer.from(b64, "base64"));
 }
