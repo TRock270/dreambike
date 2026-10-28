@@ -475,7 +475,10 @@ def fixture_image(name: str, allow_placeholder: bool = False) -> tuple[Any, str,
     path = FIXTURES / name
     if path.exists():
         n = imaging.normalize(path.read_bytes())
-        return n, data_url("image/webp", n.data), False
+        # Owner rule 2026-10-28: on-bike covers are refilled before ANY upload
+        # (SAM, Spark, Files, edits); VIN and plate covers stay.
+        n, url = refill_bike_covers(n, fixture_covers(name))
+        return n, url, False
     if not allow_placeholder:
         raise SpikeExit(EXIT_CONFIG, f"fixtures/{name} is missing (U09).")
     from PIL import Image
@@ -484,6 +487,35 @@ def fixture_image(name: str, allow_placeholder: bool = False) -> tuple[Any, str,
     Image.new("RGB", (1024, 768), (128, 128, 128)).save(buf, "PNG")
     n = imaging.normalize(buf.getvalue())
     return n, data_url("image/webp", n.data), True
+
+
+def fixture_covers(name: str) -> list[dict[str, Any]]:
+    """Covers recorded for a fixture in expected.json (none if absent)."""
+    if not (FIXTURES / "expected.json").exists():
+        return []
+    entry = (load_expected().get("fixtures") or {}).get(name) or {}
+    return list(entry.get("covers") or [])
+
+
+def refill_bike_covers(norm: Any, covers: list[dict[str, Any]] | None) -> tuple[Any, str]:
+    """Refill kind 'bike' covers on a copy; return (Normalized, data URL).
+
+    Works on the normalized RGB, then re-encodes through imaging.normalize. Dimensions
+    must not change, because every box and mask uses this bitmap.
+    """
+    import io
+    import imaging
+    from PIL import Image
+    boxes = [c["box"] for c in covers or [] if c.get("kind") == "bike"]
+    if not boxes:
+        return norm, data_url("image/webp", norm.data)
+    rgb = imaging.refill_boxes(imaging.decode_rgb(norm.data), boxes)
+    buf = io.BytesIO()
+    Image.fromarray(rgb).save(buf, "PNG")
+    out = imaging.normalize(buf.getvalue())
+    if (out.width, out.height) != (norm.width, norm.height):
+        raise SpikeExit(EXIT_ASSERTION, "Cover refill changed the image size; refusing to upload.")
+    return out, data_url("image/webp", out.data)
 
 
 def redact_body(body: Any) -> Any:

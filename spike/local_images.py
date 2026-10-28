@@ -333,6 +333,57 @@ def sam_doc_checks() -> list[Check]:
     return out
 
 
+def downscaled_checks() -> list[Check]:
+    out: list[Check] = []
+    iw, ih = 2048, 1536
+    left, top, bw, bh = 300, 400, 1431, 981
+    bounds = (left, top, left + bw, top + bh)
+    yy, xx = np.mgrid[0:bh, 0:bw]
+    orig_box = ((xx - 700) / 600.0) ** 2 + ((yy - 480) / 400.0) ** 2 <= 1.0
+    mw, mh = 1024, 702
+    sx = np.minimum(bw - 1, ((np.arange(mw) * 2 + 1) * bw) // (2 * mw))
+    sy = np.minimum(bh - 1, ((np.arange(mh) * 2 + 1) * bh) // (2 * mh))
+    small = orig_box[sy][:, sx].astype(np.uint8)  # SAM-like downscale of the truth
+    raster = small.tobytes()
+    full = imaging.place_mask(raster, mw, mh, bounds, iw, ih, "box_relative", allow_downscaled=True)
+    truth = np.zeros((ih, iw), bool)
+    truth[top:top + bh, left:left + bw] = orig_box
+    iou = float((full & truth).sum()) / float((full | truth).sum())
+    ys, xs = np.nonzero(full)
+    inside = xs.min() >= left and xs.max() < left + bw and ys.min() >= top and ys.max() < top + bh
+    out.append(("downscaled 1024x702 raster placed in a 1431x981 box: IoU >= 0.98, inside box",
+                "passed" if iou >= 0.98 and inside else "failed", f"IoU {iou:.4f}"))
+
+    def raises(m_w: int, m_h: int, b: tuple[int, int, int, int], **kw) -> bool:
+        try:
+            imaging.place_mask(bytes(m_w * m_h), m_w, m_h, b, iw, ih, "box_relative", **kw)
+        except imaging.MaskPlacementUnknown:
+            return True
+        return False
+
+    out.append(("downscaled raster without allow_downscaled raises",
+                "passed" if raises(mw, mh, bounds) else "failed", ""))
+    out.append(("wrong short side 1024x650 raises even when allowed",
+                "passed" if raises(1024, 650, bounds, allow_downscaled=True) else "failed", ""))
+    small_box = (10, 10, 10 + 900, 10 + 700)
+    out.append(("box long edge <= 1024 with a smaller raster raises",
+                "passed" if raises(800, 622, small_box, allow_downscaled=True) else "failed", ""))
+    tall = imaging.is_downscaled(702, 1024, 981, 1431) and not imaging.is_downscaled(1024, 702, 981, 1431)
+    out.append(("portrait box: long side is height", "passed" if tall else "failed", ""))
+    src_x = [min(mw - 1, ((2 * d + 1) * mw) // (2 * bw)) for d in (0, 700, 1430)]
+    src_y = [min(mh - 1, ((2 * d + 1) * mh) // (2 * bh)) for d in (0, 490, 980)]
+    ok = src_x == [0, 501, 1023] and src_y == [0, 351, 701] and src_y[1] == math.floor(490.5 * 702 / 981)
+    # Probe the real placement path: a raster with one marked column/row pins the same indices.
+    probe = np.zeros((mh, mw), np.uint8)
+    probe[:, 501] = 1
+    placed = imaging.place_mask(probe.tobytes(), mw, mh, bounds, iw, ih, "box_relative", allow_downscaled=True)
+    cols = np.nonzero(placed.any(axis=0))[0] - left
+    ok = ok and 700 in cols and 699 not in cols and 1430 not in cols
+    out.append(("agreement vectors: source x 0/501/1023, y 0/351/701", "passed" if ok else "failed",
+                f"{src_x} {src_y}"))
+    return out
+
+
 # ---------------------------------------------------------------- fixtures
 
 def orig_gradient(img: np.ndarray, l: int, t: int, r: int, b: int) -> np.ndarray:
@@ -490,11 +541,35 @@ def fixture_checks(names: list[str]) -> list[Check]:
     return out
 
 
+def upload_refill_checks(fixtures: list[str]) -> list[Check]:
+    """common.fixture_image refills on-bike covers for every upload, and only inside the box."""
+    out: list[Check] = []
+    for name in fixtures:
+        bike = [c["box"] for c in common.fixture_covers(name) if c.get("kind") == "bike"]
+        if not bike or not (common.FIXTURES / name).exists():
+            continue
+        raw = imaging.decode_rgb(imaging.normalize((common.FIXTURES / name).read_bytes()).data).astype(int)
+        sent, _, _ = common.fixture_image(name)
+        got = imaging.decode_rgb(sent.data).astype(int)
+        diff = np.abs(raw - got).sum(axis=-1) > 30
+        inside = np.zeros(diff.shape, dtype=bool)
+        for l, t, r, b in bike:
+            # A few px around the box may move in the lossy re-encode.
+            inside[max(0, t - 8):b + 8, max(0, l - 8):r + 8] = True
+        changed_in = any(diff[t:b, l:r].mean() > 0.2 for l, t, r, b in bike)
+        stray = int((diff & ~inside).sum())
+        out.append((f"upload refill {name}: cover box refilled, nothing else moved",
+                    "passed" if changed_in and stray < 0.001 * diff.size else "failed",
+                    f"inside changed={changed_in}, stray px={stray}"))
+    return out
+
+
 def main() -> int:
     args = common.base_parser(__doc__.splitlines()[0]).parse_args()
-    checks = (format_checks() + bound_checks() + exif_checks() + alpha_checks() + mask_checks()
+    checks = (format_checks() + bound_checks() + exif_checks() + alpha_checks() + mask_checks() + downscaled_checks()
               + composite_checks() + refill_checks() + refill_kind_checks() + click_checks() + sam_doc_checks()
-              + fixture_checks(common.FIXTURE_SETS[args.fixture_set]))
+              + fixture_checks(common.FIXTURE_SETS[args.fixture_set])
+              + upload_refill_checks(common.FIXTURE_SETS[args.fixture_set]))
     width = max(len(c[0]) for c in checks)
     for name, status, detail in checks:
         print(f"{status.upper():8s} {name:<{width}}  {detail}")

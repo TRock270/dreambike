@@ -48,23 +48,8 @@ def body_for(prompt: str, images: list[str], width: int, height: int, quality: s
     }
 
 
-def refill_bike_covers(norm: Any, covers: list[dict[str, Any]] | None) -> tuple[Any, str]:
-    """Refill kind 'bike' covers on a copy; return (Normalized, data URL).
-
-    Works on the normalized RGB, then re-encodes through imaging.normalize. Dimensions
-    must not change, because every box and mask uses this bitmap.
-    """
-    boxes = [c["box"] for c in covers or [] if c.get("kind") == "bike"]
-    if not boxes:
-        return norm, common.data_url("image/webp", norm.data)
-    rgb = imaging.refill_boxes(imaging.decode_rgb(norm.data), boxes)
-    buf = io.BytesIO()
-    Image.fromarray(rgb).save(buf, "PNG")
-    out = imaging.normalize(buf.getvalue())
-    if (out.width, out.height) != (norm.width, norm.height):
-        raise common.SpikeExit(common.EXIT_ASSERTION,
-                               "Cover refill changed the image size; refusing to upload.")
-    return out, common.data_url("image/webp", out.data)
+# Moved to common.py so every spike upload refills on-bike covers; kept here for callers.
+refill_bike_covers = common.refill_bike_covers
 
 
 def cached_edit_prompt(fixture: str, profile: str) -> str | None:
@@ -160,8 +145,7 @@ def main() -> int:
         "base-placeholder" if args.dry_run else fixture, allow_placeholder=args.dry_run)
     if args.reference == "rear" and args.mode != "compose":
         raise common.SpikeExit(common.EXIT_CONFIG, "--reference rear works with --mode compose only.")
-    if not args.dry_run:  # dry runs never read expected.json or fixtures
-        base, base_url = refill_bike_covers(base, entry.get("covers"))
+    # fixture_image already refilled the on-bike covers recorded in expected.json.
 
     if args.mode == "compose":
         ref_key = "referenceRear" if args.reference == "rear" else "reference"

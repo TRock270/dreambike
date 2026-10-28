@@ -6,7 +6,7 @@ import { ErrorResponse, SegmentResponse } from "@/lib/contracts";
 import { AppError } from "@/lib/errors";
 import { acceptableAsPart, assignFrontRear, clipToBike, maskArea, maskBox, outlinePixels, shareOfBike, unionMasks } from "@/lib/parts";
 import { runLimited } from "@/lib/queue";
-import { maskToNormalized, maskToPng, pngToMask } from "@/lib/server/images";
+import { VERIFIED_SAM_DOWNSCALED, VERIFIED_SAM_PLACEMENT, VERIFIED_SAM_POINTS, isDownscaled, maskToNormalized, maskToPng, placeSamRasters, pngToMask } from "@/lib/server/images";
 import { samPointsText, samRecords, segment } from "@/lib/server/meta";
 import { sseEvents } from "@/lib/server/sse";
 
@@ -61,11 +61,12 @@ describe("SAM stream parsing", () => {
   });
 });
 
-describe("mask placement (U01 still unverified)", () => {
-  it("refuses a box-sized raster until placement is verified, places it inside the box when verified", async () => {
+describe("mask placement (U01: box-relative verified 2026-10-28)", () => {
+  it("refuses a box-sized raster without a verified placement, places it inside the box when verified", async () => {
     const result = await parseImageStream(sseEvents(streamOf(sseBytes(), [])) as AsyncIterable<{ type: string }>).finalResult;
     const o = samRecords(result).objects[0]!;
-    expect(() => maskToNormalized(o.raster, o.maskWidth, o.maskHeight, o.bounds, 320, 334))
+    expect(VERIFIED_SAM_PLACEMENT).toBe("box_relative");
+    expect(() => maskToNormalized(o.raster, o.maskWidth, o.maskHeight, o.bounds, 320, 334, null))
       .toThrow(AppError);
     const placed = maskToNormalized(o.raster, o.maskWidth, o.maskHeight, o.bounds, 320, 334, "box_relative");
     const box = maskBox(placed)!;
@@ -73,6 +74,22 @@ describe("mask placement (U01 still unverified)", () => {
     expect(box[2]).toBeLessThanOrEqual(271);
     expect(box[3]).toBeLessThanOrEqual(255);
     expect(maskArea(placed)).toBe(o.raster.reduce((a, v) => a + v, 0));
+  });
+
+  it("drops a downscaled raster and keeps the box-sized ones from the same answer", () => {
+    const bounds = { left: 10, top: 20, right: 14, bottom: 23 };
+    const boxSized = { objectId: "a", bounds, raster: new Uint8Array(12).fill(1), maskWidth: 4, maskHeight: 3, confidence: 0.9 };
+    // SAM shrinks masks over 1024 px to fit their bounds: here 2x1 for a 4x3 box.
+    const downscaled = { objectId: "b", bounds, raster: new Uint8Array(2).fill(1), maskWidth: 2, maskHeight: 1, confidence: 0.4 };
+    const out = placeSamRasters([downscaled, boxSized], 40, 30, "box_relative");
+    expect(out.dropped).toBe(1);
+    expect(out.masks.map((m) => m.objectId)).toEqual(["a"]);
+    expect(maskBox(out.masks[0]!.mask)).toEqual([10, 20, 14, 23]);
+    expect(maskArea(out.masks[0]!.mask)).toBe(12);
+    // A raster whose length does not match its declared size is a malformed answer: it throws, it is not dropped.
+    expect(() => placeSamRasters([{ ...boxSized, raster: new Uint8Array(5) }], 40, 30, "box_relative"))
+      .toThrow(expect.objectContaining({ code: "SCHEMA_INVALID" }));
+    expect(placeSamRasters([boxSized], 40, 30, null)).toEqual({ masks: [], dropped: 1 });
   });
 
   it("rejects a raster whose size matches neither the box nor the image", () => {
@@ -138,6 +155,93 @@ describe("request queue", () => {
   });
 });
 
+describe("downscaled SAM rasters (U01: verified 2026-10-28, VERIFIED_SAM_DOWNSCALED)", () => {
+  it("isDownscaled: 1024 long edge with the box aspect, nothing else", () => {
+    expect(isDownscaled(1024, 702, 1431, 981)).toBe(true);   // motorcycle, U01 evidence
+    expect(isDownscaled(1024, 808, 1539, 1214)).toBe(true);  // point click, U01 evidence
+    expect(isDownscaled(1024, 650, 1431, 981)).toBe(false);  // wrong short side
+    expect(isDownscaled(1024, 703, 1431, 981)).toBe(true);   // within +-1
+    expect(isDownscaled(1024, 704, 1431, 981)).toBe(false);
+    expect(isDownscaled(800, 622, 900, 700)).toBe(false);    // box long edge <= 1024
+    expect(isDownscaled(1024, 700, 1024, 700)).toBe(false);  // box-sized, not downscaled
+    expect(isDownscaled(702, 1024, 981, 1431)).toBe(true);   // portrait: height is the long side
+    expect(isDownscaled(1024, 702, 981, 1431)).toBe(false);  // long side on the wrong axis
+    // Huge upstream bounds only fill the part inside the image (no box-sized allocation).
+    const raster = new Uint8Array(1024 * 702).fill(1);
+    expect(maskArea(maskToNormalized(raster, 1024, 702, { left: -100000, top: -50000, right: 100000, bottom: 87109 }, 64, 48, "box_relative", true)))
+      .toBe(64 * 48);
+    expect(maskArea(maskToNormalized(raster, 1024, 702, { left: 394, top: 241, right: 1825, bottom: 1222 }, 2048, 1536, "box_relative", true)))
+      .toBe(1431 * 981);
+  });
+
+  const boxW = 1431, boxH = 981, maskW = 1024, maskH = 702;
+  const bounds = { left: 300, top: 400, right: 300 + boxW, bottom: 400 + boxH };
+  const insideEllipse = (x: number, y: number) => ((x - 700) / 600) ** 2 + ((y - 480) / 400) ** 2 <= 1;
+  // Box-local truth ellipse, and SAM-like nearest-centre shrink of it to 1024x702.
+  const small = new Uint8Array(maskW * maskH);
+  for (let y = 0; y < maskH; y++) for (let x = 0; x < maskW; x++) {
+    small[y * maskW + x] = insideEllipse(Math.min(boxW - 1, Math.floor(((2 * x + 1) * boxW) / (2 * maskW))),
+      Math.min(boxH - 1, Math.floor(((2 * y + 1) * boxH) / (2 * maskH)))) ? 1 : 0;
+  }
+
+  it("upscales onto the box: high overlap with the truth, every pixel inside the box", () => {
+    const placed = maskToNormalized(small, maskW, maskH, bounds, 2048, 1536, "box_relative", true);
+    let both = 0, either = 0;
+    for (let y = 0; y < 1536; y++) for (let x = 0; x < 2048; x++) {
+      const inBox = x >= bounds.left && x < bounds.right && y >= bounds.top && y < bounds.bottom;
+      const truth = inBox && insideEllipse(x - bounds.left, y - bounds.top);
+      const got = placed.pixels[y * 2048 + x] === 1;
+      if (got && !inBox) throw new Error(`pixel outside box at ${x},${y}`);
+      if (got && truth) both++;
+      if (got || truth) either++;
+    }
+    expect(both / either).toBeGreaterThanOrEqual(0.98);
+    expect(placed.pixels.length).toBe(2048 * 1536);
+  });
+
+  it("pins the source index at pixel centres (same vectors as spike/local_images.py)", () => {
+    // Mark one source column (or row); the box columns that show it reveal the formula.
+    const columns = (sourceX: number) => {
+      const r = new Uint8Array(maskW * maskH);
+      for (let y = 0; y < maskH; y++) r[y * maskW + sourceX] = 1;
+      const m = maskToNormalized(r, maskW, maskH, bounds, 2048, 1536, "box_relative", true);
+      const cols = new Set<number>();
+      for (let x = 0; x < 2048; x++) if (m.pixels[(bounds.top + 5) * 2048 + x]) cols.add(x - bounds.left);
+      return cols;
+    };
+    expect(columns(0).has(0)).toBe(true);                       // dx 0 reads source 0
+    expect(columns(501).has(700)).toBe(true);                   // dx 700 reads source 501
+    expect(columns(501).has(699) && columns(501).has(1430)).toBe(false);
+    expect(columns(1023).has(1430)).toBe(true);                 // last dx reads the last source column
+    const rows = (sourceY: number) => {
+      const r = new Uint8Array(maskW * maskH);
+      for (let x = 0; x < maskW; x++) r[sourceY * maskW + x] = 1;
+      const m = maskToNormalized(r, maskW, maskH, bounds, 2048, 1536, "box_relative", true);
+      const out = new Set<number>();
+      for (let y = 0; y < 1536; y++) if (m.pixels[y * 2048 + bounds.left + 5]) out.add(y - bounds.top);
+      return out;
+    };
+    expect(rows(0).has(0)).toBe(true);
+    expect(rows(Math.floor((490.5 * 702) / 981)).has(490)).toBe(true); // = row 351
+    expect(rows(701).has(980)).toBe(true);
+  });
+
+  it("clips at the image border like a box-sized raster", () => {
+    const edge = { left: 1900, top: 1000, right: 1900 + boxW, bottom: 1000 + boxH };
+    const placed = maskToNormalized(new Uint8Array(maskW * maskH).fill(1), maskW, maskH, edge, 2048, 1536, "box_relative", true);
+    expect(maskBox(placed)).toEqual([1900, 1000, 2048, 1536]);
+    expect(maskArea(placed)).toBe((2048 - 1900) * (1536 - 1000));
+  });
+
+  it("is refused when the flag argument is false, and without box_relative", () => {
+    expect(() => maskToNormalized(small, maskW, maskH, bounds, 2048, 1536, "box_relative", false)).toThrow(AppError);
+    expect(() => maskToNormalized(small, maskW, maskH, bounds, 2048, 1536, null, true)).toThrow(AppError);
+    expect(() => maskToNormalized(new Uint8Array(1024 * 650), 1024, 650, bounds, 2048, 1536, "box_relative", true)).toThrow(AppError);
+    expect(placeSamRasters([{ objectId: "m", bounds, raster: small, maskWidth: maskW, maskHeight: maskH, confidence: 0.9 }],
+      2048, 1536, "box_relative", false)).toMatchObject({ dropped: 1 });
+  });
+});
+
 describe("SAM request shape and the segment route", () => {
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
@@ -182,6 +286,23 @@ describe("SAM request shape and the segment route", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
     const empty = SegmentResponse.parse((await post({ mode: "concept", width: 400, height: 300, phrase: "mirror" }, await webp(400, 300))).body);
     expect(empty.objects).toEqual([]);
+  });
+
+  it("live: the motorcycle outline goes on to the budget ledger; points stay refused before any call", async () => {
+    expect([VERIFIED_SAM_DOWNSCALED, VERIFIED_SAM_POINTS]).toEqual([true, false]);
+    for (const [k, v] of Object.entries({ LIVE_API_ENABLED: "true", MODEL_API_KEY: "k", UPSTASH_REDIS_REST_URL: "https://redis.invalid",
+      UPSTASH_REDIS_REST_TOKEN: "t", PRICING_VERIFIED_AT: "2026-10-28", VISITOR_HASH_SECRET: "s".repeat(40), BUDGET_TICKET: "T3",
+      MOCK: "", VERCEL_ENV: "" })) vi.stubEnv(k, v);
+    // The ledger is unreachable here, so the reservation fails closed and nothing reaches Meta.
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("offline"));
+    const img = await webp(400, 300);
+    const outline = await post({ mode: "concept", width: 400, height: 300, phrase: "motorcycle" }, img);
+    expect(ErrorResponse.parse(outline.body).error.code).not.toBe("FEATURE_DISABLED");
+    expect(fetchSpy.mock.calls.map(([url]) => String(url).startsWith("https://redis.invalid"))).toEqual([true]);
+    fetchSpy.mockClear();
+    const point = await post({ mode: "points", width: 400, height: 300, points: [{ x: 10, y: 10, label: "positive" }] }, img);
+    expect(ErrorResponse.parse(point.body).error.code).toBe("FEATURE_DISABLED");
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("validates before anything else and is LIVE_DISABLED in demo mode, with no network call", async () => {

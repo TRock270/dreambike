@@ -260,19 +260,51 @@ def refill_boxes(rgb: np.ndarray, boxes) -> np.ndarray:
 
 # ------------------------------------------------------------- masks
 
+SAM_MASK_MAX_EDGE = 1024
+
+
+def is_downscaled(mask_w: int, mask_h: int, box_w: int, box_h: int) -> bool:
+    """True when SAM shrank a raster to a 1024 px long edge, keeping the box aspect (U01 hypothesis)."""
+    if max(box_w, box_h) <= SAM_MASK_MAX_EDGE or min(box_w, box_h) <= 0:
+        return False
+    if box_w >= box_h:
+        long_m, short_m, short_b, long_b = mask_w, mask_h, box_h, box_w
+    else:
+        long_m, short_m, short_b, long_b = mask_h, mask_w, box_w, box_h
+    if long_m != SAM_MASK_MAX_EDGE:
+        return False
+    return abs(short_m - round_half_up(short_b * SAM_MASK_MAX_EDGE / long_b)) <= 1
+
+
+def _upscale_nearest(arr: np.ndarray, box_w: int, box_h: int) -> np.ndarray:
+    """Nearest neighbour to exactly the box, sampling at pixel centres."""
+    mask_h, mask_w = arr.shape
+    xs = np.minimum(mask_w - 1, ((np.arange(box_w) * 2 + 1) * mask_w) // (2 * box_w))
+    ys = np.minimum(mask_h - 1, ((np.arange(box_h) * 2 + 1) * mask_h) // (2 * box_h))
+    return arr[ys][:, xs]
+
+
 def place_mask(raster: bytes, mask_w: int, mask_h: int, bounds: tuple[int, int, int, int],
-               img_w: int, img_h: int, mode: str | None) -> np.ndarray:
+               img_w: int, img_h: int, mode: str | None, *,
+               allow_downscaled: bool = False) -> np.ndarray:
     """Convert one SAM raster to a full-image binary mask (U01).
 
     mode is the placement verified with owned off-origin fixtures. Until U01
     passes it is None and only a full-image raster is accepted. 'box_relative'
     copies the raster at the half-open box's top-left with clipping.
+    With allow_downscaled, a raster SAM shrank to a 1024 px long edge is first
+    upscaled to the box (hypothesis, unverified until the owner checks).
     """
     arr = np.frombuffer(raster, dtype=np.uint8).reshape(mask_h, mask_w)
     if mask_w == img_w and mask_h == img_h:
         return arr.astype(bool)
     left, top, right, bottom = bounds
-    if mode == "box_relative" and mask_w == right - left and mask_h == bottom - top:
+    box_w, box_h = right - left, bottom - top
+    if (mode == "box_relative" and allow_downscaled
+            and is_downscaled(mask_w, mask_h, box_w, box_h)):
+        arr = _upscale_nearest(arr, box_w, box_h)
+        mask_w, mask_h = box_w, box_h
+    if mode == "box_relative" and mask_w == box_w and mask_h == box_h:
         full = np.zeros((img_h, img_w), dtype=bool)
         x0, y0 = max(0, left), max(0, top)
         x1, y1 = min(img_w, right), min(img_h, bottom)

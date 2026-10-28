@@ -78,6 +78,8 @@ def analyze(result, width: int, height: int) -> list[dict[str, Any]]:
             placement = "full_image"
         elif (mw, mh) == (bounds[2] - bounds[0], bounds[3] - bounds[1]):
             placement = "box_sized"
+        elif imaging.is_downscaled(mw, mh, bounds[2] - bounds[0], bounds[3] - bounds[1]):
+            placement = "downscaled"
         else:
             placement = "other"
         box = boxes.get(rec.object_id)
@@ -87,6 +89,7 @@ def analyze(result, width: int, height: int) -> list[dict[str, Any]]:
             "boxMatchesBounds": box is not None and (box.left, box.top, box.right, box.bottom)
             == (b.left, b.top, b.right, b.bottom),
             "confidence": rec.confidence, "area": int(sum(raster)),
+            **({"hypothesis": "downscaled_nearest"} if placement == "downscaled" else {}),
         })
     return objects
 
@@ -133,7 +136,7 @@ def run_one(budget, config, profile, label, text, n, image_url, dry_run, out_dir
         try:
             mode = None if o["placement"] == "full_image" else "box_relative"
             full = imaging.place_mask(o["raster"], *o["maskSize"], o["bounds"], n.width, n.height,
-                                      mode)
+                                      mode, allow_downscaled=True)
         except imaging.MaskPlacementUnknown:
             o["hypothesisPlaced"] = False
             continue
@@ -219,7 +222,8 @@ def main() -> int:
         print(f"{fixture}: {profile} {status}; overlays in {out_dir.relative_to(common.REPO)}; "
               f"result {path.relative_to(common.REPO)}")
         print("Owner check: open the overlays and confirm each mask covers the real part "
-              "(U01). Placement is not verified by this script.")
+              "(U01). Downscaled masks (motorcycle, points) are drawn by the scaling "
+              "hypothesis and must be checked. Placement is not verified by this script.")
     return common.EXIT_ASSERTION if failed else common.EXIT_PASSED
 
 

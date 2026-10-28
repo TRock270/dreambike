@@ -48,7 +48,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 
 ## T3 — Bike cutout, part map, and point selection
 
-- Status: DONE OFFLINE AND IN MOCK 2026-10-28. Live SAM is gated on U01 (route refuses live segmentation before any reservation until placement is verified). See log.
+- Status: DONE OFFLINE AND IN MOCK 2026-10-28. U01 2026-10-28 13:47 ET: concept masks verified live (box-sized and downscaled); live point clicks stay refused before any reservation. "A wheel click highlights its real pixels" is still open (point lane). See log.
 - Priority: MVP. Estimate: 3h, Oct 29. Depends on: T2 and U01 resolved for mask display.
 - Files: src/app/api/segment/route.ts, src/lib/server/meta.ts/images.ts, src/lib/coordinates.ts/slots.ts, src/components/PartOverlay.tsx/PartSelector.tsx, tests/coordinates.test.ts/masks.test.ts.
 - Work: exact SAM SSE body/parser; full-image binary mask adapter; cutout; core phrase queue at concurrency 4; fixed colors; front/rear by facing; smallest-mask hit test; point fallback; manual custom name. All live calls use the Node wrapper over the same atomic policy created in T0/T1. Public visitor hardening and demo integration arrive in T13; local accounting already enforces project, development, ticket, and day caps.
@@ -429,6 +429,17 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Remaining gates:
   - U01: owned off-origin overlays.
   - Then set `VERIFIED_SAM_PLACEMENT`, run one live segment smoke with BUDGET_TICKET=T3, and recheck "a wheel click highlights its real pixels".
+
+### T3 U01 follow-up — 2026-10-28, about 13:20–14:10 ET (needed for the T7 live run)
+
+- Why: the T7 app run needs live part detection, and `/api/segment` refused every live call while `VERIFIED_SAM_PLACEMENT` was null.
+- Owner decisions: turn on box-relative placement from the U01 overlay check; then "fix it properly first" for downscaled masks, after review found that the bike outline (needed to tell front from rear) always comes back shrunk to a 1024 px long edge.
+- Files: src/lib/server/images.ts (VERIFIED_SAM_PLACEMENT "box_relative", isDownscaled, nearest-neighbour upscale to the box, VERIFIED_SAM_DOWNSCALED true, VERIFIED_SAM_POINTS false, placeSamRasters, malformed raster = SCHEMA_INVALID), src/app/api/segment/route.ts (drops unplaceable objects with a warning, 422 MASK_PLACEMENT_UNKNOWN when all are dropped, points refused before reserving), tests/masks.test.ts, spike/imaging.py (is_downscaled, place_mask allow_downscaled), spike/responses_sam.py ("downscaled" class, overlay by the hypothesis), spike/local_images.py (downscaled and upload-refill checks), spike/common.py (fixture_image refills on-bike covers for every upload), spike/images_edits.py (uses the common refill). SPEC 7 implementation note.
+- Paid: `responses_sam.py --fixture-set plain --mode concept --ticket T3 --force` and `--mode points`, $1 cap, 4 SAM calls, $0.010 settled. Lifetime $0.073271.
+- Owner check: overlay-motorcycle "looks good". Owner on the points overlay: "green point is at rear axis, red is in front down of the bike in the middle"; the mask is the whole bike, so points stay off. Owner also pointed out the tank cover square was still in the SAM upload; rule now covers every upload and the spike enforces it in fixture_image.
+- Reviews (/review-changes): round 1 four confirmed majors (outline and points paid then dropped; empty 200 instead of 422), fixed by the downscaled placement and the 422. Round 2 green (minors: huge bounds allocation fixed by clipping the upscale loop; comment wording fixed). Round 3: SEC-1 major (points lane opened without an owner-checked overlay), fixed with VERIFIED_SAM_POINTS=false; minors: comment reworded, SCHEMA_INVALID code asserted; "unused imports in images_edits.py" rejected (io and Image are still used). Round 4 (points flag): green; minor fixed: drop and envelope warnings no longer send live users to the closed point lane ("pick another part from the list"). Accepted as is: SCHEMA_INVALID is retryable (a retry is a new capped reservation); other phrases over 1024 px are paid and now placed by the same rule.
+- Checks: typecheck, lint, build pass; npm test 407 passed in 19 files (includes the owner's parallel workflow tests); local_images.py --fixture-set all 71 passed; spike dry runs (sam concept/points, spark identify, compose front/rear) exit 0.
+- Open for T3: point clicks (whole-bike answer), "a wheel click highlights its real pixels".
 
 ### T4 — 2026-10-28, 01:20–01:34 ET (about 0.25 h of build plus review rounds)
 

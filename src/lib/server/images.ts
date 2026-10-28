@@ -11,6 +11,7 @@ import {
   WARN_EDGE, fitWithin, headerSize, isAnimated, qualitySteps, shrinkStep, sniffFormat,
 } from "../imageFormat";
 import type { BinaryMask } from "../coordinates";
+import type { SamObject } from "./meta";
 import type { NormalizedImage, NormalizeOptions } from "../types";
 
 /** --nl-canvas from tokens.css as RGB (a test keeps the two in sync). */
@@ -138,28 +139,84 @@ export function toDataUrl(mime: "image/webp" | "image/png", bytes: Uint8Array): 
 
 /**
  * How a SAM raster sits in the image, fixed by U01 with owned off-origin
- * overlays (SPEC 7). null = unverified: only a raster that already covers the
- * full image is accepted; anything else is MASK_PLACEMENT_UNKNOWN.
+ * overlays (SPEC 7). U01 2026-10-28: concept masks come back box-sized and
+ * land on their parts (owner checked the overlays), so "box_relative".
+ * Rasters SAM downscaled to a 1024 px long edge are handled by
+ * VERIFIED_SAM_DOWNSCALED below. null would accept full-image rasters only.
  */
-export const VERIFIED_SAM_PLACEMENT: "box_relative" | null = null;
+export const VERIFIED_SAM_PLACEMENT: "box_relative" | null = "box_relative";
+
+/** SAM shrinks rasters of objects larger than this (long edge) to exactly this many pixels. */
+export const SAM_MASK_MAX_EDGE = 1024;
+
+/**
+ * A downscaled raster (long edge 1024, box aspect kept) is stretched back onto
+ * its box by nearest neighbour. U01 2026-10-28: the live "motorcycle" overlay
+ * drawn this way (1024x702 for a 1431x981 box) was checked by the owner
+ * ("looks good"). false would refuse the outline and point lanes before paying.
+ */
+export const VERIFIED_SAM_DOWNSCALED: boolean = true;
+
+/**
+ * Point clicks in live mode. U01 2026-10-28: the rear-hub click returned the
+ * whole bike (confidence 0.45) and no point overlay was owner-checked, so the
+ * route refuses points before any reservation while this is false.
+ */
+export const VERIFIED_SAM_POINTS: boolean = false;
+
+/** True when the raster looks like SAM's 1024-long-edge shrink of a box this size. */
+export function isDownscaled(maskWidth: number, maskHeight: number, boxWidth: number, boxHeight: number): boolean {
+  if (Math.max(boxWidth, boxHeight) <= SAM_MASK_MAX_EDGE || Math.min(boxWidth, boxHeight) <= 0) return false;
+  const wide = boxWidth >= boxHeight;
+  const boxLong = wide ? boxWidth : boxHeight, boxShort = wide ? boxHeight : boxWidth;
+  const maskLong = wide ? maskWidth : maskHeight, maskShort = wide ? maskHeight : maskWidth;
+  // Math.round rounds .5 up for positive numbers, like round_half_up in spike/imaging.py.
+  return maskLong === SAM_MASK_MAX_EDGE
+    && Math.abs(maskShort - Math.round((boxShort * SAM_MASK_MAX_EDGE) / boxLong)) <= 1;
+}
 
 export type SamBounds = { left: number; top: number; right: number; bottom: number };
 
 /** One decoded SAM raster (0/1 bytes, row-major) to a full-image binary mask. */
 export function maskToNormalized(raster: Uint8Array, maskWidth: number, maskHeight: number,
   bounds: SamBounds, imageWidth: number, imageHeight: number,
-  placement: "box_relative" | null = VERIFIED_SAM_PLACEMENT): BinaryMask {
-  if (raster.length !== maskWidth * maskHeight) throw new AppError("MASK_PLACEMENT_UNKNOWN");
+  placement: "box_relative" | null = VERIFIED_SAM_PLACEMENT,
+  downscaled: boolean = VERIFIED_SAM_DOWNSCALED): BinaryMask {
+  // A raster shorter or longer than its declared size is a malformed answer, not a placement question.
+  if (raster.length !== maskWidth * maskHeight) throw new AppError("SCHEMA_INVALID");
   if (maskWidth === imageWidth && maskHeight === imageHeight) {
     return { width: imageWidth, height: imageHeight, pixels: Uint8Array.from(raster, (v) => (v ? 1 : 0)) };
   }
   const boxW = bounds.right - bounds.left;
   const boxH = bounds.bottom - bounds.top;
+  if (placement === "box_relative" && downscaled && isDownscaled(maskWidth, maskHeight, boxW, boxH)) {
+    // Nearest neighbour at pixel centres: box-local dx reads source floor((dx + 0.5) * maskW / boxW).
+    // Only the part of the box inside the image is visited, so huge upstream bounds cannot
+    // allocate more than the image itself.
+    const pixels = new Uint8Array(imageWidth * imageHeight);
+    const x0 = Math.max(0, bounds.left), y0 = Math.max(0, bounds.top);
+    const x1 = Math.min(imageWidth, bounds.right), y1 = Math.min(imageHeight, bounds.bottom);
+    for (let y = y0; y < y1; y++) {
+      const dy = y - bounds.top;
+      const sy = Math.min(maskHeight - 1, Math.floor(((2 * dy + 1) * maskHeight) / (2 * boxH)));
+      for (let x = x0; x < x1; x++) {
+        const dx = x - bounds.left;
+        const sx = Math.min(maskWidth - 1, Math.floor(((2 * dx + 1) * maskWidth) / (2 * boxW)));
+        pixels[y * imageWidth + x] = raster[sy * maskWidth + sx] ? 1 : 0;
+      }
+    }
+    return { width: imageWidth, height: imageHeight, pixels };
+  }
   if (placement !== "box_relative" || maskWidth !== boxW || maskHeight !== boxH) {
     throw new AppError("MASK_PLACEMENT_UNKNOWN");
   }
+  return placeBoxRaster(raster, boxW, boxH, bounds, imageWidth, imageHeight);
+}
+
+/** Copies a box-sized raster at the box's top-left, clipped at the image border. */
+function placeBoxRaster(raster: Uint8Array, maskWidth: number, maskHeight: number,
+  bounds: SamBounds, imageWidth: number, imageHeight: number): BinaryMask {
   const pixels = new Uint8Array(imageWidth * imageHeight);
-  // Copy the box-sized raster at the box's top-left; clip at the image border.
   const x0 = Math.max(0, bounds.left), y0 = Math.max(0, bounds.top);
   const x1 = Math.min(imageWidth, bounds.right), y1 = Math.min(imageHeight, bounds.bottom);
   for (let y = y0; y < y1; y++) {
@@ -168,6 +225,28 @@ export function maskToNormalized(raster: Uint8Array, maskWidth: number, maskHeig
     }
   }
   return { width: imageWidth, height: imageHeight, pixels };
+}
+
+/**
+ * Places every SAM raster; one that cannot be placed (MASK_PLACEMENT_UNKNOWN,
+ * such as a downscaled mask) is dropped and counted instead of failing the
+ * whole, already paid, answer. Any other error still throws.
+ */
+export function placeSamRasters(objects: SamObject[], imageWidth: number, imageHeight: number,
+  placement: "box_relative" | null = VERIFIED_SAM_PLACEMENT,
+  downscaled: boolean = VERIFIED_SAM_DOWNSCALED) {
+  const masks: { mask: BinaryMask; confidence: number | null; objectId: string }[] = [];
+  let dropped = 0;
+  for (const o of objects) {
+    try {
+      masks.push({ mask: maskToNormalized(o.raster, o.maskWidth, o.maskHeight, o.bounds, imageWidth, imageHeight, placement, downscaled),
+        confidence: o.confidence, objectId: o.objectId });
+    } catch (error) {
+      if (!(error instanceof AppError && error.code === "MASK_PLACEMENT_UNKNOWN")) throw error;
+      dropped++;
+    }
+  }
+  return { masks, dropped };
 }
 
 /** Full-image binary mask as a 1-channel PNG (0 or 255), WireMask png_binary_full_image. */
