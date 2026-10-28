@@ -186,10 +186,12 @@ describe("POST /api/edit", () => {
       expect(Math.abs(basePx[0]! - 80)).toBeLessThan(6);   // grey base first
       expect(refPx[0]!).toBeGreaterThan(150);              // red reference second
       expect(b.tool_enablement).toEqual({ enable_image_search: false, enable_web_search: false, enable_shell: false });
-      expect(b.prompt).toBe(rt("compose.v2.md", rp.prompt));
-      // v2: wheel parts that must survive the swap are named (3 of 3 v1 renders lost them).
-      for (const keep of ["brake discs", "brake calipers", "fender", "even if image 2 shows none"]) expect(b.prompt).toContain(keep);
-      expect(b.prompt).not.toContain("compose.v2 —"); // the header block is never sent
+      expect(b.prompt).toBe(rt("compose.v3.md", rp.prompt));
+      // v2/v3: wheel parts that must survive the swap are named (live v1 renders lost the brakes, v2 the swingarm).
+      for (const keep of ["brake discs", "brake calipers", "fender", "swingarm, final drive, and rear axle", "even if image 2 shows none"]) {
+        expect(b.prompt).toContain(keep);
+      }
+      expect(b.prompt).not.toContain("compose.v3 —"); // the header block is never sent
     });
 
     it("refuses bad reference sets before any fetch", async () => {
@@ -231,7 +233,7 @@ it("templates drop their header and insert the prompt", () => {
   expect(t.endsWith("Red tank")).toBe(true);
   expect(t).not.toContain("{{editPrompt}}");
   // Untrusted text is inserted verbatim: no special "$" replacement patterns.
-  expect(rt("compose.v2.md", "Gold wheel").endsWith("Gold wheel")).toBe(true);
+  expect(rt("compose.v3.md", "Gold wheel").endsWith("Gold wheel")).toBe(true);
   expect(rt("edit.v1.md", "x $` y $$ z $&").endsWith("x $` y $$ z $&")).toBe(true);
 });
 

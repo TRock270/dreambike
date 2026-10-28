@@ -285,7 +285,7 @@ export async function fetchSparkJson(body: unknown, signal: AbortSignal): Promis
 // ------------------------------------------------------- Muse Image (6.2)
 
 /** Expand a versioned template: drop the header paragraph, insert the edit prompt. */
-export function renderTemplate(file: "paint.v1.md" | "edit.v1.md" | "compose.v2.md", editPrompt: string): string {
+export function renderTemplate(file: "paint.v1.md" | "edit.v1.md" | "compose.v3.md", editPrompt: string): string {
   const text = promptText(file);
   const body = text.slice(text.indexOf("\n\n") + 2);
   // A replacer function inserts the text verbatim ("$&", "$`", "$$" keep their literal meaning).
@@ -293,14 +293,14 @@ export function renderTemplate(file: "paint.v1.md" | "edit.v1.md" | "compose.v2.
 }
 
 /** The server picks the template from the request mode, never from client-sent intent. */
-export function templateFor(mode: "text" | "paint" | "reference"): "paint.v1.md" | "edit.v1.md" | "compose.v2.md" {
-  if (mode === "reference") return "compose.v2.md";
+export function templateFor(mode: "text" | "paint" | "reference"): "paint.v1.md" | "edit.v1.md" | "compose.v3.md" {
+  if (mode === "reference") return "compose.v3.md";
   return mode === "paint" ? "paint.v1.md" : "edit.v1.md";
 }
 
 /**
  * Edit body. imageUrls is ordered: the base photo first, and in compose mode the
- * reference second ("image 1" and "image 2" in compose.v2.md). Tools are always off.
+ * reference second ("image 1" and "image 2" in compose.v3.md). Tools are always off.
  */
 export function imageEditBody(prompt: string, imageUrls: string | readonly string[], width: number, height: number, quality: "high" | "low") {
   const urls = typeof imageUrls === "string" ? [imageUrls] : imageUrls;

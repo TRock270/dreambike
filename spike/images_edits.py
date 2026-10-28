@@ -165,7 +165,7 @@ def main() -> int:
                       if args.reference == "front" else None)
             edit_prompt = cached or ref["description"]
         profile = "image_compose_rear" if args.reference == "rear" else "image_compose"
-        runs = [(profile, template("compose.v2.md", edit_prompt), [base_url, ref_url], "high")]
+        runs = [(profile, template("compose.v3.md", edit_prompt), [base_url, ref_url], "high")]
     else:
         test = entry.get("paintTest") or {}
         if args.dry_run:

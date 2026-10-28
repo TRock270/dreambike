@@ -282,7 +282,7 @@ Any active-build change invalidates fit for the whole active build, because part
 
 ## 10. Prompt assets
 
-Versioned files under /prompts: identify.v1.md, instruction.v1.md, compose.v2.md (v1 kept as history), paint.v1.md, fit-check.v1.md, search-parts.v1.md. label-part.v1.md is stretch. SPEC.md section 8 defines inputs, JSON schemas, and fixture expectations. Compose and paint are deterministic instruction templates; do not add a model call merely to expand a template.
+Versioned files under /prompts: identify.v1.md, instruction.v1.md, compose.v3.md (v1 and v2 kept as history), paint.v1.md, fit-check.v1.md, search-parts.v1.md. label-part.v1.md is stretch. SPEC.md section 8 defines inputs, JSON schemas, and fixture expectations. Compose and paint are deterministic instruction templates; do not add a model call merely to expand a template.
 
 ## 11. Day plan
 
