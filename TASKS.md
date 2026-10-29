@@ -88,7 +88,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 
 ## T8 — Build sheet and manual product input
 
-- Status: DONE 2026-10-28 (offline and in mock; no paid calls involved). "Seed mock product/check data" deferred to T9/T13. Owner check on a real project pending. See log.
+- Status: DONE 2026-10-28 (offline and in mock; no paid calls involved). "Seed mock product/check data" deferred to T9/T13. Owner check on a real project passed 2026-10-29. See log.
 - Priority: MVP. Estimate: 2h, Oct 31. Depends on: T6; T7 is not a dependency.
 - Files: src/components/BuildSheet.tsx/ProductFields.tsx, src/lib/project.ts, tests/project.test.ts, seed mock product/check data.
 - Work: active slot lines, title/spec, manual source URL, price-as-listed and gross/net/unknown basis, labor minutes, explicit labor-only switch, remove/replace, semantic sheet revisions. No automated product fetching yet.
@@ -1007,7 +1007,7 @@ For each completed ticket append actual date/time ET, files changed, checks and 
   Gemini was not asked.
 - Spend: $0 (no paid calls). The ledger total is unchanged from the last handoff; it is still unread.
 - Open:
-  - The owner checks a real project in their own Chrome: the same steps, then the folder copy should show the sheet change in history.md with no duplicate image.
+  - Done 2026-10-29: the owner checked a real project in their own Chrome (the same steps, plus the folder copy: history.md shows the sheet change, no duplicate image). Owner: "passt".
   - No component (DOM) test drives BuildSheet; the logic is unit-tested and the mock browser run covered the flow.
   - The Next dev overlay badge covers the "Build sheet" button in dev only (known).
   - The handoff item "allow line for tests/folderexport.test.ts" is done (4c21ec2).
