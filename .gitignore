@@ -42,3 +42,6 @@ my_bike/
 
 # Session worktrees; keeps them out of the main checkout's /review-changes scope
 .claude/worktrees/
+
+# Owner notes with shop links (ad-tracking parameters); never committed (owner, 2026-10-28)
+shop-links.txt

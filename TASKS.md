@@ -905,3 +905,4 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Open:
   - The owner checks the layout on their own screen.
   - Minor: the Next dev overlay badge covers the "Build sheet" button in dev only.
+- Owner check after run 2 (2026-10-28): the free mock test of layout, folding and history works "perfectly". The owner asked to gitignore shop-links.txt (an owner note with ad-tracking parameters); done, review-changes quick green. Ledger lifetime $0.659602; whether the paid T3 check (tail box plus sissy bar) ran is not yet reported.
