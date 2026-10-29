@@ -1269,4 +1269,4 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Done: T1–T11 and OF1. Spend unchanged since T9: ledger lifetime 2.247349 USD booked (over-counted, see T9), Billing about $0.77 expected.
 - Next on the critical path: T13, cached demo and atomic public cost protection (T12 is optional). The demo's public/demo/quote.pdf must come from a real reviewed fit, never from the T11 QA fixtures.
 - Open from T11 for T17: zero-labor note in the PDF, the mock marker per version (contract change), validate() cross-checks, canvas-order test, source-text tests, empty-sheet test.
-- Not pushed: the T11 commit waits for the owner's go.
+- Owner go 2026-10-29: d089192 pushed to origin/main.
