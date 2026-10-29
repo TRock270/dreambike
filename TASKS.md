@@ -104,7 +104,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 
 ## T10 — Settings and integer EUR estimate math
 
-- Status: DONE 2026-10-29 (offline, mock browser check; no paid calls). Open: a complete estimate in the browser needs a real reviewed fit (mock fits never count; the complete path is covered by unit tests); a Safari reload check of settings is still the owner's; the official fee is suggested but not required when an inspection is needed. See log.
+- Status: DONE 2026-10-29 (offline, mock browser check; no paid calls). Open: a complete estimate in the browser needs a real reviewed fit (mock fits never count; the complete path is covered by unit tests); the official fee is suggested but not required when an inspection is needed. See log.
 - Priority: MVP. Estimate: 2h, Nov 1. Depends on: T8, T9 schema integration; offline math work need not wait for a live call.
 - Files: src/components/ShopSettingsForm.tsx/InspectionFees.tsx/EstimatePreview.tsx/MissingCosts.tsx, src/lib/quote.ts/db.ts, tests/quote.test.ts.
 - Work: real vs isolated demo settings, owned logo, default minutes, editable net rates/allowances, fixed 19%, preferred domains/rules, gross-to-net conversion, missing values, fee deduplication and acknowledgment.
@@ -1200,4 +1200,5 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 
 - Done: T1–T10 and OF1 (see status lines). Spend unchanged since T9: ledger lifetime 2.247349 USD booked (over-counted, see T9), Billing about $0.77 expected.
 - Next on the critical path: T11, estimate PDF. It can use quote.ts as is; the example logo is uploaded through Settings (file in ~/Projekte/Hackathon/dreambike-results/example-shop/). T11 adds the Plex TTF fonts and their licenses under public/fonts/.
-- Waiting for the owner: a Safari reload check of settings and the logo (the earlier Safari project-loss report is still unexplained); whether a needed inspection should also require the Zulassungsstelle line.
+- Owner Safari check, 2026-10-29 about 15:00 ET (MOCK=1 dev server on localhost:3000, the owner's own Safari): new project from a photo (Safari has its own storage, so the Chrome projects are not listed there), mock tank change accepted; example shop chosen, values match, logo uploaded, settings saved; after a reload the project reopened and the example shop, the values, the quote note and the logo were back; estimate €100.00 part, €200.00 labor (shop default minutes), €300.00 known subtotal, €350.42 with a confirmed Änderungsabnahme line; switching back to "Your shop" shows the empty real record. Owner: all steps "good". So the earlier Safari reload loss (before OF1) did not recur. Dev server stopped.
+- Waiting for the owner: whether a needed inspection should also require the Zulassungsstelle line; whether to push.
