@@ -1077,3 +1077,11 @@ For each completed ticket append actual date/time ET, files changed, checks and 
   - 5480911b and 053e84d9: only the start photo, no AI change;
   - the two MOCK-*.webp placeholders in "2026-10-28 T7 live wheel renders" (README line removed).
   - Kept: fadf4f99 (rear wheel), 6be8cba2 (front and rear wheel, tank, fork paint), b2deea8d (rear fender paint, sissy bar, two sheet steps), the T7 live renders and the downloaded previews. fadf4f99 and b2deea8d start from the same photo with different AI changes, so they are not duplicates.
+
+### Handoff — 2026-10-29, T9 prepared (start here next session)
+
+- Repo state: main pushed up to b41e999; the T9 preparation commit after it holds docs/t9-start.md and this entry.
+- Done: T1–T8 and OF1 (see status lines); T3 except the live point lane. Safari check for T2/T6 done (owner, 2026-10-29).
+- Spend: ledger lifetime 714096 µ$ ($0.714), matching Meta Billing $0.71; Meta daily limit $5.
+- Next: T9, prepared in docs/t9-start.md: code state, the U06 research (Meta documents no query bound per search call), three owner decisions (probe or stay gated, the T9 cap, the four live test items), the `/build-ticket` units M1, S1, R1, U1, the paid steps and the done-when map. The offline build needs no decision; paid steps need the owner's go.
+- Owner inputs for T10 are recorded in "Owner inputs before T9".
