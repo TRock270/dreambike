@@ -5,7 +5,7 @@ import {
 } from "@/lib/contracts";
 import {
   activeItems, canAcceptPending, children, defaultProjectName, laterSteps, newProject, newRootVersion,
-  pathFromRoot, redoTargets, undoTarget, visualChild, type VisualChildInput,
+  exportPlan, pathFromRoot, redoTargets, undoTarget, visualChild, type VisualChildInput,
 } from "@/lib/project";
 import type { Part, Version } from "@/lib/types";
 
@@ -240,5 +240,84 @@ describe("laterSteps", () => {
     a.parentId = b.id;
     const r = laterSteps([a, b], a.id);
     expect(ids(r.steps)).toEqual([b.id]);
+  });
+});
+
+describe("exportPlan", () => {
+  const P = { id: "abcdef12-0000-4000-8000-000000000000", name: "My Bike" };
+  const vid = (n: string) => `${n.repeat(8)}-0000-4000-8000-000000000000`;
+  const mk = (n: string, parent: Version | null, createdAt: number, slot: Part["slot"] = "tank", over: Partial<Version> = {}) => {
+    const base = parent ? visualChild(parent, input({ slot, versionId: vid(n), createdAt, title: `T-${n}` })) : root;
+    return { ...base, ...over };
+  };
+  const r0: Version = { ...root, id: vid("0"), createdAt: 0 };
+  const plan = (versions: Version[], headId: string, name = P.name) =>
+    exportPlan({ project: { ...P, name }, versions, headId, exportedAt: "2026-10-28T10:00:00.000Z" });
+
+  it("orders by createdAt with id tie-break, numbers from 00, names root start and visual by slot", () => {
+    const b = mk("b", r0, 5, "tank");
+    const a = mk("a", r0, 5, "seat");
+    const p = plan([b, a, r0], b.id);
+    expect(p.files.map((f) => f.name)).toEqual([
+      "00-start-00000000.webp", "01-seat-aaaaaaaa.webp", "02-tank-bbbbbbbb.webp",
+    ]);
+    expect(p.files[1]).toEqual({ name: "01-seat-aaaaaaaa.webp", versionId: a.id, imageId: a.image.id });
+  });
+
+  it("makes folder names filesystem safe", () => {
+    const f = (n: string) => plan([r0], r0.id, n).folderName;
+    expect(f("a/b\\c")).toBe("a-b-c (abcdef12)");
+    expect(f("12:30")).toBe("12-30 (abcdef12)");
+    expect(f("x\u0000y\u007Fz\u001F")).toBe("x-y-z- (abcdef12)");
+    expect(f("  . .  ")).toBe("Project (abcdef12)");
+    expect(f("..")).toBe("Project (abcdef12)");
+    expect(f("a   b\u00A0 c")).toBe("a b c (abcdef12)");
+    expect(f("n".repeat(200))).toBe(`${"n".repeat(80)} (abcdef12)`);
+    expect(f("n".repeat(79) + " " + "m".repeat(20))).toBe(`${"n".repeat(79)} (abcdef12)`);
+    const other = exportPlan({ project: { id: "99999999-x", name: P.name }, versions: [r0], headId: r0.id, exportedAt: "t" });
+    expect(other.folderName).toBe("My Bike (99999999)");
+    expect(plan([r0], r0.id).folderName).toBe("My Bike (abcdef12)");
+  });
+
+  it("excludes external_runtime images from files and marks them", () => {
+    const ext = mk("e", r0, 1, "tank", { image: { ...img("c"), rights: "external_runtime" } });
+    const vis = mk("f", ext, 2, "seat", { image: { ...img("d"), rights: "visitor" } });
+    const p = plan([r0, ext, vis], vis.id);
+    expect(p.files.map((x) => x.versionId)).toEqual([r0.id, vis.id]);
+    const j = JSON.parse(p.historyJson);
+    expect(j.versions[1].file).toBeNull();
+    expect(j.versions[2].file).toBe("02-seat-ffffffff.webp");
+    expect(p.historyMarkdown).toContain("File: image not exported (external image)");
+  });
+
+  it("includes both branches, marks the off-path branch and the head, echoes exportedAt", () => {
+    const a = mk("a", r0, 1, "tank");
+    const b = mk("b", a, 2, "seat");
+    const d = mk("d", r0, 3, "exhaust", { composed: false, fallbackReason: "no_mask" as never });
+    const p = plan([r0, a, b, d], b.id);
+    expect(p.files).toHaveLength(4);
+    const j = JSON.parse(p.historyJson);
+    expect(j.exportedAt).toBe("2026-10-28T10:00:00.000Z");
+    expect(j.headId).toBe(b.id);
+    expect(j.project).toEqual({ id: P.id, name: "My Bike" });
+    expect(j.versions.map((v: { step: string }) => v.step)).toEqual(["Start", "Step 1", "Step 2", "Step 1"]);
+    expect(j.versions.map((v: { onHeadPath: boolean }) => v.onHeadPath)).toEqual([true, true, true, false]);
+    expect(j.versions.map((v: { isHead: boolean }) => v.isHead)).toEqual([false, false, true, false]);
+    expect(j.versions[0]).toMatchObject({ slot: null, instruction: null, mode: null, parentId: null, sheet: [] });
+    expect(j.versions[2].sheet).toEqual([{ slot: "tank", title: "T-a" }, { slot: "seat", title: "T-b" }]);
+    expect(j.versions[1].createdAt).toBe("1970-01-01T00:00:00.001Z");
+    const md = p.historyMarkdown;
+    expect(md.startsWith("# My Bike\n\nExported 2026-10-28T10:00:00.000Z\n")).toBe(true);
+    expect(md).toContain("## 00 Start\n");
+    expect(md).toContain("## 02 Step 2 \u2014 Seat (shown now)");
+    expect(md).toContain("## 03 Step 1 \u2014 Exhaust (other branch)");
+    expect(md).toContain("Full image, not blended (no_mask)");
+    expect(md.match(/Full image, not blended/g)).toHaveLength(1);
+  });
+
+  it("throws on a cycle", () => {
+    const a = { ...r0, id: vid("a"), parentId: vid("b") as string | null, createdAt: 1 };
+    const b = { ...r0, id: vid("b"), parentId: a.id as string | null, createdAt: 2 };
+    expect(() => plan([a, b], a.id)).toThrow(/cycle/);
   });
 });

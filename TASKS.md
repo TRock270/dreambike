@@ -906,3 +906,40 @@ For each completed ticket append actual date/time ET, files changed, checks and 
   - The owner checks the layout on their own screen.
   - Minor: the Next dev overlay badge covers the "Build sheet" button in dev only.
 - Owner check after run 2 (2026-10-28): the free mock test of layout, folding and history works "perfectly". The owner asked to gitignore shop-links.txt (an owner note with ad-tracking parameters); done, review-changes quick green. Ledger lifetime $0.659602; whether the paid T3 check (tail box plus sissy bar) ran is not yet reported.
+
+### Owner request: save the history to a folder — 2026-10-28, about 20:00–20:30 ET
+
+- The owner's paid check of run 1 (tail section by box and painted, sissy bar added) is "good"; this is the first live use of instruction.v2.
+- The owner wants every result kept outside Downloads and outside browser storage.
+- Owner decisions:
+  - folder ~/Projekte/Hackathon/dreambike-results, outside the repo;
+  - a button plus an automatic save on every Accept;
+  - move the downloads and copy the test renders.
+- Done by the lead (local files only, nothing in the repo):
+  - the 7 downloaded previews moved from ~/Downloads to "dreambike-results/2026-10-28 downloaded previews";
+  - the 8 live T7 renders and 2 mock images copied from the session scratchpad to "dreambike-results/2026-10-28 T7 live wheel renders", with a README.txt saying which renders were accepted.
+- Files:
+  - project.ts exportPlan: folder name, file names "NN-<slot>-<id8>.webp" for all versions (branches included), history.json and history.md. Only owner/visitor-rights images are written. Free text is put on one line in history.md. Folder names cut by characters, not UTF-16 units.
+  - src/lib/browser/folderExport.ts (new): the picker, the handle in its own "dreambike-folder" IndexedDB, permission, writing missing files and then both histories.
+  - Workspace.tsx: Project fold actions "Choose folder and save", "Save project to folder", "Choose another folder" and "Reconnect folder", with a status line in words; auto-save after a saved Accept in the background with a single-writer queue; a warning notice on failure.
+  - tests/folderexport.test.ts (new), tests/project.test.ts.
+  - SPEC.md: owner override note on "no extra export format".
+- Workflow build-ticket T6: E1, E2 and E3 approved (E3 in round 2). Verify checks passed. The gate was not met only on browser inspection; done below.
+- Lead fixes: one-line Markdown text; character-safe folder name cut; comment order. review-changes quick green (1 minor comment-order note, fixed).
+- Browser check ($0, MOCK=1, headless Chrome). Headless has no folder picker, so showDirectoryPicker was replaced by a folder of the origin-private file system; the native permission methods exist. Profile deleted after.
+  - "Choose folder and save" gave "Saving to dreambike-results/Bike photo 2026-10-28 20-19 (4da26943): last saved 20:21 (1 new files)", writing 00-start-…webp, history.json and history.md.
+  - Accepting a tank change auto-saved 01-tank-…webp and rewrote history.md: Start, "Step 1 — Tank (shown now)", the instruction, "Full image, not blended (drift)", the file and the sheet line.
+  - The real picker and the permission prompt are untested here; that is the owner's check in Chrome.
+- Checks: typecheck, lint, build pass; npm test 454 passed in 20 files; local_images.py --fixture-set all 71 passed.
+- Consultants: PAL chat nim-nemotron35 on folderExport.ts and project.ts. Its points were checked and rejected:
+  - "same-size skip keeps a stale image": file names carry the immutable version id;
+  - "createWritable loses the old file on failure": writes go to a swap file that replaces the original only on close, and abort discards it;
+  - "missing images look like success": the status line counts files not exported;
+  - "startIn unsupported": only Chrome and Edge get the button;
+  - "no guard inside the function": the caller is single-writer;
+  - Windows reserved names: the owner uses macOS;
+  - "bad slot or cycle throws": schemas validate slots, and a cycle must fail.
+  Gemini was not asked.
+- For the owner:
+  - The new test file needs an exact allow line in .claude/settings.json for subagent targeted runs ("npx --no-install vitest run tests/folderexport.test.ts"). npm test already covers it.
+  - The folder copy does not free browser storage; "Open project from folder" would be the next step.

@@ -5,6 +5,7 @@ import type {
   BikeRevision, BuildItemData, CompositeReason, EditModeId, ImageRef, InstructionData, Part, Project,
   SlotId, Version,
 } from "./types";
+import { slotInfo } from "./slots";
 
 /** Same values as the contracts EditMode enum (one source of truth). */
 export type EditMode = EditModeId;
@@ -219,4 +220,86 @@ export function canAcceptPending(project: Project, pending: PendingRef): AcceptC
   if (pending.projectId !== project.id) return { ok: false, reason: "wrong_project" };
   if (pending.expectedHeadId !== project.headVersionId) return { ok: false, reason: "stale_head" };
   return { ok: true };
+}
+
+// -------------------------------------------------------------- folder export
+// Pure plan for "Save project to folder". The caller writes the files; nothing here
+// touches IndexedDB, the DOM or the clock (exportedAt is passed in).
+
+export type ExportPlan = {
+  folderName: string;
+  files: { name: string; versionId: string; imageId: string }[];
+  historyJson: string;
+  historyMarkdown: string;
+};
+
+/** Free text on one line, so a newline in a name or instruction cannot fake a heading in history.md. */
+const oneLine = (text: string) => text.replace(/[\r\n]+/g, " ");
+
+/** Filesystem-safe folder name plus the first 8 id characters so same-name projects differ. */
+function exportFolderName(name: string, projectId: string): string {
+  let safe = name
+    .replace(/[\/\\:*?"<>|\u0000-\u001F\u007F]/g, "-")
+    .replace(/\s+/g, " ");
+  const trim = (t: string) => t.replace(/^[. ]+|[. ]+$/g, "");
+  // Array.from counts characters, not UTF-16 units, so an emoji is never cut in half.
+  safe = trim(Array.from(trim(safe)).slice(0, 80).join(""));
+  if (safe === "") safe = "Project";
+  return `${safe} (${projectId.slice(0, 8)})`;
+}
+
+/** Fixed-width index: two digits, three once there are more than 100 versions. */
+function padIndex(i: number, total: number): string {
+  return String(i).padStart(total > 100 ? 3 : 2, "0");
+}
+
+export function exportPlan(input: {
+  project: { id: string; name: string };
+  versions: readonly Version[];
+  headId: string;
+  exportedAt: string;
+}): ExportPlan {
+  const { project, versions, headId, exportedAt } = input;
+  const onPath = new Set(pathToRoot(versions, headId).map((v) => v.id));
+  const ordered = [...versions].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+  const files: ExportPlan["files"] = [];
+  const entries: Record<string, unknown>[] = [];
+  const md: string[] = [`# ${oneLine(project.name)}`, "", `Exported ${exportedAt}`, ""];
+
+  ordered.forEach((v, i) => {
+    const nn = padIndex(i, ordered.length);
+    const depth = pathToRoot(versions, v.id).length - 1; // errors on cycle or missing ancestor
+    const step = v.parentId === null ? "Start" : `Step ${depth}`;
+    const exported = v.image.rights === "owner" || v.image.rights === "visitor";
+    const label = v.parentId === null ? "start" : v.change ? v.change.slot : "step";
+    const file = exported ? `${nn}-${label}-${v.id.slice(0, 8)}.webp` : null;
+    if (file) files.push({ name: file, versionId: v.id, imageId: v.image.id });
+    const sheet = activeItems(v).map((it) => ({ slot: it.slot, title: it.title }));
+
+    entries.push({
+      id: v.id, parentId: v.parentId, step, onHeadPath: onPath.has(v.id), isHead: v.id === headId,
+      createdAt: new Date(v.createdAt).toISOString(), kind: v.kind,
+      slot: v.change?.slot ?? null, instruction: v.change?.instruction ?? null, mode: v.change?.mode ?? null,
+      composed: v.composed, fallbackReason: v.fallbackReason, file, sheet,
+    });
+
+    let heading = `## ${nn} ${step}`;
+    if (v.change) heading += ` \u2014 ${slotInfo(v.change.slot).label}`;
+    if (v.id === headId) heading += " (shown now)";
+    if (!onPath.has(v.id)) heading += " (other branch)";
+    md.push(heading, "");
+    if (v.change) {
+      md.push(`Instruction: ${oneLine(v.change.instruction)}`, `Mode: ${v.change.mode}`);
+      if (v.kind === "visual" && !v.composed) {
+        md.push(`Full image, not blended${v.fallbackReason ? ` (${v.fallbackReason})` : ""}`);
+      }
+    }
+    md.push(file ? `File: ${file}` : "File: image not exported (external image)");
+    if (sheet.length > 0) md.push("Build sheet:", ...sheet.map((s) => `- ${slotInfo(s.slot).label}: ${oneLine(s.title)}`));
+    md.push("");
+  });
+
+  const historyJson = JSON.stringify(
+    { project: { id: project.id, name: project.name }, exportedAt, headId, versions: entries }, null, 2);
+  return { folderName: exportFolderName(project.name, project.id), files, historyJson, historyMarkdown: md.join("\n") };
 }

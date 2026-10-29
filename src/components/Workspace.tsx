@@ -4,8 +4,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   applySuggestion, bikeFormFromRevision, bikeRevisionFromForm, editField, emptyBikeForm, type BikeFormState,
 } from "@/lib/bikeForm";
-import { deleteProject, listProjects, type DreamDb } from "@/lib/db";
-import { children, type PendingRef } from "@/lib/project";
+import { deleteProject, getStoredImage, listProjects, type DreamDb } from "@/lib/db";
+import { children, exportPlan, type PendingRef } from "@/lib/project";
+import {
+  folderErrorText, folderPermission, isFolderExportSupported, pickFolder, rememberedFolder, saveProjectToFolder,
+} from "@/lib/browser/folderExport";
 import {
   buildPartMap, derive, emptyPartMap, followUpPart, otherWheelSlot, partMapAfterEdit, recutBike, refreshedPart, selectByPoint, boxPart, boxAcceptable, withPointPart, type PartMapState,
 } from "@/lib/browser/partMap";
@@ -157,6 +160,132 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
     setSessionState(next);
   }
   const readyStorage = (): Extract<StorageState, { status: "ready" }> | null => (storageRef.current?.status === "ready" ? storageRef.current : null);
+
+  // ---- project folder (File System Access API; the folder handle lives in its own small database)
+  type FolderPerm = "granted" | "prompt" | "denied";
+  type FolderStatus = { rootName: string; folderName: string; savedAt: number; written: number; notExported: number };
+  type FolderNote = { projectId: string; tone: "warning" | "danger" | "info"; text: string };
+  const [folderApi, setFolderApi] = useState(false); // set after mount so server and browser render the same first page
+  const [folderHandle, setFolderHandleState] = useState<FileSystemDirectoryHandle | null>(null);
+  const folderHandleRef = useRef<FileSystemDirectoryHandle | null>(null);
+  const [folderPerm, setFolderPerm] = useState<FolderPerm | null>(null);
+  const [folderStatus, setFolderStatus] = useState<Record<string, FolderStatus>>({}); // keyed by project id
+  const [folderNote, setFolderNote] = useState<FolderNote | null>(null);
+  const [folderBusy, setFolderBusy] = useState(false);
+  const folderRunning = useRef(false); // one save at a time
+  const folderQueued = useRef<{ auto: boolean; projectId: string | null } | null>(null); // a request that arrived during a save, with the project that asked
+  function setFolderHandle(h: FileSystemDirectoryHandle | null) {
+    folderHandleRef.current = h;
+    setFolderHandleState(h);
+  }
+
+  /**
+   * Saves the newest history. Requests during a save are queued and run once afterwards, reading
+   * sessionRef again then, so an older history.json never overwrites a newer one. `auto` saves never
+   * ask for permission and report failure as a warning.
+   */
+  async function requestFolderSave(handle: FileSystemDirectoryHandle, auto: boolean) {
+    if (folderRunning.current) {
+      folderQueued.current = { auto: (folderQueued.current?.auto ?? true) && auto, projectId: sessionRef.current?.project.id ?? null };
+      return;
+    }
+    folderRunning.current = true;
+    setFolderBusy(true);
+    let mode = auto;
+    try {
+      for (;;) {
+        folderQueued.current = null;
+        const ready = readyStorage();
+        const s = sessionRef.current;
+        if (!ready || ready.readOnly || !s) break;
+        const pid = s.project.id;
+        try {
+          const perm = await folderPermission(handle, false);
+          setFolderPerm(perm);
+          if (perm !== "granted") break; // the status line then offers "Reconnect folder"
+          const plan = exportPlan({
+            project: s.project, versions: s.versions, headId: s.project.headVersionId, exportedAt: new Date().toISOString(),
+          });
+          const result = await saveProjectToFolder(handle, plan, async (id) => (await getStoredImage(ready.h, id))?.blob ?? null);
+          const notExported = result.missing.length + (s.versions.length - plan.files.length);
+          setFolderStatus((all) => ({
+            ...all,
+            [pid]: { rootName: handle.name, folderName: result.folderName, savedAt: Date.now(), written: result.written, notExported },
+          }));
+          setFolderNote((n) => (n && n.projectId === pid ? null : n));
+        } catch (e) {
+          const reason = folderErrorText(e).replace(/\.$/, "");
+          setFolderNote({
+            projectId: pid, tone: mode ? "warning" : "danger",
+            text: mode
+              ? `The new step is saved in the browser, but not in the folder: ${reason}. Use Save project to folder to retry.`
+              : `${reason}.`,
+          });
+          folderQueued.current = null;
+          break;
+        }
+        // Re-read through a local: TypeScript thinks the ref is still null from the line above, but awaits ran in between.
+        const queued = folderQueued.current as { auto: boolean; projectId: string | null } | null;
+        if (!queued) break;
+        if (queued.projectId && sessionRef.current?.project.id !== queued.projectId) {
+          // The owner left the project that asked for this save. Never save the other project instead;
+          // drop the old "last saved" line and say the newest step is not in the folder.
+          const left = queued.projectId;
+          setFolderStatus((all) => { const rest = { ...all }; delete rest[left]; return rest; });
+          setFolderNote({ projectId: left, tone: "warning",
+            text: "The newest step is saved in the browser, but not in the folder yet. Open this project and use Save project to folder." });
+          folderQueued.current = null;
+          break;
+        }
+        mode = queued.auto;
+      }
+    } finally {
+      folderRunning.current = false;
+      setFolderBusy(false);
+    }
+  }
+
+  /** Button click (a user gesture): choose or reconnect the folder, then save. */
+  async function onFolderClick(forcePick = false) {
+    const s = sessionRef.current;
+    if (!s) return;
+    const pid = s.project.id;
+    setFolderNote(null);
+    try {
+      let handle = folderHandleRef.current;
+      if (!handle || folderPerm === "denied" || forcePick) {
+        handle = await pickFolder(); // opens the dialog and remembers the choice
+        setFolderHandle(handle);
+        setFolderPerm("granted");
+      } else {
+        const perm = await folderPermission(handle, true); // may show the browser's permission prompt
+        setFolderPerm(perm);
+        if (perm !== "granted") {
+          setFolderNote({ projectId: pid, tone: perm === "denied" ? "danger" : "info",
+            text: perm === "denied" ? "The browser blocked access to that folder. Choose another folder." : "The folder was not reconnected." });
+          return;
+        }
+      }
+      await requestFolderSave(handle, false);
+    } catch (e) {
+      setFolderNote({ projectId: pid, tone: "info", text: folderErrorText(e) });
+    }
+  }
+
+  // On mount and when another project opens: look up the remembered folder and its permission (no prompt).
+  const folderProjectId = session?.project.id ?? null;
+  useEffect(() => {
+    setFolderApi(isFolderExportSupported());
+    if (!isFolderExportSupported()) return;
+    let cancelled = false;
+    void (async () => {
+      const handle = await rememberedFolder();
+      if (cancelled) return;
+      setFolderHandle(handle);
+      setFolderPerm(handle ? await folderPermission(handle, false).catch(() => null) : null);
+    })();
+    return () => { cancelled = true; };
+  }, [folderProjectId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -685,6 +814,8 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
           return;
         }
         setSession(out.session);
+        // Background save of the new step; never awaited, so folder trouble cannot touch accept.
+        if (folderHandleRef.current) void requestFolderSave(folderHandleRef.current, true);
       } catch (e) {
         setAccept({ saving: false, error: saveErrorText(e) });
         if (isStorageFull(e)) { setStorageFull("accept"); void refreshList(); }
@@ -820,6 +951,59 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
   const projectName = session?.project.name ?? (photo ? "Unsaved photo" : null);
   const saveStatus = !photo ? null : !session ? "Not saved" : readOnly ? "Read-only: changes are not saved" : "Saved on this device";
   const busy = navBusy || renderRunning || accept.saving || pointBusy;
+  // Folder block of the Project fold.
+  const folderReason = !photo ? "Open or import a photo first."
+    : storage?.status === "unavailable" ? "Local storage is not available, so there is no saved project to export."
+    : readOnly ? "Local storage is read-only, so there is no saved project to export."
+    : !session ? "This photo is not saved as a project yet."
+    : null;
+  const folderStat = session ? folderStatus[session.project.id] : undefined;
+  const folderNoteHere = folderNote && session && folderNote.projectId === session.project.id ? folderNote : null;
+  const folderLabel = folderBusy ? "Saving to folder…"
+    : !folderHandle ? "Choose folder and save"
+    : folderPerm === "denied" ? "Choose another folder and save"
+    : folderPerm === "prompt" ? "Reconnect folder"
+    : "Save project to folder";
+  const noteTone = { warning: "bg-warning-soft text-warning-soft-text", danger: "bg-danger-soft text-danger-soft-text", info: "bg-neutral-soft text-neutral-soft-text" };
+  const folderBlock = !folderApi ? (
+    <p className="text-text-muted text-[13px]">Saving to a folder needs Chrome or Edge.</p>
+  ) : (
+    <div className="flex flex-col gap-2">
+      <button type="button" onClick={() => void onFolderClick()} disabled={!!folderReason || folderBusy}
+        className="self-start rounded-full bg-primary px-4 py-1.5 text-on-fill text-[13px] disabled:opacity-50">
+        {folderLabel}
+      </button>
+      {!folderReason && folderHandle && folderPerm !== "denied" && (
+        <button type="button" onClick={() => void onFolderClick(true)} disabled={folderBusy}
+          className="self-start rounded-full border border-hairline px-4 py-1.5 text-[13px] disabled:opacity-50">
+          Choose another folder
+        </button>
+      )}
+      {folderReason && <p className="text-text-muted text-[13px]">{folderReason}</p>}
+      {!folderReason && !folderHandle && (
+        <p className="text-text-muted text-[13px]">Pick a folder outside the code folder, for example dreambike-results.</p>
+      )}
+      {!folderReason && folderPerm === "prompt" && folderHandle && (
+        <p className="text-warning-soft-text text-[13px]">Folder access needs to be allowed again. Press Reconnect folder.</p>
+      )}
+      {!folderReason && folderPerm === "denied" && !folderNoteHere && (
+        <p className="text-danger-soft-text text-[13px]">The browser blocked access to the saved folder. Choose another folder.</p>
+      )}
+      {!folderReason && (
+        <p role="status" className="text-text-secondary text-[13px]">
+          {folderStat
+            ? `Saving to ${folderStat.rootName}/${folderStat.folderName}: last saved ${new Date(folderStat.savedAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })} (${folderStat.written} new files)`
+            : "Not saved to a folder yet"}
+          {folderStat && folderStat.notExported > 0 && (
+            <span className="text-warning-soft-text"> · {folderStat.notExported} images not exported</span>
+          )}
+        </p>
+      )}
+      {folderNoteHere && (
+        <p role="alert" className={`rounded-chip px-3 py-2 text-[13px] ${noteTone[folderNoteHere.tone]}`}>{folderNoteHere.text}</p>
+      )}
+    </div>
+  );
 
   return (
     <AppShell projectName={projectName} saveStatus={saveStatus} busy={busy}
@@ -997,6 +1181,7 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
                 </section>
               )}
               <Fold title="Project" open={fold.project} onToggle={(o) => setFolded("project", o)} className="border-t border-hairline pt-3">
+                {folderBlock}
                 <button type="button" onClick={() => void choosePhoto(null)} disabled={pointBusy || renderRunning || accept.saving}
                   className="self-start rounded-full border border-hairline px-4 py-1.5 text-[13px] disabled:opacity-50">
                   Close project
