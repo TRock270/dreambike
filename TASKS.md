@@ -1,6 +1,6 @@
 # DreamBike build tickets
 
-Status: planning handoff, October 27, 2026. No implementation ticket is complete. Estimated hours are coding-agent work plus the stated owner checks, not runtime promises. Read SPEC.md and this file before every ticket. Follow CLAUDE.md. Record actual results and commit after each completed ticket. Never backdate work.
+Status: implementation under way; see each ticket's status line and the newest "Handoff" entry at the end of the progress log. Estimated hours are coding-agent work plus the stated owner checks, not runtime promises. Read SPEC.md and this file before every ticket. Follow CLAUDE.md. Record actual results and commit after each completed ticket. Never backdate work.
 
 There are 22 tickets, T0–T21. The scheduled baseline is T0–T18: 39 mandatory hours plus 2 conditional search hours. Two unallocated hours make the original 43-hour plan. T19–T21 are outside that commitment. No feature work consumes the protected recording/submission time without an owner scope decision.
 
@@ -943,3 +943,21 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - For the owner:
   - The new test file needs an exact allow line in .claude/settings.json for subagent targeted runs ("npx --no-install vitest run tests/folderexport.test.ts"). npm test already covers it.
   - The folder copy does not free browser storage; "Open project from folder" would be the next step.
+
+### Handoff — 2026-10-28, end of session (start here next session)
+
+- Repo state: this note is committed on main and pushed to origin with the earlier commits. No dev server running. Working tree clean (shop-links.txt is ignored).
+- Done so far: T1, T2, T4, T5, T6, T7 (see status lines); T3 except the live point lane. Owner follow-ups on top, all committed:
+  - 5220bf8 larger preview with Download; "Do the same for the other wheel?";
+  - addc445 mark a part with a box (no AI) and add a part the bike does not have (instruction.v2, `absent`);
+  - aba8b72 page fits the window, every right-panel section folds, later steps stay in History after Undo;
+  - e6747c5 save the project history to a folder, auto-save on every Accept.
+- Spend: ledger lifetime at least $0.659602 (a lower bound: it was read before the owner's paid T3 check (tail box plus sissy bar, owner: "good"). That check's cost was not read in this session). The current total is unknown; read the ledger before the next paid call.
+- Owner's own results live outside the repo in ~/Projekte/Hackathon/dreambike-results/ ("2026-10-28 downloaded previews", "2026-10-28 T7 live wheel renders" with a README.txt naming the accepted renders).
+- Waiting for the owner:
+  1. Folder save in real Chrome: Project fold, "Choose folder and save", pick dreambike-results, allow edits, Accept a change, check the new NN-…webp and history.md. After a browser restart, "Reconnect folder". The real picker and permission prompt are untested.
+  2. The allow line `npx --no-install vitest run tests/folderexport.test.ts` in .claude/settings.json (owner edits that file).
+  3. Decide whether to build "Open project from folder". The folder copy does not free browser storage; this would let old projects be deleted from the browser safely.
+  4. The Safari check for T2 and T6.
+- Still open in tickets: T0 live profiles (see T0 session 3); T3 live point clicks (SAM points return the whole bike; the box is the workaround); U02 strict-JSON note on T4; minor: the Next dev overlay badge covers the "Build sheet" button in dev only.
+- Next ticket on the critical path: T8, build sheet and manual product input (no BuildSheet.tsx yet). Start with `/build-ticket T8` after reading SPEC.md and this file. T9 follows and needs U02 grounded and U06 cost bounds.
