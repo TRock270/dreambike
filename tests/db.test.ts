@@ -6,11 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acceptSheet, acceptVisual, attachFitResponse, attachParts, closeDreamDb, CorruptRecordError, createProject, deleteProject,
   getLastOpenProject, getStoredImage, moveHead, StorageClosedError, getStoredMask, InvalidWriteError, listProjects, loadProject,
-  importProject, openDreamDb, putShopSettings, snapshotSources, StorageUnavailableError, getShopSettings, ReadOnlyError, redo, setHead, undo, updateBikeRevision,
+  importProject, openDreamDb, putShopSettings, loadSettings, setProjectSettings, putLogo, removeLogo, snapshotSources, StorageUnavailableError, getShopSettings, ReadOnlyError, redo, setHead, undo, updateBikeRevision,
   type DreamDb, type PreparedAccept,
 } from "@/lib/db";
 import { cacheKeys, getCache, putCache, rebuildLedger, storageStatus } from "@/lib/cache";
 import { AppError } from "@/lib/errors";
+import { EXAMPLE_SETTINGS, REAL_SETTINGS_DEFAULT } from "@/lib/quote";
 import { activeItems, exportPlan, fitInputCanonical, LEGAL_SEED, sha256OfText, pathFromRoot, projectSnapshot, sheetChild, visualChild, type VisualChildInput } from "@/lib/project";
 import type { StoredImage, StoredMask, Version } from "@/lib/types";
 import { bikeRevision, freshIndexedDb, hash, makeImage, makeMask, makePart, makeProject, uuid } from "./support/idb";
@@ -815,6 +816,17 @@ describe("importProject", () => {
     expect(after.project.headVersionId).toBe(r.sheet.id);
   });
 
+  it("refuses a project whose settingsId is not default or example, before any write", async () => {
+    const r = await richProject();
+    const folder = await folderOf(r.project.id);
+    await deleteProject(h, r.project.id);
+    const snap = structuredClone(folder.snapshot) as { project: { settingsId: string } };
+    snap.project.settingsId = "shop2";
+    const res = await importProject(h, snap, folder.blobs, folder.pixels, undefined, folder.digest);
+    expect(res.status).toBe("refused");
+    expect(await countStores()).toEqual({ versions: 0, images: 0, masks: 0 });
+  });
+
   it("keeps the ledger consistent with a rebuild", async () => {
     const r = await richProject();
     const folder = await folderOf(r.project.id);
@@ -1058,6 +1070,18 @@ describe("attachFitResponse", () => {
     expect(await getCache(h, cacheKeys.fit(f.inputHash), z.unknown())).not.toBeNull();
   });
 
+  it("a recheck clears an earlier mechanic acknowledgment", async () => {
+    const f = await fitSetup();
+    const reviewedItems = f.version.items.map((i) => ({ ...i, fitReviewedHash: "a".repeat(64) }));
+    const sheet = sheetChild(f.version, { versionId: uuid(), createdAt: 50, items: reviewedItems, fees: [] });
+    expect((await acceptSheet(h, f.project.id, f.version.id, sheet)).status).toBe("accepted");
+    const r = await attachFitResponse(h, { projectId: f.project.id, versionId: sheet.id, canonical: f.canonical, response: f.response });
+    expect(r.status).toBe("attached");
+    const item = (await loadProject(h, f.project.id))!.versions.find((v) => v.id === sheet.id)!.items[0]!;
+    expect(item.fitInputHash).toBe(f.inputHash);
+    expect(item.fitReviewedHash).toBeNull();
+  });
+
   it("a late response whose canonical no longer matches stays cache only", async () => {
     const f = await fitSetup();
     // The bike was corrected after the request went out.
@@ -1102,5 +1126,126 @@ describe("attachFitResponse", () => {
       .toMatchObject({ status: "cache_only", reason: "project_mismatch" });
     await expect(attachFitResponse(h, { projectId: f.project.id, versionId: f.version.id, canonical: f.canonical + " ", response: f.response }))
       .rejects.toBeInstanceOf(InvalidWriteError);
+  });
+});
+
+describe("shop settings (T10)", () => {
+  const real = { ...REAL_SETTINGS_DEFAULT, shopName: "Werkstatt Nord", hourlyRateNetCents: 9000 };
+  const logoOf = (c: string) => new Blob([new Uint8Array(7).fill(c.charCodeAt(0))], { type: "image/png" });
+
+  it("round-trips and survives close and reopen", async () => {
+    await putShopSettings(h, "default", real, 5);
+    closeDreamDb(h);
+    h = await openDreamDb();
+    expect((await loadSettings(h, "default")).settings).toEqual(real);
+  });
+
+  it("an absent record falls back to the matching default without writing", async () => {
+    expect((await loadSettings(h, "default")).settings).toEqual(REAL_SETTINGS_DEFAULT);
+    expect((await loadSettings(h, "example")).settings).toEqual(EXAMPLE_SETTINGS);
+    expect(await h.db.count("settings")).toBe(0);
+  });
+
+  it("keeps real and example isolated and refuses other ids", async () => {
+    await putShopSettings(h, "example", EXAMPLE_SETTINGS, 1);
+    expect((await loadSettings(h, "default")).settings).toEqual(REAL_SETTINGS_DEFAULT);
+    await expect(putShopSettings(h, "default", { ...real, demoRates: true }, 2)).rejects.toBeInstanceOf(InvalidWriteError);
+    await expect(putShopSettings(h, "example", { ...EXAMPLE_SETTINGS, demoRates: false }, 2)).rejects.toBeInstanceOf(InvalidWriteError);
+    await expect(putShopSettings(h, "other", real, 2)).rejects.toBeInstanceOf(InvalidWriteError);
+    await expect(loadSettings(h, "other")).rejects.toBeInstanceOf(InvalidWriteError);
+    expect(await h.db.count("settings")).toBe(1);
+  });
+
+  it("setProjectSettings changes the project and no version", async () => {
+    const { project } = await setup();
+    const before = await h.db.getAll("versions");
+    const next = await setProjectSettings(h, project.id, "example", 99);
+    expect(next.settingsId).toBe("example");
+    expect((await h.db.get("projects", project.id))!.settingsId).toBe("example");
+    expect(await h.db.getAll("versions")).toEqual(before);
+    await expect(setProjectSettings(h, project.id, "x")).rejects.toBeInstanceOf(InvalidWriteError);
+  });
+
+  it("a logo replace frees the old image and its bytes; a still-used logo is kept", async () => {
+    await putLogo(h, logoOf("a"), { id: uuid(), width: 4, height: 2, now: 1 }, "default");
+    const first = (await loadSettings(h, "default")).settings.logoImageId!;
+    expect((await getStoredImage(h, first))!.rights).toBe("owner");
+    const bytesWith = (await storageStatus(h)).imageBytes;
+    expect(bytesWith).toBe(7);
+    const secondId = uuid();
+    await putLogo(h, logoOf("b"), { id: secondId, width: 4, height: 2, now: 2 }, "default");
+    expect((await loadSettings(h, "default")).settings.logoImageId).toBe(secondId);
+    expect(await getStoredImage(h, first)).toBeNull();
+    expect((await storageStatus(h)).imageBytes).toBe(7);
+    // The example record shares the logo, so removing it from the real record keeps the image.
+    await putLogo(h, logoOf("b"), { id: uuid(), width: 4, height: 2, now: 3 }, "example");
+    expect((await loadSettings(h, "example")).settings.logoImageId).toBe(secondId);
+    await removeLogo(h, "default", 4);
+    expect((await loadSettings(h, "default")).settings.logoImageId).toBeNull();
+    expect(await getStoredImage(h, secondId)).not.toBeNull();
+    await removeLogo(h, "example", 5);
+    expect(await getStoredImage(h, secondId)).toBeNull();
+    expect((await storageStatus(h)).imageBytes).toBe(0);
+  });
+
+  it("rejects a logo of the wrong type, size or dimensions and writes nothing", async () => {
+    const meta = (over: Partial<{ width: number; height: number }> = {}) => ({ id: uuid(), width: 4, height: 2, now: 1, ...over });
+    const before = await countStores();
+    await expect(putLogo(h, new Blob([new Uint8Array(7)], { type: "image/svg+xml" }), meta(), "default")).rejects.toBeInstanceOf(InvalidWriteError);
+    await expect(putLogo(h, new Blob([new Uint8Array(7)]), meta(), "default")).rejects.toBeInstanceOf(InvalidWriteError);
+    await expect(putLogo(h, new Blob([new Uint8Array(500_001)], { type: "image/png" }), meta(), "default")).rejects.toBeInstanceOf(InvalidWriteError);
+    await expect(putLogo(h, logoOf("a"), meta({ width: 513 }), "default")).rejects.toBeInstanceOf(InvalidWriteError);
+    await expect(putLogo(h, logoOf("a"), meta({ height: 0 }), "default")).rejects.toBeInstanceOf(InvalidWriteError);
+    await expect(putLogo(h, logoOf("a"), meta({ width: 4.5 }), "default")).rejects.toBeInstanceOf(InvalidWriteError);
+    expect(await countStores()).toEqual(before);
+    expect((await loadSettings(h, "default")).settings.logoImageId).toBeNull();
+    // The limits themselves are accepted.
+    await putLogo(h, new Blob([new Uint8Array(500_000)], { type: "image/webp" }), meta({ width: 512, height: 512 }), "default");
+  });
+
+  it("a logo with the bytes of an external image gets its own owner record", async () => {
+    const bytes = new Uint8Array(7).fill(120);
+    const digest = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))).map((b) => b.toString(16).padStart(2, "0")).join("");
+    const extId = uuid();
+    await h.db.put("images", {
+      id: extId, hash: digest, width: 4, height: 2, bytes: 7, rights: "external_runtime",
+      blob: new Blob([bytes], { type: "image/png" }), lastAccessedAt: 1,
+    });
+    const logoId = uuid();
+    await putLogo(h, logoOf("x"), { id: logoId, width: 4, height: 2, now: 2 }, "default");
+    expect((await loadSettings(h, "default")).settings.logoImageId).toBe(logoId);
+    expect((await getStoredImage(h, logoId))!.rights).toBe("owner");
+    const ext = (await getStoredImage(h, extId))!;
+    expect(ext.rights).toBe("external_runtime");
+    expect(ext.lastAccessedAt).toBe(1);
+  });
+
+  it("putShopSettings never changes the logo: stale or foreign ids neither orphan nor dangle", async () => {
+    await putLogo(h, logoOf("a"), { id: uuid(), width: 4, height: 2, now: 1 }, "default");
+    const logo = (await loadSettings(h, "default")).settings.logoImageId!;
+    const bytes = (await storageStatus(h)).imageBytes;
+    await putShopSettings(h, "default", { ...real, logoImageId: null }, 2);
+    await putShopSettings(h, "default", { ...real, logoImageId: uuid() }, 3);
+    const rec = await loadSettings(h, "default");
+    expect(rec.settings.logoImageId).toBe(logo);
+    expect(rec.settings.shopName).toBe(real.shopName);
+    expect(await getStoredImage(h, logo)).not.toBeNull();
+    expect((await storageStatus(h)).imageBytes).toBe(bytes);
+    // A first save without any stored record cannot invent a logo either.
+    await putShopSettings(h, "example", { ...EXAMPLE_SETTINGS, logoImageId: logo }, 4);
+    expect((await loadSettings(h, "example")).settings.logoImageId).toBeNull();
+  });
+
+  it("quota on a settings write gives STORAGE_FULL and keeps the old record", async () => {
+    await putShopSettings(h, "default", real, 1);
+    const realPut = IDBObjectStore.prototype.put;
+    vi.spyOn(IDBObjectStore.prototype, "put").mockImplementation(function (this: IDBObjectStore, ...args: Parameters<typeof realPut>) {
+      if (this.name === "settings") throw new DOMException("disk full", "QuotaExceededError");
+      return realPut.apply(this, args);
+    });
+    const err = await putShopSettings(h, "default", { ...real, shopName: "New" }, 2).catch((e) => e);
+    vi.restoreAllMocks();
+    expect((err as AppError).code).toBe("STORAGE_FULL");
+    expect((await loadSettings(h, "default")).settings.shopName).toBe("Werkstatt Nord");
   });
 });

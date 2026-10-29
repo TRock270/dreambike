@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   Bike, BikeChecked, Box, BudgetResponse, CheckRequest, ErrorResponse, FitResult, HealthResponse,
-  Instruction, InstructionPayload, MODEL_FORMATS, SegmentPayload, SegmentResponse, Settings,
+  Fee, Instruction, Project, InstructionPayload, MODEL_FORMATS, SegmentPayload, SegmentResponse, Settings,
   modelJsonSchema,
 } from "@/lib/contracts";
 import { MOCKS } from "@/lib/mocks";
@@ -61,6 +61,23 @@ describe("strictness and cross-field checks", () => {
       einzelabnahmeNetCents: null, preferredShopDomains: [], shopRules: [], quoteNotes: "",
       demoRates: false, laborBySlot: [{ slot: "tank", minutes: 240 }, { slot: "tank", minutes: 60 }] };
     expect(Settings.safeParse(s).success).toBe(false);
+  });
+
+  it("reads a stored settings record without officialFeeCents as null", () => {
+    const old = { shopConfirmed: true, shopName: "x", logoImageId: null, hourlyRateNetCents: 9000,
+      currency: "EUR", vatBasisPoints: 1900, laborBySlot: [], aenderungsabnahmeNetCents: null,
+      einzelabnahmeNetCents: null, preferredShopDomains: [], shopRules: [], quoteNotes: "", demoRates: false };
+    const parsed = Settings.parse(old);
+    expect(parsed.officialFeeCents).toBeNull();
+    expect(Settings.parse({ ...old, officialFeeCents: 1500 }).officialFeeCents).toBe(1500);
+    expect(Settings.safeParse({ ...old, extra: 1 }).success).toBe(false);
+  });
+
+  it("accepts an official_fee line and still accepts the old fee kinds", () => {
+    const fee = { id: uuid, label: "Zulassungsstelle", kind: "official_fee", netCents: 1500, itemIds: [], confirmed: false };
+    expect(Fee.safeParse(fee).success).toBe(true);
+    expect(Fee.safeParse({ ...fee, kind: "einzelabnahme" }).success).toBe(true);
+    expect(Fee.safeParse({ ...fee, kind: "tax" }).success).toBe(false);
   });
 
   it("rejects reversed years", () => {
@@ -134,5 +151,18 @@ describe("slots", () => {
       series.handlebar, series.exhaust, series.engine, series.seat, series.frame, series.custom])
       .toEqual([1, 1, 2, 3, 3, 4, 5, 6, 7, 8, 8]);
     expect(SLOTS.filter((s) => s.paintOnly).map((s) => s.id).sort()).toEqual(["engine", "frame"]);
+  });
+});
+
+describe("Project.settingsId", () => {
+  const base = {
+    id: uuid, name: "Bike", rootVersionId: uuid, headVersionId: uuid, createdAt: 0, updatedAt: 0,
+    bikeRevision: { id: uuid, bike, confirmed: false, revision: 0, confirmedAt: null },
+  };
+  it("accepts only the two stored settings records", () => {
+    const ok = (settingsId: string) => Project.safeParse({ ...base, settingsId }).success;
+    expect(ok("shop2")).toBe(false);
+    expect(ok("default")).toBe(true);
+    expect(ok("example")).toBe(true);
   });
 });

@@ -5,7 +5,7 @@ import {
   applySuggestion, bikeFormFromRevision, bikeRevisionFromForm, editField, emptyBikeForm, type BikeFormState,
 } from "@/lib/bikeForm";
 import {
-  attachFitResponse, deleteProject, getLastOpenProject, getShopSettings, getStoredImage, getStoredMask, listProjects, loadProject,
+  attachFitResponse, deleteProject, getLastOpenProject, getShopSettings, getStoredImage, getStoredMask, listProjects, loadProject, loadSettings,
   setLastOpenProject, snapshotSources, type DreamDb,
 } from "@/lib/db";
 import { children, exportPlan, projectSnapshot, type PendingRef, type SnapshotResult } from "@/lib/project";
@@ -30,15 +30,17 @@ import { hitTest, type ImagePoint } from "@/lib/coordinates";
 import { modeAllowed, retargetPaintText } from "@/lib/editPolicy";
 import { PAIRED_SLOTS } from "@/lib/parts";
 import { slotInfo } from "@/lib/slots";
-import type { BinaryMask, InstructionData, NormalizedPhoto, SlotId, Version } from "@/lib/types";
-import { AppShell } from "./AppShell";
+import type { BinaryMask, InstructionData, NormalizedPhoto, Project, ShopSettings, SlotId, Version } from "@/lib/types";
+import { AppShell, type PanelMode } from "./AppShell";
 import { BikeConfirm } from "./BikeConfirm";
 import { BuildSheet, type FitSupport, type SheetChange, type SheetSaveResult } from "./BuildSheet";
 import { DescribeForm } from "./DescribeForm";
 import { EditReview, type RenderState } from "./EditReview";
+import { EstimatePreview } from "./EstimatePreview";
 import { ImageCanvas } from "./ImageCanvas";
 import { InstructionPreview } from "./InstructionPreview";
 import { PaintForm } from "./PaintForm";
+import { ShopSettingsForm } from "./ShopSettingsForm";
 import { PartSelector, type BoxTarget, type PointTarget } from "./PartSelector";
 import { ReferenceDropzone } from "./ReferenceDropzone";
 import { ProjectList, type ProjectListState } from "./ProjectList";
@@ -135,9 +137,10 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
   // Which right-panel sections are open. Session only; every section starts open.
   const [fold, setFold] = useState<Record<FoldKey, boolean>>({ bike: true, parts: true, change: true, project: true });
   const setFolded = (key: FoldKey, open: boolean) => setFold((f) => (f[key] === open ? f : { ...f, [key]: open }));
-  // The Build sheet panel replaces the edit folds while it is open. The folds stay mounted (hidden),
-  // so fold states and what the mechanic typed in the edit forms survive.
-  const [sheetOpen, setSheetOpen] = useState(false);
+  // The wide panel (Build sheet, Estimate or Settings) replaces the edit folds while it is open. The folds
+  // stay mounted (hidden), so fold states and what the mechanic typed in the edit forms survive.
+  const [panel, setPanel] = useState<PanelMode>("edit");
+  const sheetOpen = panel !== "edit"; // any wide panel: the photo takes no clicks, the folds are hidden
   const [sheetSaving, setSheetSaving] = useState(false);
   const sheetBusy = useRef(false); // second guard next to the disabled buttons
   const [fitBusy, setFitBusy] = useState(false); // a fit check is running: Undo, Redo and jumps wait
@@ -488,7 +491,7 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
   async function choosePhoto(next: NormalizedPhoto | null) {
     const token = ++importToken.current;
     resetWork();
-    setSheetOpen(false); // closing the panel also drops its unsaved drafts (BuildSheet unmounts)
+    setPanel("edit"); // closing the panel also drops its unsaved drafts (BuildSheet unmounts)
     setStaleNotice(null);
     setNavNote(null);
     setSaveNote(null);
@@ -581,7 +584,7 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
       if (cached) form = applySuggestion(form, cached.bike);
       if (token !== importToken.current) return false; // another open or import started while this one was loading
       setLastSaveFailure(null); // this project is stored; an older "Not saved" warning belongs to a dropped photo
-      setSheetOpen(false);
+      setPanel("edit");
       setStaleNotice(null);
       setNavNote(null);
       setSaveNote(null);
@@ -730,6 +733,29 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
     },
   } : null;
 
+  // ---- shop settings of the open project (Estimate and Settings read them)
+  // The key says which project and record the settings belong to; an older answer is ignored.
+  const settingsId = session?.project.settingsId ?? "default";
+  const settingsKey = `${session?.project.id ?? "none"}:${settingsId}`;
+  const [shop, setShop] = useState<{ key: string; settings: ShopSettings } | null>(null);
+  const [shopError, setShopError] = useState<{ key: string; message: string } | null>(null);
+  const [settingsTry, setSettingsTry] = useState(0); // "Try again" bumps it to run the load again
+  const settingsDb = storage?.status === "ready" ? storage.h : null;
+  useEffect(() => {
+    let alive = true;
+    if (!settingsDb) return;
+    loadSettings(settingsDb, settingsId)
+      .then((rec) => { if (alive) { setShopError(null); setShop({ key: settingsKey, settings: rec.settings }); } })
+      .catch((e) => { if (alive) setShopError({ key: settingsKey, message: e instanceof Error ? e.message : "Unknown error." }); });
+    return () => { alive = false; };
+  }, [settingsDb, settingsId, settingsKey, settingsTry]);
+  const shopSettings = shop && shop.key === settingsKey ? shop.settings : null;
+  const shopLoadError = shopError && shopError.key === settingsKey && !shopSettings ? shopError.message : null;
+  const projectChanged = (next: Project) => {
+    const cur = sessionRef.current;
+    if (cur && cur.project.id === next.id) setSession({ ...cur, project: next });
+  };
+
   // ---- build sheet: a saved edit or removal becomes a new "sheet" step on the same photo
   async function saveSheetChange(change: SheetChange): Promise<SheetSaveResult> {
     if (sheetBusy.current) return { ok: false, message: "A sheet save is already running." };
@@ -747,7 +773,7 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
       }
       const out = await saveSheet(ready.h, cur, {
         ref: { projectId: cur.project.id, expectedHeadId: change.headId },
-        versionId: change.versionId, items: change.items, fees: change.fees,
+        versionId: change.versionId, items: change.items, fees: change.fees, inspectionReview: change.inspectionReview,
       });
       if (out.status === "refused") return { ok: false, message: out.message };
       if (out.status === "unchanged") return { ok: true, unchanged: true };
@@ -1216,7 +1242,7 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
       undoHint={readOnly ? "Local storage is read-only" : undefined} redoHint={readOnly ? "Local storage is read-only" : undefined}
       onUndo={() => void navigate((h, s) => undoHead(h, s))}
       onRedo={() => void navigate((h, s) => redoHead(h, s))}
-      sheetOpen={sheetOpen} onToggleSheet={() => setSheetOpen((o) => !o)}>
+      panel={panel} onPanel={setPanel} panelLocked={fitBusy || sheetSaving}>
       <main className="flex min-h-0 flex-1 gap-4 p-4">
         <div className="flex min-h-0 min-w-0 flex-[2] flex-col gap-4 overflow-y-auto">
           {/* The photo takes the height History leaves; without a photo the notice scrolls here instead of being cut off. */}
@@ -1255,12 +1281,24 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
               onCancelChoice={() => setBranchChoices(null)} />
           )}
         </div>
-        <aside aria-label={sheetOpen ? "Build sheet panel" : "Edit panel"}
+        <aside aria-label={{ edit: "Edit panel", sheet: "Build sheet panel", estimate: "Estimate panel", settings: "Settings panel" }[panel]}
           className={`flex min-h-0 shrink-0 flex-col gap-4 overflow-y-auto rounded-card border border-hairline bg-surface-1 p-4 ${sheetOpen ? "w-1/2" : "w-[360px]"}`}>
-          {sheetOpen && (
+          {panel === "sheet" && (
             <BuildSheet head={session && head ? head : null} readOnlyReason={sheetReason} blockedReason={sheetBlocked}
-              saving={sheetSaving} onSave={saveSheetChange} onClose={() => setSheetOpen(false)}
+              saving={sheetSaving} onSave={saveSheetChange} onClose={() => setPanel("edit")}
               fit={fitSupport} onFitRunning={setFitBusy} />
+          )}
+          {panel === "estimate" && (
+            <EstimatePreview head={session && head ? head : null} readOnlyReason={sheetReason} blockedReason={sheetBlocked}
+              saving={sheetSaving} settings={shopSettings} settingsError={shopLoadError} settingsId={settingsId} bikeRevision={bikeRevision}
+              onSave={saveSheetChange} onOpenSettings={() => setPanel("settings")} onClose={() => setPanel("edit")} />
+          )}
+          {panel === "settings" && (
+            <ShopSettingsForm h={settingsDb} project={session?.project ?? null} saved={shopSettings}
+              loadError={shopLoadError} onRetry={() => { setShopError(null); setSettingsTry((n) => n + 1); }}
+              readOnlyReason={storage?.status === "unavailable" ? "Local storage is not available, so settings cannot be saved." : readOnly ? "Local storage is read-only, so settings cannot be saved." : null}
+              onProjectChanged={projectChanged} onSettingsChanged={(o, s) => setShop({ key: `${o.projectId ?? "none"}:${o.settingsId}`, settings: s })}
+              onClose={() => setPanel("edit")} />
           )}
           {/* "contents" keeps the folds in the same flex column; "hidden" keeps them mounted but out of sight and out of tab order. */}
           <div className={sheetOpen ? "hidden" : "contents"}>

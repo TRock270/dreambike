@@ -90,7 +90,7 @@ export const BuildItem = z.object({
 }).strict();
 
 export const Fee = z.object({
-  id: Id, label: Short, kind: z.enum(["aenderungsabnahme", "einzelabnahme", "other"]),
+  id: Id, label: Short, kind: z.enum(["aenderungsabnahme", "einzelabnahme", "official_fee", "other"]),
   netCents: Cents.nullable(), itemIds: z.array(Id).max(22), confirmed: z.boolean(),
 }).strict();
 
@@ -107,6 +107,8 @@ export const Settings = z.object({
     slot: Slot, minutes: z.number().int().min(0).max(10080),
   }).strict()).max(22),
   aenderungsabnahmeNetCents: Cents.nullable(), einzelabnahmeNetCents: Cents.nullable(),
+  // Zulassungsstelle fee, no VAT. A record stored before T10 has no field and reads as null.
+  officialFeeCents: Cents.nullable().default(null),
   preferredShopDomains: z.array(z.string().regex(/^[a-z0-9.-]+$/).max(253)).max(10),
   shopRules: z.array(Note).max(12), quoteNotes: Note, demoRates: z.boolean(),
 }).strict().refine(
@@ -187,7 +189,7 @@ export const Version = z.object({
 
 export const Project = z.object({
   id: Id, name: Short, rootVersionId: Id, headVersionId: Id, bikeRevision: BikeRevision,
-  settingsId: Short, createdAt: z.number().int().min(0), updatedAt: z.number().int().min(0),
+  settingsId: z.enum(["default", "example"]), createdAt: z.number().int().min(0), updatedAt: z.number().int().min(0),
 }).strict();
 
 // ------------------------------------------- project.json snapshot (SPEC 9, OF1)

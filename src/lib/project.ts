@@ -3,7 +3,7 @@
 // The caller generates every ID before the transaction so a retry reuses them.
 import type {
   BikeRevision, BuildItemData, CompositeReason, EditModeId, FeeData, ImageRef, InstructionData, Part,
-  MaskMeta, ProductData, Project, SlotId, Version,
+  MaskMeta, ProductData, InspectionReviewData, Project, SlotId, Version,
 } from "./types";
 import { BuildItem, Cents, Product, ProjectSnapshot } from "./contracts";
 import { slotInfo } from "./slots";
@@ -126,14 +126,19 @@ function clearFit(item: BuildItemData): BuildItemData {
  */
 export function sheetChild(
   parent: Version,
-  input: { versionId: string; createdAt: number; items: BuildItemData[]; fees: FeeData[] },
+  input: {
+    versionId: string; createdAt: number; items: BuildItemData[]; fees: FeeData[];
+    /** undefined keeps the parent's review, null clears it, a value replaces it. */
+    inspectionReview?: InspectionReviewData | null;
+  },
 ): Version {
+  const review = input.inspectionReview === undefined ? parent.inspectionReview : input.inspectionReview;
   return {
     id: input.versionId, projectId: parent.projectId, parentId: parent.id, kind: "sheet",
     image: { ...parent.image }, cutoutImageId: parent.cutoutImageId, bikeMaskId: parent.bikeMaskId,
     parts: parent.parts.map((p) => ({ ...p })),
     items: input.items, fees: input.fees,
-    inspectionReview: parent.inspectionReview ? { ...parent.inspectionReview } : null,
+    inspectionReview: review ? { ...review } : null,
     change: null, composed: parent.composed, aligned: parent.aligned, drift: parent.drift,
     fallbackReason: parent.fallbackReason, createdAt: input.createdAt,
   };
@@ -159,13 +164,27 @@ export function sheetChangeLabel(parent: Version, child: Version): string {
       parts.push(`${label}: labor`);
     }
     if (prev.mechanicNotes !== it.mechanicNotes) parts.push(`${label}: notes`);
+    // Only an acknowledgment change on an unchanged fit; a cleared fit is a physical edit, already named.
+    if (prev.fitReviewedHash !== it.fitReviewedHash && same(prev.fit, it.fit)) {
+      parts.push(it.fitReviewedHash === null ? `${label}: fit review removed` : `${label}: fit reviewed`);
+    }
   }
   for (const it of parent.items) if (!now.has(it.id)) parts.push(`${slotInfo(it.slot).label} removed`);
   if (!same(parent.fees, child.fees)) parts.push("Fees");
+  if (!same(parent.inspectionReview, child.inspectionReview)) parts.push("Inspection review");
   if (parts.length === 0) return "No change";
   const text = parts.join(", ");
   const chars = Array.from(text);
   return chars.length <= 80 ? text : chars.slice(0, 79).join("") + "\u2026";
+}
+
+/** Mark the item's current fit as reviewed. reviewHash is fitReviewHash of that fit; no fit, no change. */
+export function acknowledgeFit(items: readonly BuildItemData[], itemId: string, reviewHash: string): BuildItemData[] {
+  return items.map((i) => (i.id === itemId && i.fit !== null ? { ...i, fitReviewedHash: reviewHash } : i));
+}
+
+export function unacknowledgeFit(items: readonly BuildItemData[], itemId: string): BuildItemData[] {
+  return items.map((i) => (i.id === itemId ? { ...i, fitReviewedHash: null } : i));
 }
 
 export type ItemPatch = Partial<Pick<BuildItemData,
@@ -618,7 +637,7 @@ export const FIT_PRECHECK_NOTE =
 export const FIT_TTL_MS = 24 * 60 * 60 * 1000;
 
 /** Stable JSON: object keys sorted, arrays kept in the order given. */
-function stableJson(value: unknown): string {
+export function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
   if (value !== null && typeof value === "object") {
     const rec = value as Record<string, unknown>;
@@ -673,6 +692,18 @@ export async function fitInputHash(
   shopRules: readonly string[], legalSeedVersion: string,
 ): Promise<string> {
   return sha256OfText(fitInputCanonical(bikeRevision, activeItemList, shopRules, legalSeedVersion));
+}
+
+/**
+ * What a mechanic acknowledges: the validated FitResult plus the hash and time it belongs to.
+ * A recheck changes fitCheckedAt and expiry flips `expired`, so the acknowledgment no longer matches. Null without a fit.
+ */
+export async function fitReviewHash(item: BuildItemData, expired = false): Promise<string | null> {
+  if (item.fit === null) return null;
+  // expired is part of the hash: a review given while the check was fresh does not review the expired check.
+  return sha256OfText(stableJson({
+    fit: item.fit, fitInputHash: item.fitInputHash, fitCheckedAt: item.fitCheckedAt, expired,
+  }));
 }
 
 export const FIT_BATCH_SIZE = 3;

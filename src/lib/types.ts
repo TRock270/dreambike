@@ -48,13 +48,18 @@ export type PendingEdit = {
   state: "preparing" | "generating" | "segmenting" | "compositing" | "review" | "error";
 };
 export type QuoteLine = {
-  itemId: string; partNetCents: number | null; laborNetCents: number | null;
+  itemId: string; label: string; partNetCents: number | null; laborNetCents: number | null;
   netCents: number | null; unresolved: string[];
+  /** True when the minutes came from the shop's slot default, not from the item. */
+  defaultMinutes: boolean;
 };
 export type Quote = {
   lines: QuoteLine[]; feeNetCents: number | null; knownSubtotalNetCents: number;
+  /** Net that VAT applies to: total net without official_fee lines. Null when incomplete. */
+  taxableNetCents: number | null; officialFeeCents: number | null;
   netCents: number | null; vatCents: number | null; grossCents: number | null;
-  incomplete: boolean; inputHash: string; generatedAt: number;
+  incomplete: boolean; exclusions: string[]; staleFitItemIds: string[];
+  inputHash: string; generatedAt: number;
 };
 export type CacheEntry = z.infer<typeof CacheEntrySchema>;
 export type DemoManifest = {

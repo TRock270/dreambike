@@ -20,6 +20,7 @@ import {
 } from "./contracts";
 import { adjustLedger, cacheKeys, cleanupSafeCache, getCache, putCache, collectReferences, dropCacheForRemovedBlobs, evictTransient, readLedger, ledgerTotal } from "./cache";
 import { AppError } from "./errors";
+import { EXAMPLE_SETTINGS, REAL_SETTINGS_DEFAULT } from "./quote";
 import { children, fitInputCanonical, LEGAL_SEED, pathToRoot, sha256OfText, undoTarget } from "./project";
 import type {
   BikeRevision, CacheEntry, ImageRef, MaskMeta, MetaRecordData, Part, Project, ProjectSnapshot, ShopSettings,
@@ -406,17 +407,112 @@ export async function getShopSettings(h: DreamDb, id: string): Promise<SettingsR
   return rec;
 }
 
+export type SettingsId = "default" | "example";
+
+/** Only two records exist: the real shop ("default") and the labeled example ("example"). */
+function assertSettingsId(id: string): asserts id is SettingsId {
+  if (id !== "default" && id !== "example") throw new InvalidWriteError(`Unknown settings id "${id}".`);
+}
+
+/** Example rates may only live in "example" and real settings may never carry them. */
+function checkSettingsKind(id: SettingsId, s: ShopSettings): void {
+  if (id === "default" && s.demoRates) throw new InvalidWriteError("The real shop settings cannot carry the example rates.");
+  if (id === "example" && !s.demoRates) throw new InvalidWriteError("The example settings must keep demoRates true.");
+}
+
+const defaultsFor = (id: SettingsId): ShopSettings => (id === "default" ? REAL_SETTINGS_DEFAULT : EXAMPLE_SETTINGS);
+
+/** The stored settings, or the matching default when none is stored. Never writes. */
+export async function loadSettings(h: DreamDb, id: string): Promise<SettingsRecord> {
+  assertSettingsId(id);
+  const stored = await getShopSettings(h, id);
+  return stored ?? { id, updatedAt: 0, settings: structuredClone(defaultsFor(id)) };
+}
+
 export async function putShopSettings(h: DreamDb, id: string, settings: ShopSettings, now: number): Promise<void> {
+  assertSettingsId(id);
   const valid = parseInput(Settings, settings, "shop settings");
+  checkSettingsKind(id, valid);
   await writeTx(h, async (tx) => {
-    await tx.objectStore("settings").put({ id, updatedAt: now, settings: valid });
+    // Only putLogo/removeLogo change the logo: keep the stored id, ignore the caller's (stale form drafts).
+    const raw = await tx.objectStore("settings").get(id);
+    const stored = raw ? SettingsRecordSchema.safeParse(raw) : null;
+    const logoImageId = stored?.success ? stored.data.settings.logoImageId : null; // corrupt record: overwritten, no logo
+    await tx.objectStore("settings").put({ id, updatedAt: now, settings: { ...valid, logoImageId } });
+  });
+}
+
+/** Point a project at another settings record. Touches no version: fits go stale by hash. */
+export async function setProjectSettings(h: DreamDb, projectId: string, settingsId: string, now: number = Date.now()): Promise<Project> {
+  assertSettingsId(settingsId);
+  return writeTx(h, async (tx) => {
+    const project = await getParsedProject(tx, projectId);
+    if (!project) throw new InvalidWriteError("The project does not exist.");
+    const next = parseInput(ProjectSchema, { ...project, settingsId, updatedAt: Math.max(project.updatedAt, now) }, "project");
+    await tx.objectStore("projects").put(next);
+    return next;
+  });
+}
+
+const LOGO_TYPES = ["image/png", "image/jpeg", "image/webp"];
+const LOGO_MAX_BYTES = 500_000;
+const LOGO_MAX_SIDE = 512;
+export type LogoMeta = { id: string; width: number; height: number; now: number };
+
+async function readSettingsInTx(tx: WriteTx, id: SettingsId): Promise<SettingsRecord> {
+  const raw = await tx.objectStore("settings").get(id);
+  return raw ? parseRecord(SettingsRecordSchema, raw, "settings", id) : { id, updatedAt: 0, settings: structuredClone(defaultsFor(id)) };
+}
+
+/** Save the new logo id in the settings record and drop the old image when nothing else uses it. */
+async function swapLogo(tx: WriteTx, settingsId: SettingsId, logoImageId: string | null, now: number): Promise<void> {
+  const rec = await readSettingsInTx(tx, settingsId);
+  const old = rec.settings.logoImageId;
+  const settings = parseInput(Settings, { ...rec.settings, logoImageId }, "shop settings");
+  checkSettingsKind(settingsId, settings);
+  await tx.objectStore("settings").put({ id: settingsId, updatedAt: now, settings });
+  if (old && old !== logoImageId) {
+    const refs = await collectReferences(tx); // sees the settings put above
+    if (!refs.imageIds.has(old)) await removeImageIfUnused(tx, old);
+  }
+}
+
+/** Store a logo as an owner image and make it the settings logo, in one transaction. */
+export async function putLogo(h: DreamDb, blob: Blob, meta: LogoMeta, settingsId: string): Promise<ShopSettings> {
+  assertSettingsId(settingsId);
+  // SPEC 11 logo limits, checked before anything is hashed or written.
+  if (!LOGO_TYPES.includes(blob.type)) throw new InvalidWriteError("The logo must be a PNG, JPEG or WebP image.");
+  if (blob.size > LOGO_MAX_BYTES) throw new InvalidWriteError(`The logo is larger than ${LOGO_MAX_BYTES} bytes.`);
+  for (const side of [meta.width, meta.height]) {
+    if (!Number.isInteger(side) || side < 1 || side > LOGO_MAX_SIDE) throw new InvalidWriteError(`The logo must be 1 to ${LOGO_MAX_SIDE} px on each side.`);
+  }
+  // Hash first: a transaction closes when it awaits anything but its own requests.
+  const hash = await sha256Hex(blob);
+  const image = parseInput(StoredImageSchema, {
+    id: meta.id, hash, width: meta.width, height: meta.height, bytes: blob.size, rights: "owner",
+    blob, lastAccessedAt: meta.now,
+  }, "logo image");
+  checkImage(image);
+  return writeTx(h, async (tx) => {
+    const id = await putImageDeduped(tx, image, "owner");
+    await swapLogo(tx, settingsId, id, meta.now);
+    await enforceTarget(tx, h);
+    return (await readSettingsInTx(tx, settingsId)).settings;
+  });
+}
+
+export async function removeLogo(h: DreamDb, settingsId: string, now: number = Date.now()): Promise<ShopSettings> {
+  assertSettingsId(settingsId);
+  return writeTx(h, async (tx) => {
+    await swapLogo(tx, settingsId, null, now);
+    return (await readSettingsInTx(tx, settingsId)).settings;
   });
 }
 
 // ------------------------------------------------------------------ helpers
 
 /** Store `image` unless an image with the same hash exists; returns the id to reference. */
-async function putImageDeduped(tx: WriteTx, image: StoredImage): Promise<string> {
+async function putImageDeduped(tx: WriteTx, image: StoredImage, onlyRights?: StoredImage["rights"]): Promise<string> {
   checkImage(image);
   const sameHash = await tx.objectStore("images").index("hash").getAll(image.hash);
   for (const raw of sameHash) {
@@ -425,6 +521,7 @@ async function putImageDeduped(tx: WriteTx, image: StoredImage): Promise<string>
     const parsed = StoredImageSchema.safeParse(raw);
     if (!parsed.success) continue;
     const existing = parsed.data;
+    if (onlyRights && existing.rights !== onlyRights) continue; // a logo must keep rights "owner"
     if (existing.blob.size !== existing.bytes || existing.width !== image.width || existing.height !== image.height) continue;
     await tx.objectStore("images").put({ ...existing, lastAccessedAt: Math.max(existing.lastAccessedAt, image.lastAccessedAt) });
     return existing.id;

@@ -2,6 +2,9 @@
 
 import type { ReactNode } from "react";
 
+/** What the wide right panel shows. "edit" is the normal 360 px edit panel. */
+export type PanelMode = "edit" | "sheet" | "estimate" | "settings";
+
 type Props = {
   projectName: string | null;
   /** "Saved on this device", "Unsaved", or similar; always words, never color alone. */
@@ -11,9 +14,11 @@ type Props = {
   undoHint?: string;
   redoHint?: string;
   busy: boolean;
-  /** The Build sheet tab is a toggle: Workspace owns the state. */
-  sheetOpen: boolean;
-  onToggleSheet: () => void;
+  /** Workspace owns the panel state. Pressing the active tab again returns to the editor. */
+  panel: PanelMode;
+  onPanel: (next: PanelMode) => void;
+  /** True while a fit check or a sheet save runs: the panel cannot be swapped under it. */
+  panelLocked: boolean;
   onUndo: () => void;
   onRedo: () => void;
   children: ReactNode;
@@ -22,7 +27,7 @@ type Props = {
 const button = "rounded-full border border-hairline px-4 py-1.5 text-[13px] disabled:opacity-50";
 
 /** Header (project name, Undo, Redo, Settings), the page content, and the Build sheet / Estimate tabs. */
-export function AppShell({ projectName, saveStatus, canUndo, canRedo, undoHint, redoHint, busy, sheetOpen, onToggleSheet, onUndo, onRedo, children }: Props) {
+export function AppShell({ projectName, saveStatus, canUndo, canRedo, undoHint, redoHint, busy, panel, onPanel, panelLocked, onUndo, onRedo, children }: Props) {
   return (
     <>
       <header className="flex shrink-0 items-center gap-4 border-b border-hairline bg-surface-1 px-6 py-3">
@@ -32,14 +37,20 @@ export function AppShell({ projectName, saveStatus, canUndo, canRedo, undoHint, 
         <div className="ml-auto flex items-center gap-2">
           <button type="button" disabled={!canUndo || busy} onClick={onUndo} title={undoHint} aria-label="Undo the last accepted change" className={button}>Undo</button>
           <button type="button" disabled={!canRedo || busy} onClick={onRedo} title={redoHint} aria-label="Redo the next change" className={button}>Redo</button>
-          <button type="button" className={`${button} bg-surface-2`}>Settings</button>
+          <button type="button" aria-pressed={panel === "settings"} disabled={panelLocked}
+            onClick={() => onPanel(panel === "settings" ? "edit" : "settings")}
+            className={`${button} ${panel === "settings" ? "bg-primary text-on-fill" : "bg-surface-2"}`}>Settings</button>
         </div>
       </header>
       {children}
       <nav aria-label="Sheet and estimate" className="flex shrink-0 gap-2 border-t border-hairline bg-surface-1 px-6 py-3">
-        <button type="button" aria-pressed={sheetOpen} onClick={onToggleSheet}
-          className={`rounded-full px-4 py-1.5 text-[13px] ${sheetOpen ? "bg-primary text-on-fill" : "border border-hairline"}`}>Build sheet</button>
-        <button type="button" disabled className="rounded-full border border-hairline px-4 py-1.5 text-[13px] disabled:opacity-50">Estimate (comes later)</button>
+        {(["sheet", "estimate"] as const).map((mode) => (
+          <button key={mode} type="button" aria-pressed={panel === mode} disabled={panelLocked}
+            onClick={() => onPanel(panel === mode ? "edit" : mode)}
+            className={`rounded-full px-4 py-1.5 text-[13px] disabled:opacity-50 ${panel === mode ? "bg-primary text-on-fill" : "border border-hairline"}`}>
+            {mode === "sheet" ? "Build sheet" : "Estimate"}
+          </button>
+        ))}
       </nav>
     </>
   );

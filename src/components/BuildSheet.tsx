@@ -12,13 +12,17 @@ import {
 } from "@/lib/project";
 import prices from "../../budget/prices.json";
 import { slotInfo } from "@/lib/slots";
-import type { BikeRevision, BuildItemData, FeeData, Version } from "@/lib/types";
+import type { BikeRevision, BuildItemData, FeeData, InspectionReviewData, Version } from "@/lib/types";
 import { FitBadge } from "./FitBadge";
 import { PaperworkSummary } from "./PaperworkSummary";
 import { ProductFields } from "./ProductFields";
 
 /** What BuildSheet hands to Workspace to save: the new items for a child of `headId`. */
-export type SheetChange = { headId: string; versionId: string; items: BuildItemData[]; fees: FeeData[] };
+export type SheetChange = {
+  headId: string; versionId: string; items: BuildItemData[]; fees: FeeData[];
+  /** undefined keeps the parent's inspection review, null clears it, a value replaces it. */
+  inspectionReview?: InspectionReviewData | null;
+};
 export type SheetSaveResult = { ok: true; unchanged: boolean } | { ok: false; message: string };
 
 /** What Workspace gives the fit check: the saved bike and the storage calls. null when nothing is saved. */

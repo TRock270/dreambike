@@ -6,7 +6,7 @@ import {
 import {
   activeItems, canAcceptPending, children, defaultProjectName, laterSteps, newProject, newRootVersion,
   exportPlan, projectSnapshot, editItem, formatEuroCents, laborDisplay, manualProduct, parseEuroInput, priceDisplay,
-  removeItem, sheetChangeLabel, sheetChild, pathFromRoot, redoTargets, undoTarget, visualChild, type VisualChildInput,
+  removeItem, acknowledgeFit, unacknowledgeFit, fitReviewHash, sheetChangeLabel, sheetChild, pathFromRoot, redoTargets, undoTarget, visualChild, type VisualChildInput,
 } from "@/lib/project";
 import {
   FIT_TTL_MS, LEGAL_SEED, fitBatches, fitInputCanonical, fitInputHash, fitStatusOf, runFitBatches,
@@ -500,6 +500,8 @@ describe("sheetChangeLabel", () => {
     expect(sheetChangeLabel(parent, mk(swap(tank, { laborMinutes: 5 })))).toBe("Tank: labor");
     expect(sheetChangeLabel(parent, mk(swap(tank, { product: prod() })))).toBe("Tank: product");
     expect(sheetChangeLabel(parent, mk(items.filter((i) => i.id !== seat.id)))).toBe("Seat removed");
+    expect(sheetChangeLabel(parent, mk(swap(tank, { fitReviewedHash: hash("1") })))).toBe("Tank: fit reviewed");
+    expect(sheetChangeLabel(parent, mk(swap(tank, { fitReviewedHash: null })))).toBe("Tank: fit review removed");
     const fee = { id: id(), label: "F", kind: "other" as const, netCents: 1, itemIds: [], confirmed: true };
     expect(sheetChangeLabel(parent, mk(items, [fee]))).toBe("Fees");
     expect(sheetChangeLabel(parent, mk(swap(tank, { partPriceCents: 7, laborMinutes: 5 })))).toBe("Tank: price, Tank: labor");
@@ -676,5 +678,61 @@ describe("runFitBatches", () => {
     expect(out.map((o) => o.state)).toEqual(["done", "failed", "done"]);
     expect(out[0]).toEqual({ index: 0, state: "done", result: "A" });
     expect(progress).toEqual(["0:running", "0:done", "1:running", "1:failed", "2:running", "2:done"]);
+  });
+});
+
+describe("fit acknowledgment and inspection review in sheet versions", () => {
+  it("fitReviewHash is null without a fit and changes with fitCheckedAt, fit or hash", async () => {
+    const { tank } = sheetFixture();
+    expect(await fitReviewHash({ ...tank, fit: null })).toBeNull();
+    const a = await fitReviewHash(tank);
+    expect(a).toMatch(/^[a-f0-9]{64}$/);
+    expect(await fitReviewHash({ ...tank })).toBe(a);
+    expect(await fitReviewHash({ ...tank, fitCheckedAt: "2026-10-28T11:00:00.000Z" })).not.toBe(a);
+    expect(await fitReviewHash({ ...tank, fitInputHash: hash("9") })).not.toBe(a);
+    expect(await fitReviewHash({ ...tank, fit: { ...tank.fit!, status: "problem" } })).not.toBe(a);
+  });
+
+  it("acknowledgeFit sets the hash only on an item with a fit; unacknowledgeFit clears it", () => {
+    const { items, tank, seat } = sheetFixture();
+    const noFit = items.map((i) => (i.id === seat.id ? { ...i, fit: null, fitReviewedHash: null } : i));
+    expect(acknowledgeFit(noFit, seat.id, hash("7")).find((i) => i.id === seat.id)!.fitReviewedHash).toBeNull();
+    const acked = acknowledgeFit(items, tank.id, hash("7"));
+    expect(acked.find((i) => i.id === tank.id)!.fitReviewedHash).toBe(hash("7"));
+    expect(acked.find((i) => i.id === seat.id)!.fitReviewedHash).toBe(seat.fitReviewedHash);
+    expect(unacknowledgeFit(acked, tank.id).find((i) => i.id === tank.id)!.fitReviewedHash).toBeNull();
+    expect(items.find((i) => i.id === tank.id)!.fitReviewedHash).toBe(hash("f")); // input untouched
+  });
+
+  it("sheetChild keeps the parent review when undefined, clears it on null, replaces it with a value", () => {
+    const { v2, items } = sheetFixture();
+    const review = { fitInputHash: hash("1"), decision: "none" as const, notes: "", reviewedAt: "2026-10-28T10:00:00.000Z" };
+    const parent: Version = { ...v2, items, inspectionReview: review };
+    const base = { versionId: id(), createdAt: 9, items, fees: [] };
+    expect(sheetChild(parent, base).inspectionReview).toEqual(review);
+    expect(sheetChild(parent, { ...base, inspectionReview: null }).inspectionReview).toBeNull();
+    const next = { ...review, decision: "unresolved" as const };
+    const child = sheetChild(parent, { ...base, inspectionReview: next });
+    expect(child.inspectionReview).toEqual(next);
+    expect(VersionSchema.safeParse(child).success).toBe(true);
+    expect(parent.inspectionReview).toEqual(review);
+  });
+
+  it("labels an acknowledgment-only and a review-only version, not No change", () => {
+    const { v2, items, tank } = sheetFixture();
+    const parent: Version = { ...v2, items };
+    const acked = acknowledgeFit(items, tank.id, hash("7"));
+    const a = sheetChild(parent, { versionId: id(), createdAt: 5, items: acked, fees: [] });
+    expect(sheetChangeLabel(parent, a)).toBe("Tank: fit reviewed");
+    const review = { fitInputHash: hash("1"), decision: "none" as const, notes: "", reviewedAt: "2026-10-28T10:00:00.000Z" };
+    const r = sheetChild(parent, { versionId: id(), createdAt: 5, items, fees: [], inspectionReview: review });
+    expect(sheetChangeLabel(parent, r)).toBe("Inspection review");
+  });
+
+  it("clearing a fit by an edit clears the acknowledgment too", () => {
+    const { items, tank } = sheetFixture();
+    const r = must(editItem(items, tank.id, { title: "Other tank" }));
+    expect(r.items.every((i) => i.fit === null && i.fitReviewedHash === null)).toBe(true);
+    expect(removeItem(items, [], tank.id)).toMatchObject({ ok: true });
   });
 });

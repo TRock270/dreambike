@@ -18,7 +18,7 @@ import {
 } from "../project";
 import { unknownBike } from "../bikeForm";
 import type {
-  BikeData, BikeRevision, BuildItemData, FeeData, BinaryMask, InstructionData, MapPart, NormalizedPhoto, Part, PhotoRef,
+  BikeData, BikeRevision, BuildItemData, FeeData, InspectionReviewData, BinaryMask, InstructionData, MapPart, NormalizedPhoto, Part, PhotoRef,
   Project, SlotId, StoredImage, StoredMask, Version, CompositeReason,
 } from "../types";
 import {
@@ -316,6 +316,8 @@ export type SaveSheetInput = {
   versionId: string;
   items: BuildItemData[];
   fees: FeeData[];
+  /** undefined keeps the parent's review, null clears it, a value replaces it. */
+  inspectionReview?: InspectionReviewData | null;
   now?: number;
 };
 
@@ -328,10 +330,14 @@ export async function saveSheet(h: DreamDb, session: ProjectSession, input: Save
   if (!check.ok) return refuseSheet(check.reason);
   const parent = session.versions.find((v) => v.id === input.ref.expectedHeadId);
   if (!parent) return refuseSheet("stale_head");
-  if (deepEqual(parent.items, input.items) && deepEqual(parent.fees, input.fees)) return { status: "unchanged" };
+  const review = input.inspectionReview === undefined ? parent.inspectionReview : input.inspectionReview;
+  if (deepEqual(parent.items, input.items) && deepEqual(parent.fees, input.fees) && deepEqual(parent.inspectionReview, review)) {
+    return { status: "unchanged" };
+  }
 
   const version = sheetChild(parent, {
     versionId: input.versionId, createdAt: input.now ?? Date.now(), items: input.items, fees: input.fees,
+    inspectionReview: input.inspectionReview,
   });
   const res = await acceptSheet(h, session.project.id, input.ref.expectedHeadId, version);
   if (res.status === "stale_head") return refuseSheet("stale_head");

@@ -104,6 +104,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 
 ## T10 — Settings and integer EUR estimate math
 
+- Status: DONE 2026-10-29 (offline, mock browser check; no paid calls). Open: a complete estimate in the browser needs a real reviewed fit (mock fits never count; the complete path is covered by unit tests); a Safari reload check of settings is still the owner's; the official fee is suggested but not required when an inspection is needed. See log.
 - Priority: MVP. Estimate: 2h, Nov 1. Depends on: T8, T9 schema integration; offline math work need not wait for a live call.
 - Files: src/components/ShopSettingsForm.tsx/InspectionFees.tsx/EstimatePreview.tsx/MissingCosts.tsx, src/lib/quote.ts/db.ts, tests/quote.test.ts.
 - Work: real vs isolated demo settings, owned logo, default minutes, editable net rates/allowances, fixed 19%, preferred domains/rules, gross-to-net conversion, missing values, fee deduplication and acknowledgment.
@@ -1149,3 +1150,54 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Done-when: owned-bike live results show evidence and unknowns (probe 2, app run; search hits recorded, model cited no sources); no unjustified ok for handlebar, US exhaust, wheel/ABS and an ABE text with an inspection condition (live: problem/verify; offline tests); unsupported URLs removed (offline tests; no live sources to strip); a failed batch keeps the others (mock browser check, tests); changing bike/part/rules invalidates every fit (tests, mock browser check); offline checks pass; grounded dispatch is enabled with the owner-approved reserve 16 and stays off by default (.env.example SEARCH_ENABLED=false).
 - Not done: Codex gate for the new paid route (optional per docs/t9-start.md; a review package can be prepared on request).
 - Owner 2026-10-29: the branch switch (Start, Redo, choose the rear wheel) works. Live dev server stopped. Results tidied on the owner's request, nothing deleted: the older top-level fadf4f99 copy (10:14, rear wheel only; its images and masks byte-identical to the newer copy, all its versions contained in it) moved to ~/.Trash/dreambike-results-cleanup-2026-10-29-T9; the complete fadf4f99 copy (both branches and the fit result) moved from inside the 6be8cba2 folder to the top level. No project folder is nested now.
+
+### T10 — 2026-10-29, started about 13:55 ET
+
+- Owner decisions, asked once:
+  1. The Zulassungsstelle fee becomes its own line without VAT: new Fee kind `official_fee`, counted in the net total, VAT only on the other lines (SPEC 647/649 get a dated note). The €416.50 test is unaffected.
+  2. Example shop name: "Nordwerk Customs", always labeled as example values with illustrative rates; Claude makes a simple text logo PNG.
+  3. Example-shop minutes: the owner's 9 values win (see "Owner inputs before T9"); every other slot uses the SPEC 641 illustrative minutes; custom stays unset.
+- Lead decisions: the owner's example values replace the SPEC 639 demo values (10000/25000) for the isolated example record (SPEC dated note). Real settings start empty as SPEC 639 says, with laborBySlot []. Each project chooses its shop record (real or example); a new project uses the real record. Spend: $0, no paid calls in this ticket.
+
+- Logo: `nordwerk-customs-logo.png` (512×119 px, 6984 bytes, transparent) made with IBM Plex Sans (variable font from google/fonts, SIL OFL 1.1) and the Nordlicht text and primary-ink colors. Stored outside the repo in ~/Projekte/Hackathon/dreambike-results/example-shop/ with the script, the OFL text and a README; it is uploaded through Settings.
+- Offline build, 14:05–14:39 ET: `/build-ticket` with units Q1, D1, L1, U1 (35 agents, about 34 min). Status green: all units approved, no open findings or disputes.
+  - Plan check changes: project.ts and tests/project.test.ts moved to Q1 (quote.ts needs stableJson; fitReviewHash and acknowledgeFit sit next to clearFit); D1 also owns src/lib/browser/projectSession.ts and tests/projectsession.test.ts (saveSheet treated a review-only save as unchanged); U1 also owns BuildSheet.tsx (SheetChange type); Q1 got models- and imaging-reviewer (contracts.ts routing), U1 got release-reviewer (example labels).
+  - Q1 (shop): round 1 had 1 blocking finding (an acknowledgment from before the 24 h expiry still counted after it); fixed in round 2. computeQuote now computes the review hashes itself.
+  - L1 (imaging): round 1 had 1 (a hex color literal in the JPEG fallback); fixed in round 2.
+  - D1 (shop): round 1 had 4 (putShopSettings wrote the caller's logo id, which could orphan or dangle a logo); fixed in round 2: only putLogo and removeLogo change the logo.
+  - U1 (ui): round 1 had 4 (form draft not reset to the stored values after a save, load failures waiting forever); fixed in round 2.
+  - Verify: typecheck, lint, npm test 644/644 in 23 files, build passed. Done-when gate: all 7 items met from tests and code; 3 minors (F1 settingsId not a closed set on import, F2 no computeQuote test for one fee over two items, F3 reload checked only in fake-indexeddb).
+- Files: src/lib/quote.ts (new), src/lib/contracts.ts, src/lib/types.ts, src/lib/project.ts, src/lib/db.ts, src/lib/browser/projectSession.ts, src/lib/browser/preflight.ts, src/components/ShopSettingsForm.tsx, InspectionFees.tsx, EstimatePreview.tsx, MissingCosts.tsx (new), AppShell.tsx, Workspace.tsx, BuildSheet.tsx, tests/quote.test.ts (new), tests/contracts.test.ts, tests/project.test.ts, tests/db.test.ts, tests/projectsession.test.ts, tests/preflight.test.ts; SPEC.md 639 and 647 dated notes.
+- Lead repair after the run, 14:40–14:45 ET (three builders in parallel, then `/review-changes` quick on the 13 touched files: imaging, shop, models, security, general; green, 3 minors). Fixed minors raised by the run's reviewers:
+  - putLogo enforces the logo limits (PNG/JPEG/WebP, at most 500000 bytes, 1–512 px), validates the record, and reuses a same-hash image only when its rights are owner (3 reviewers: a logo matching an external_runtime image lost the owner label).
+  - Project.settingsId is z.enum(["default","example"]); an imported project with another id is refused (gate F1). Only "default" was ever written (git history).
+  - History label "fit review removed" for an un-acknowledgment; suggested fee labels from the example shop end in " — example rate".
+  - Tests: one fee over two items counted once through computeQuote (net 55042, VAT 10458, gross 65500); labor exactly on .5 (gate F2, IMG-Q1-2).
+  - normalizeLogo: LOGO_MAX_BYTES 500000 (was 512000), "The logo could not be read.", decoded size checked.
+  - UI: the switch warning compares the two records' shop rules instead of claiming every fit goes stale (3 reviewers); the example banner says only the rate, minutes and fee allowances are illustrative (part prices can be real); the logo hint says to use only the shop's own logo; no inspection review on an unconfirmed bike; a late settings save is stored under its own record's key.
+  - After the browser check: a stray space before the colon in the switch warning (one character, JSX; checks rerun, not re-reviewed).
+- Lead decisions on the remaining minors: official fee not required when an inspection is needed (review F1): kept open; the mechanic's inspection review is the explicit decision and the owner's figures say "about 15 €". Example-shop fee lines added by hand stay in the sheet after switching to the real shop (the mechanic confirmed them; suggested ones carry the example tag). A corrupt settings record replaced through the form leaves its old logo blob until cleanup (bounded by 500 KB). suggestFees also proposes an official fee line with amount unknown when the shop has none, so the missing amount shows; kept. buildSettings in the form has no unit test.
+- Mock browser check, 14:46–14:51 ET ($0, MOCK=1, headless Chrome over CDP, fresh profile deleted afterwards, synthetic gradient JPEG): bike confirmed, a mock tank change rendered and accepted.
+  - Estimate with the empty real shop: incomplete draft, known subtotal €0.00, 5 missing items in words (shop not confirmed, price, labor, fit, inspection review).
+  - Settings: switched to the example shop (warning: rules are the same, fits stay current); every example value matches the owner's inputs (100,00; 50,42; 151,26; 15,00; the 9 owner minutes and the SPEC rest); logo uploaded (512×119); "Saved locally".
+  - Page reload: the project reopens, the example shop is still selected, every value, the quote note and the logo (512×119) are back.
+  - Tank product with 119,00 gross: part net €100.00, labor €200.00 "(shop default minutes)" (120 min × €100/h), known subtotal €300.00; mock fit "Verify fit ⚠ Mock result", "A mock result cannot be reviewed".
+  - Fee lines Änderungsabnahme 50,42 (estimated) and Zulassungsstelle 15,00 (official fee, no VAT), both confirmed for the tank, review "fees added" saved: known subtotal €365.42; still an incomplete draft only because of the mock fit.
+  - Back to "Your shop": the real record is still empty, no logo; labor goes back to unknown.
+- Checks after all fixes: typecheck exit 0, lint exit 0, npm test 653/653 in 23 files, build exit 0.
+- Consultant: PAL chat nim-nemotron35 on src/lib/quote.ts (255 lines). 5 points, none adopted:
+  - VAT ignores vatBasisPoints: the schema fixes it to the literal 1900 and SPEC 649 fixes 19 %;
+  - the quote hash misses `now`: quoteCanonical includes each item's fit status, which turns stale at 24 h, so the hash changes at expiry;
+  - a confirmed 0-cent inspection fee completes the quote: the confirmed amount is the mechanic's explicit entry, settings are only defaults;
+  - official fee suggested with an unknown amount: deliberate, the missing amount shows instead of being dropped;
+  - no guard above safe-integer range: every input is schema-bounded (Cents ≤ 100,000,000, minutes ≤ 10080), far below 2^53.
+  Gemini was not asked.
+- Spend: $0 (no paid calls).
+- Duration: about 1 h (13:55–14:55 ET), including the owner questions, the 34-minute workflow, the repair and the browser check.
+
+
+### Handoff — 2026-10-29, T10 done (start here next session)
+
+- Done: T1–T10 and OF1 (see status lines). Spend unchanged since T9: ledger lifetime 2.247349 USD booked (over-counted, see T9), Billing about $0.77 expected.
+- Next on the critical path: T11, estimate PDF. It can use quote.ts as is; the example logo is uploaded through Settings (file in ~/Projekte/Hackathon/dreambike-results/example-shop/). T11 adds the Plex TTF fonts and their licenses under public/fonts/.
+- Waiting for the owner: a Safari reload check of settings and the logo (the earlier Safari project-loss report is still unexplained); whether a needed inspection should also require the Zulassungsstelle line.

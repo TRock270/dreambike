@@ -481,3 +481,31 @@ describe("saveSheet", () => {
     expect(headVersion(back.session).parts.map((p) => p.maskId).sort()).toEqual(attached);
   });
 });
+
+describe("saveSheet review-only versions (T10)", () => {
+  const refOf = (s: ProjectSession) => ({ projectId: s.project.id, expectedHeadId: s.project.headVersionId });
+  const review = { fitInputHash: hash("f"), decision: "none" as const, notes: "checked", reviewedAt: "2026-10-29T10:00:00.000Z" };
+
+  it("saves a version whose only change is the inspection review, then reports unchanged", async () => {
+    const s = await accept(await start(), "tank", "Red tank", "b");
+    const p = headVersion(s);
+    const out = await saveSheet(h, s, { ref: refOf(s), versionId: crypto.randomUUID(), items: p.items, fees: p.fees, inspectionReview: review });
+    if (out.status !== "saved") throw new Error(out.status);
+    expect(headVersion(out.session).inspectionReview).toEqual(review);
+    const again = await saveSheet(h, out.session, { ref: refOf(out.session), versionId: crypto.randomUUID(), items: p.items, fees: p.fees, inspectionReview: review });
+    expect(again).toEqual({ status: "unchanged" });
+    const omitted = await saveSheet(h, out.session, { ref: refOf(out.session), versionId: crypto.randomUUID(), items: p.items, fees: p.fees });
+    expect(omitted).toEqual({ status: "unchanged" }); // undefined keeps the parent's review
+    const cleared = await saveSheet(h, out.session, { ref: refOf(out.session), versionId: crypto.randomUUID(), items: p.items, fees: p.fees, inspectionReview: null });
+    expect(cleared.status).toBe("saved");
+  });
+
+  it("saves a version whose only change is fitReviewedHash", async () => {
+    const s = await accept(await start(), "tank", "Red tank", "b");
+    const p = headVersion(s);
+    const items = p.items.map((i) => ({ ...i, fitReviewedHash: hash("e") }));
+    const out = await saveSheet(h, s, { ref: refOf(s), versionId: crypto.randomUUID(), items, fees: p.fees });
+    if (out.status !== "saved") throw new Error(out.status);
+    expect(headVersion(out.session).items[0]!.fitReviewedHash).toBe(hash("e"));
+  });
+});
