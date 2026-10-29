@@ -8,6 +8,7 @@ import { AppError } from "@/lib/errors";
 import { fetchSparkJson, promptBody, promptText, readSparkResponse, sparkBody, sparkCharge, sparkChargeGrounded } from "@/lib/server/meta";
 import type { InstructionData } from "@/lib/types";
 import sharp from "sharp";
+import prices from "../budget/prices.json";
 
 const ins = (intent: InstructionData["intent"]): InstructionData =>
   ({ title: "t", editPrompt: "p", spec: [], intent, warnings: [] });
@@ -372,13 +373,20 @@ describe("grounded Spark (fit check, T9)", () => {
   const search = (status: string, extra: object = {}) => ({ type: "web_search_call", id: "ws_1", status, ...extra });
   const hit = (n: number) => ({ url: `https://example.com/${n}`, title: `T${n}`, snippet: `S${n}` });
 
+  it("keeps the grounded output cap inside the spark-grounded-base reservation (3 full passes)", () => {
+    const rates = prices.prices["muse-spark-1.3-contributor"];
+    const contextTokens = 1_048_576;
+    const pass = (contextTokens * rates.inputMicroUsdPerMillionTokens + grounded().max_output_tokens * rates.outputMicroUsdPerMillionTokens) / 1_000_000;
+    expect(3 * pass).toBeLessThanOrEqual(prices.reservations["spark-grounded-base"]);
+  });
+
   it("adds exactly tools, max_tool_calls and include when grounded", () => {
     const body = grounded();
     expect(Object.keys(body).sort()).toEqual(["include", "input", "instructions", "max_output_tokens", "max_tool_calls",
       "model", "store", "stream", "text", "tools"]);
     expect(body).toMatchObject({
       tools: [{ type: "web_search", search_context_size: "low", user_location: { type: "approximate", country: "DE" } }],
-      max_tool_calls: 2, include: ["web_search_call.results"], stream: false, store: false, max_output_tokens: 4096,
+      max_tool_calls: 2, include: ["web_search_call.results"], stream: false, store: false, max_output_tokens: 8192,
     });
     expect(body.text.format.name).toBe("fit_check_v1");
     expect(body.instructions).toBe(promptBody("fit-check.v1.md"));

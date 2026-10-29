@@ -46,6 +46,7 @@ GROUNDED_FIELDS: dict[str, Any] = {
                "user_location": {"type": "approximate", "country": "DE"}}],
     "max_tool_calls": 2,
     "include": ["web_search_call.results"],
+    "max_output_tokens": 8192,  # owner decision 2026-10-29, see GROUNDED_FIELDS in meta.ts
 }
 GROUNDED_DEADLINE_S = 70
 

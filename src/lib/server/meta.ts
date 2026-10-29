@@ -174,6 +174,10 @@ const GROUNDED_FIELDS = {
   tools: [{ type: "web_search", search_context_size: "low", user_location: { type: "approximate", country: "DE" } }],
   max_tool_calls: 2,
   include: ["web_search_call.results"],
+  // Owner decision 2026-10-29: a grounded probe spent all 4096 output tokens on reasoning and
+  // ended incomplete. 3 passes x (full input context + 8192 output) = 319488 µ$, still inside
+  // the spark-grounded-base reservation of 330000 (SPEC 712).
+  max_output_tokens: 8192,
 } as const;
 
 /**
