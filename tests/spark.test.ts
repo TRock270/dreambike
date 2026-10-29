@@ -407,6 +407,18 @@ describe("grounded Spark (fit check, T9)", () => {
     expect(out.searchCalls).toEqual([{ id: "ws_1", status: "completed" }, { id: "ws_1", status: "completed" }]);
     expect(out.searched).toBe(true);
   });
+  it("reads the last message of a grounded answer, not the preamble", () => {
+    const msg = (...texts: string[]) => ({ type: "message", content: texts.map((text) => ({ type: "output_text", text })) });
+    const answer = [{ type: "reasoning" }, msg("Let me look this up."), search("completed"), search("completed"),
+      { type: "reasoning" }];
+    expect(readSparkResponse({ status: "completed", output: [...answer, msg(fit)] }).json).toEqual({ results: [] });
+    expect(readSparkResponse({ status: "completed", output: [...answer, msg(fit.slice(0, 6), fit.slice(6))] }).json).toEqual({ results: [] });
+    expect(code(() => readSparkResponse({ status: "completed", output: [msg(fit), search("completed"), msg("Done, see above.")] })))
+      .toBe("SCHEMA_INVALID");
+    // citations stay evidence whichever message carried them
+    const cited = { type: "message", content: [{ type: "output_text", text: "pre", annotations: [{ type: "url_citation", url: "https://p.example" }] }] };
+    expect(readSparkResponse({ status: "completed", output: [cited, msg(fit)] }).citations).toEqual([{ url: "https://p.example", title: "" }]);
+  });
   it("gives no hits for unknown result shapes and never invents any", () => {
     const out = readSparkResponse(completed(fit, [search("completed", { results: "oops", action: { results: { url: "https://x.example" } } }),
       search("completed", { output: [hit(9)] })]));

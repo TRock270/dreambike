@@ -165,6 +165,11 @@ def run_grounded(config, budget, bike: dict[str, Any], dry_run: bool, items: lis
                  if b.get("type") == "output_text" for a in _dicts(b.get("annotations"))
                  if a.get("type") == "url_citation"]
     summary["citationUrls"] = citations
+    summary["messages"] = [
+        {"index": n, "textChars": len(t), "head": t[:160]}
+        for n, i in enumerate(output) if i.get("type") == "message"
+        for t in ["".join(b["text"] for b in _dicts(i.get("content"))
+                          if b.get("type") == "output_text" and isinstance(b.get("text"), str))]]
     text, _, refused = extract(response)
     summary["refused"] = refused
     if text is None:
@@ -185,17 +190,22 @@ def run_grounded(config, budget, bike: dict[str, Any], dry_run: bool, items: lis
 
 
 def extract(response: dict[str, Any]) -> tuple[str | None, list[str], bool]:
-    """Join every output_text block across all output items (never assume
-    output[0]); report item types and whether a refusal appeared."""
-    texts, item_types, refused = [], [], False
+    """Join the output_text blocks of the LAST message item that has any (a
+    grounded answer has a preamble message first; probe 2026-10-29); report
+    item types and whether a refusal appeared in any item."""
+    last: list[str] = []
+    item_types, refused = [], False
     for item in _dicts(response.get("output")):
         item_types.append(item.get("type", "?"))
+        texts = []
         for block in _dicts(item.get("content")):
             if block.get("type") == "output_text" and isinstance(block.get("text"), str):
                 texts.append(block["text"])
             elif block.get("type") == "refusal":
                 refused = True
-    return ("".join(texts) if texts else None), item_types, refused
+        if item.get("type") == "message" and texts:
+            last = texts
+    return ("".join(last) if last else None), item_types, refused
 
 
 def run_profile(config, budget, profile: str, prompt_file: str, format_name: str,

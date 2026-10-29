@@ -213,9 +213,9 @@ export type SparkOutput = {
 type SparkItem = { type?: unknown; content?: unknown };
 
 /**
- * Read a non-streaming Responses answer: status first, then every
- * output_text block across all output items (reasoning or tool items may come
- * before the message; never assume output[0]). Refusal, failure, incomplete,
+ * Read a non-streaming Responses answer: status first, then the output_text
+ * of the last message item (reasoning or tool items may come before it; never
+ * assume output[0]). Citations come from every message. Refusal, failure, incomplete,
  * malformed shape, and non-JSON output are safe route errors; no repair call.
  */
 export function readSparkResponse(body: unknown): SparkOutput {
@@ -228,7 +228,15 @@ export function readSparkResponse(body: unknown): SparkOutput {
   if (blocks.some((b) => b.type === "refusal")) throw new AppError("UPSTREAM_REJECTED", "The AI model declined this request.");
   if (r.status !== "completed") throw new AppError("SCHEMA_INVALID", "The AI answer was incomplete.");
   const textBlocks = blocks.filter((b) => b.type === "output_text");
-  const text = textBlocks.map((b) => (typeof b.text === "string" ? b.text : "")).join("");
+  // Probe evidence 2026-10-29: a grounded answer is [reasoning, message, search, search, reasoning, message].
+  // The first message is preamble; the answer is the LAST message item with output_text (joined within it only).
+  const messages = (r.output as SparkItem[]).filter((i) => i.type === "message")
+    .map((i) => (Array.isArray(i.content) ? i.content : []).filter((b): b is { type?: unknown; text?: unknown } =>
+      Boolean(b) && typeof b === "object" && (b as { type?: unknown }).type === "output_text"
+      && typeof (b as { text?: unknown }).text === "string"))
+    .filter((m) => m.length > 0);
+  const last = messages[messages.length - 1] ?? [];
+  const text = last.map((b) => (typeof b.text === "string" ? b.text : "")).join("");
   if (!text) throw new AppError("SCHEMA_INVALID");
   let json: unknown;
   try {

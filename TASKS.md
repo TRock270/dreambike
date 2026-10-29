@@ -1129,3 +1129,10 @@ For each completed ticket append actual date/time ET, files changed, checks and 
   - withAdded drops server entries: wrong, server additions keep their room first.
   Gemini was not asked.
 - Spend: $0 so far.
+- Owner go for the paid probes (2026-10-29, "yes"). Note: responses_spark.py charges --ticket (default T0), not BUDGET_TICKET, so every probe ran with `--ticket T9`; caps TICKET_CAP_USD=2 and DAILY_CAP_USD=2, SEARCH_QUERY_RESERVE=20 in the process env. Dry-run first.
+- Probe 1, 12:05 ET, batch 1 (handlebar, exhaust, front wheel): HTTP 200, 2 completed searches, but "output_text is not JSON": the answer has a preamble message before the searches and the final JSON message after them, and both the spike and meta.ts readSparkResponse joined them.
+- Lead repair (models-builder, then review-changes quick: models, security, general; green, 2 minors): the answer is the last message item with string output_text, joined within that item only; citations still from every message; spike evidence lists each message's length and first 160 characters. Minor F1 (unguarded b["text"]) refuted: the comprehension checks isinstance first. Minor S1 (TS and Python could pick a different last message when text is not a string) fixed in meta.ts. spark and check tests 51/51, typecheck exit 0.
+- Probe 2, batch 1 again: passed. Handlebar verify, US exhaust problem, front wheel verify; every approval field unknown; no sources claimed; reasons name the throttle type, cable reach and ABS ring.
+- Probe 3, batch 2 (ABE part with an inspection condition): status incomplete after both searches, output 4096 of 4096 tokens (3941 reasoning). The route refuses an incomplete answer; no ABE case evidence yet.
+- U06: no query count in usage in any probe; each call made exactly 2 web_search_call items with one query each. Every probe kept its 380000 µ$ reservation: ledger T9 1.14 USD booked, lifetime 1.854096 (expected real cost about $0.02). Evidence in docs/api-evidence.md.
+- Waiting for the owner: the Meta Billing reading (to settle queries per call), and a decision on the grounded output cap (probe 3 ran out of tokens).
