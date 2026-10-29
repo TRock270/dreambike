@@ -188,7 +188,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 ## OF1 — Open project from folder and honest local save (owner follow-up, 2026-10-29)
 
 - Priority: owner request. Estimate: 2h. Depends on: T6, T8 and the folder save (e6747c5). No paid calls.
-- Status: DONE 2026-10-29 (offline and in mock; no paid calls). Owner checks in Chrome (folder round trip) and Safari (retest) pending. See log.
+- Status: DONE 2026-10-29 (offline and in mock; no paid calls). Owner checked the Chrome folder round trip and the Safari retest 2026-10-29: "Funktioniert alles". See log.
 - Owner decisions 2026-10-29: build "Open project from folder" now (overrides SPEC 614 "not an import format"); Safari lost a project on reload, so a failed local save must never look saved.
 - Files: src/lib/contracts.ts, src/lib/types.ts, src/lib/project.ts, src/lib/db.ts, src/lib/browser/folderExport.ts, src/components/Workspace.tsx, src/components/ProjectList.tsx, tests/project.test.ts, tests/db.test.ts, tests/folderexport.test.ts.
 - Work: the folder save also writes a versioned project.json snapshot (full Project and every Version as stored, image table with ImageRef and file name including cutouts, mask table) and masks/<id>.bin; one atomic importProject in db.ts; readProjectFolder with a read-mode picker that validates everything before any write; an "Open project from folder" button where the browser supports it; a lasting "Not saved" warning with the error name when the project cannot be stored; a reload reopens the last open project.
@@ -1067,3 +1067,13 @@ For each completed ticket append actual date/time ET, files changed, checks and 
   - Owner in Chrome: save a project to a folder, delete it in the browser, "Open project from folder"; image, History, sheet and Undo should match. A folder saved before OF1 has no project.json; save it once again first.
   - Owner in Safari: drop a photo and Accept. If the "Not saved" warning appears, send the error name; otherwise reload and the project should reopen. If Blob storage is the cause, a separate plan follows (images as ArrayBuffer, DB v2 migration).
   - G2 minor (above); no component tests for the new UI paths.
+
+### OF1 owner checks and results cleanup — 2026-10-29, about 10:20–10:40 ET
+
+- Owner 2026-10-29, after OF1: "Funktioniert alles" (Chrome: save to folder, delete in the browser, open from folder; Safari: the retest). The T2/T6 Safari check is done with it: drop, HEIC message, and the project survives a reload. Owner approved the push.
+- Owner question: "2 images not exported" on project b2deea8d. Cause: a counting bug in Workspace.tsx, which subtracted the image files from the number of versions; the project's two sheet steps reuse their parent's image, so they counted as missing. Nothing was missing (project.json was written, which only happens with no missing file). Fixed: distinct version images minus exported files, plus missing files.
+- Results folder cleanup (owner request: keep only projects with AI changes, no duplicates), in ~/Projekte/Hackathon/dreambike-results, outside the repo. Moved to ~/.Trash/dreambike-results-cleanup-2026-10-29, nothing deleted:
+  - two nested copies of b2deea8d inside fadf4f99 and 053e84d9 (the folder had been picked as the save root); project.json equal to the top-level copy apart from exportedAt;
+  - 5480911b and 053e84d9: only the start photo, no AI change;
+  - the two MOCK-*.webp placeholders in "2026-10-28 T7 live wheel renders" (README line removed).
+  - Kept: fadf4f99 (rear wheel), 6be8cba2 (front and rear wheel, tank, fork paint), b2deea8d (rear fender paint, sissy bar, two sheet steps), the T7 live renders and the downloaded previews. fadf4f99 and b2deea8d start from the same photo with different AI changes, so they are not duplicates.

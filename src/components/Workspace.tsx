@@ -252,7 +252,9 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
             handle, plan, async (id) => (await getStoredImage(ready.h, id))?.blob ?? null, undefined,
             { snapshot, readMask: async (id) => (await getStoredMask(ready.h, id))?.pixels ?? null },
           );
-          const notExported = result.missing.length + (exportVersions.length - plan.files.length);
+          // Count distinct images, not versions: a sheet step reuses its parent's image file.
+          const imageIds = new Set(exportVersions.map((v) => v.image.id));
+          const notExported = result.missing.length + (imageIds.size - plan.files.length);
           setFolderStatus((all) => ({
             ...all,
             [pid]: { rootName: handle.name, folderName: result.folderName, savedAt: Date.now(), written: result.written, notExported },
