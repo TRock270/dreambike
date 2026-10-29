@@ -946,7 +946,7 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 
 ### Handoff — 2026-10-28, end of session (start here next session)
 
-- Repo state: this note is committed on main and pushed to origin with the earlier commits. No dev server running. Working tree clean (shop-links.txt is ignored).
+- Repo state: main is pushed to origin up to 73e50be; the T8 preparation commit after it is local. No dev server running. Working tree clean (shop-links.txt is ignored).
 - Done so far: T1, T2, T4, T5, T6, T7 (see status lines); T3 except the live point lane. Owner follow-ups on top, all committed:
   - 5220bf8 larger preview with Download; "Do the same for the other wheel?";
   - addc445 mark a part with a box (no AI) and add a part the bike does not have (instruction.v2, `absent`);
@@ -955,9 +955,9 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Spend: ledger lifetime at least $0.659602 (a lower bound: it was read before the owner's paid T3 check (tail box plus sissy bar, owner: "good"). That check's cost was not read in this session). The current total is unknown; read the ledger before the next paid call.
 - Owner's own results live outside the repo in ~/Projekte/Hackathon/dreambike-results/ ("2026-10-28 downloaded previews", "2026-10-28 T7 live wheel renders" with a README.txt naming the accepted renders).
 - Waiting for the owner:
-  1. Folder save in real Chrome: Project fold, "Choose folder and save", pick dreambike-results, allow edits, Accept a change, check the new NN-…webp and history.md. After a browser restart, "Reconnect folder". The real picker and permission prompt are untested.
+  1. Done 2026-10-28: the owner tried the folder save in their own Chrome (real picker and permission prompt); owner: "works".
   2. The allow line `npx --no-install vitest run tests/folderexport.test.ts` in .claude/settings.json (owner edits that file).
   3. Decide whether to build "Open project from folder". The folder copy does not free browser storage; this would let old projects be deleted from the browser safely.
   4. The Safari check for T2 and T6.
 - Still open in tickets: T0 live profiles (see T0 session 3); T3 live point clicks (SAM points return the whole bike; the box is the workaround); U02 strict-JSON note on T4; minor: the Next dev overlay badge covers the "Build sheet" button in dev only.
-- Next ticket on the critical path: T8, build sheet and manual product input (no BuildSheet.tsx yet). Start with `/build-ticket T8` after reading SPEC.md and this file. T9 follows and needs U02 grounded and U06 cost bounds.
+- Next ticket on the critical path: T8, build sheet and manual product input. It is prepared in docs/t8-start.md: owner decision (wide right panel, photo stays visible), unit split with exact files, the `/build-ticket` args, the done-when map and the steps after the run. The owner wants it started without further questions; stop after T8. T9 follows and needs U02 grounded and U06 cost bounds.
