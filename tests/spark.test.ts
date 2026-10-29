@@ -5,7 +5,7 @@ import { applySuggestion, confirmBike, editField, emptyBikeForm, parseYear, unkn
 import { ErrorResponse, IdentifyResponse, InstructionPayload, InstructionResponse, modelJsonSchema } from "@/lib/contracts";
 import { absentAllowed, bikeLimitations, enforceIntent, modeAllowed, paintRequestText, retargetPaintText } from "@/lib/editPolicy";
 import { AppError } from "@/lib/errors";
-import { fetchSparkJson, promptBody, promptText, readSparkResponse, sparkBody, sparkCharge } from "@/lib/server/meta";
+import { fetchSparkJson, promptBody, promptText, readSparkResponse, sparkBody, sparkCharge, sparkChargeGrounded } from "@/lib/server/meta";
 import type { InstructionData } from "@/lib/types";
 import sharp from "sharp";
 
@@ -360,5 +360,77 @@ describe("paint request text", () => {
   });
   it("retargets an empty body", () => {
     expect(retargetPaintText("Paint the front wheel: ", "Front wheel", "Rear wheel")).toBe("Paint the rear wheel: ");
+  });
+});
+
+describe("grounded Spark (fit check, T9)", () => {
+  const task = { items: [{ id: "x" }] };
+  const grounded = () => sparkBody("m", "fit-check.v1.md", "fit_check_v1", task, null, true, true);
+  const plain = [() => sparkBody("m", "identify.v1.md", "bike_identification_v1", task, null),
+    () => sparkBody("m", "instruction.v2.md", "edit_instruction_v1", task, null, true)];
+  const fit = JSON.stringify({ results: [] });
+  const search = (status: string, extra: object = {}) => ({ type: "web_search_call", id: "ws_1", status, ...extra });
+  const hit = (n: number) => ({ url: `https://example.com/${n}`, title: `T${n}`, snippet: `S${n}` });
+
+  it("adds exactly tools, max_tool_calls and include when grounded", () => {
+    const body = grounded();
+    expect(Object.keys(body).sort()).toEqual(["include", "input", "instructions", "max_output_tokens", "max_tool_calls",
+      "model", "store", "stream", "text", "tools"]);
+    expect(body).toMatchObject({
+      tools: [{ type: "web_search", search_context_size: "low", user_location: { type: "approximate", country: "DE" } }],
+      max_tool_calls: 2, include: ["web_search_call.results"], stream: false, store: false, max_output_tokens: 4096,
+    });
+    expect(body.text.format.name).toBe("fit_check_v1");
+    expect(body.instructions).toBe(promptBody("fit-check.v1.md"));
+    expect(body.instructions).not.toContain("fit-check.v1 \u2014");
+  });
+  it("leaves identify and instruction bodies free of tool fields", () => {
+    for (const make of plain) {
+      const body = make();
+      for (const key of ["tools", "tool_choice", "max_tool_calls", "include"]) expect(body).not.toHaveProperty(key);
+    }
+  });
+  it("extracts citations and results across several output items and blocks", () => {
+    const out = readSparkResponse({ status: "completed", output: [
+      { type: "reasoning" },
+      search("completed", { results: [hit(1), hit(2), { title: "no url" }] }),
+      { type: "message", content: [
+        { type: "output_text", text: fit.slice(0, 5), annotations: [{ type: "url_citation", url: "https://a.example/x", title: "A" },
+          { type: "file_citation", url: "https://ignored.example" }] },
+        { type: "output_text", text: fit.slice(5), annotations: [{ type: "url_citation", url: "https://b.example/y" }, "junk"] }] },
+      search("completed", { action: { results: [hit(3)] } }),
+    ] });
+    expect(out.json).toEqual({ results: [] });
+    expect(out.citations).toEqual([{ url: "https://a.example/x", title: "A" }, { url: "https://b.example/y", title: "" }]);
+    expect(out.results.map((h) => h.url)).toEqual(["https://example.com/1", "https://example.com/2", "https://example.com/3"]);
+    expect(out.results[0]).toEqual({ url: "https://example.com/1", title: "T1", snippet: "S1" });
+    expect(out.searchCalls).toEqual([{ id: "ws_1", status: "completed" }, { id: "ws_1", status: "completed" }]);
+    expect(out.searched).toBe(true);
+  });
+  it("gives no hits for unknown result shapes and never invents any", () => {
+    const out = readSparkResponse(completed(fit, [search("completed", { results: "oops", action: { results: { url: "https://x.example" } } }),
+      search("completed", { output: [hit(9)] })]));
+    expect(out.results).toEqual([]);
+    expect(out.searched).toBe(true);
+  });
+  it("searched is false without a completed web_search_call", () => {
+    expect(readSparkResponse(completed(fit)).searched).toBe(false);
+    expect(readSparkResponse(completed(fit, [search("failed")])).searched).toBe(false);
+    expect(readSparkResponse(completed(fit, [search("in_progress"), { type: "message", content: [] }])).searched).toBe(false);
+    expect(readSparkResponse(completed(fit, [search("failed"), search("completed")])).searched).toBe(true);
+    expect(readSparkResponse(completed(fit, [{ type: "web_search_call" }])).searchCalls).toEqual([{ id: null, status: null }]);
+  });
+  it("charges tokens plus 2500 microdollars per known query, and null when unknown", () => {
+    const p = { inputMicroUsdPerMillionTokens: 100_000, outputMicroUsdPerMillionTokens: 200_000, webSearchMicroUsdPerQuery: 2500 };
+    const usage = { input_tokens: 1000, output_tokens: 500 };
+    expect(sparkChargeGrounded(usage, 0, p)).toBe(200);
+    expect(sparkChargeGrounded(usage, 2, p)).toBe(200 + 5000);
+    expect(sparkChargeGrounded(usage, undefined, p)).toBeNull();
+    expect(sparkChargeGrounded(usage, null, p)).toBeNull();
+    expect(sparkChargeGrounded(usage, -1, p)).toBeNull();
+    expect(sparkChargeGrounded(usage, 1.5, p)).toBeNull();
+    expect(sparkChargeGrounded(undefined, 2, p)).toBeNull();
+    expect(sparkChargeGrounded({ input_tokens: 5 }, 2, p)).toBeNull();
+    expect(sparkCharge(usage, p)).toBe(200); // the ungrounded charge is unchanged
   });
 });

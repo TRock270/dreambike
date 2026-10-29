@@ -1,5 +1,6 @@
 // Client calls for POST /api/identify and POST /api/instruction.
-import { ErrorResponse, IdentifyResponse, InstructionResponse } from "../contracts";
+import type { z } from "zod";
+import { CheckResponse, ErrorResponse, IdentifyResponse, InstructionResponse, type CheckRequest } from "../contracts";
 import type { BikeData, InstructionData, PhotoRef, SlotId } from "../types";
 import { PreflightError } from "./preflight";
 
@@ -50,4 +51,32 @@ export async function requestInstruction(input: InstructionRequest, signal?: Abo
   const parsed = InstructionResponse.safeParse(await post("/api/instruction", form, signal));
   if (!parsed.success) throw new PreflightError("SCHEMA_INVALID", "The instruction answer had an unexpected shape.");
   return parsed.data.instruction;
+}
+
+/**
+ * POST /api/check with a JSON body (SPEC 5). One attempt: a failed batch is reported to the caller,
+ * which keeps the batches that finished. No automatic retry, since every attempt is a paid call.
+ */
+type CheckRequestData = z.infer<typeof CheckRequest>;
+type CheckResponseData = z.infer<typeof CheckResponse>;
+
+export async function requestCheck(request: CheckRequestData, signal?: AbortSignal): Promise<CheckResponseData> {
+  let res: Response;
+  try {
+    res = await fetch("/api/check", {
+      method: "POST", signal, body: JSON.stringify(request),
+      headers: { "Content-Type": "application/json", "X-Request-Id": crypto.randomUUID() },
+    });
+  } catch {
+    throw new PreflightError("UPSTREAM_UNAVAILABLE", "The app server could not be reached.");
+  }
+  const body: unknown = await res.json().catch(() => null);
+  if (!res.ok) {
+    const err = ErrorResponse.safeParse(body);
+    if (err.success) throw new PreflightError(err.data.error.code, err.data.error.message);
+    throw new PreflightError(res.status >= 500 ? "UPSTREAM_UNAVAILABLE" : "INVALID_REQUEST", "The request failed.");
+  }
+  const parsed = CheckResponse.safeParse(body);
+  if (!parsed.success) throw new PreflightError("SCHEMA_INVALID", "The fit check answer had an unexpected shape.");
+  return parsed.data;
 }

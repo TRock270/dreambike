@@ -8,7 +8,10 @@ import {
   exportPlan, projectSnapshot, editItem, formatEuroCents, laborDisplay, manualProduct, parseEuroInput, priceDisplay,
   removeItem, sheetChangeLabel, sheetChild, pathFromRoot, redoTargets, undoTarget, visualChild, type VisualChildInput,
 } from "@/lib/project";
-import type { BuildItemData, FitData, Part, ProductData, Version } from "@/lib/types";
+import {
+  FIT_TTL_MS, LEGAL_SEED, fitBatches, fitInputCanonical, fitInputHash, fitStatusOf, runFitBatches,
+} from "@/lib/project";
+import type { BikeData, BuildItemData, FitData, Part, ProductData, Version } from "@/lib/types";
 
 const id = () => crypto.randomUUID();
 const hash = (c: string) => c.repeat(64);
@@ -588,5 +591,90 @@ describe("projectSnapshot", () => {
     const f = mk("owner", true);
     const r = projectSnapshot({ project: proj(f.v), versions: [f.v], cutouts: [{ ...f.cut, rights: "external_runtime" }], masks: [f.mask], plan: f.plan });
     expect(r.complete).toBe(false);
+  });
+});
+
+// ------------------------------------------------------------- fit input hash
+describe("fit input hash", () => {
+  const rev = (over: Partial<BikeData> = {}, revision = 1) => BikeRevision.parse({
+    id: "11111111-1111-4111-8111-111111111111", confirmed: true, revision, confirmedAt: 5,
+    bike: { make: "BMW", model: "R nineT", family: "other", engine: null, yearFrom: 2014, yearTo: 2016, abs: "yes",
+      style: null, facing: "left", confidence: 0.9, limitations: [], ...over },
+  });
+  const canon = (items: BuildItemData[], rules: string[] = [], seed: string = LEGAL_SEED.version, r = rev()) =>
+    fitInputCanonical(r, items, rules, seed);
+  const hashOf = (items: BuildItemData[], rules: string[] = []) => fitInputHash(rev(), items, rules, LEGAL_SEED.version);
+
+  it("ignores item order and key order, and is a sha256 hex string", async () => {
+    const { items } = sheetFixture();
+    expect(canon(items)).toBe(canon([...items].reverse()));
+    expect(await hashOf(items)).toMatch(/^[a-f0-9]{64}$/);
+    expect(await hashOf(items)).toBe(await hashOf([...items].reverse()));
+  });
+
+  it("changes with the bike revision, part, spec, product approval text, shop rules or seed", () => {
+    const { items, tank } = sheetFixture();
+    const base = canon(items);
+    const swap = (t: BuildItemData) => items.map((i) => (i.id === tank.id ? t : i));
+    expect(canon(items, [], LEGAL_SEED.version, rev({ model: "R nineT Pure" }))).not.toBe(base);
+    expect(canon(items, [], LEGAL_SEED.version, rev({}, 2))).not.toBe(base);
+    expect(canon(swap({ ...tank, title: "Other tank" }))).not.toBe(base);
+    expect(canon(swap({ ...tank, spec: [...tank.spec, { key: "volume", value: "17 l" }] }))).not.toBe(base);
+    const withProduct = { ...tank, product: prod({ approvalText: "ABE 1" }) };
+    expect(canon(swap(withProduct))).not.toBe(base);
+    expect(canon(swap({ ...withProduct, product: { ...withProduct.product!, approvalText: "ABE 2" } }))).not.toBe(canon(swap(withProduct)));
+    expect(canon(items, ["no chrome"])).not.toBe(base);
+    expect(canon(items, [], "2027-01-01")).not.toBe(base);
+    expect(canon(items.slice(1))).not.toBe(base);
+  });
+
+  it("keeps the hash on a price, tax, labor, note or fit edit", () => {
+    const { items, tank } = sheetFixture();
+    const edited = { ...tank, partPriceCents: 99999, taxBasis: "net" as const, laborMinutes: 600, mechanicNotes: "x",
+      zeroLaborConfirmed: true, fit: null, fitInputHash: null, fitCheckedAt: null, fitReviewedHash: null };
+    expect(canon(items.map((i) => (i.id === tank.id ? edited : i)))).toBe(canon(items));
+    const priced = { ...tank, product: prod({ priceEurCents: 5, priceText: "5 EUR", taxBasis: "net" }) };
+    const priced2 = { ...tank, product: prod({ priceEurCents: 900, priceText: "9 EUR", taxBasis: "gross" }) };
+    expect(canon([priced])).toBe(canon([priced2]));
+  });
+});
+
+describe("fitBatches and fitStatusOf", () => {
+  const many = (n: number): BuildItemData[] => Array.from({ length: n }, (_, i) => ({
+    ...sheetFixture().tank, id: id(), slot: (["tank", "seat", "exhaust", "handlebar", "grips", "mirrors", "fork"] as const)[i]!,
+  }));
+  it("splits into batches of at most 3 and summarizes the whole build", () => {
+    const { batches, activeBuild } = fitBatches(many(7));
+    expect(batches.map((b) => b.length)).toEqual([3, 3, 1]);
+    expect(activeBuild).toHaveLength(7);
+    expect(Object.keys(activeBuild[0]!).sort()).toEqual(["itemId", "slot", "spec", "title"]);
+    expect(fitBatches([]).batches).toEqual([]);
+  });
+
+  it("is stale on a hash mismatch and after 24 hours, not checked without a fit", () => {
+    const { tank } = sheetFixture();
+    const checked = Date.parse(tank.fitCheckedAt!);
+    expect(fitStatusOf(tank, hash("e"), checked + 1000)).toBe("ok");
+    expect(fitStatusOf(tank, hash("d"), checked + 1000)).toBe("stale");
+    expect(fitStatusOf(tank, hash("e"), checked + FIT_TTL_MS)).toBe("ok");
+    expect(fitStatusOf(tank, hash("e"), checked + FIT_TTL_MS + 1)).toBe("stale");
+    expect(fitStatusOf({ ...tank, fit: { ...tank.fit!, status: "problem" } }, hash("e"), checked)).toBe("problem");
+    expect(fitStatusOf({ ...tank, fit: null, fitInputHash: null, fitCheckedAt: null }, hash("e"), checked)).toBe("not_checked");
+  });
+});
+
+describe("runFitBatches", () => {
+  it("keeps the first batch's result when the second fails, runs the third, never retries", async () => {
+    const calls: number[] = [];
+    const progress: string[] = [];
+    const out = await runFitBatches(["a", "b", "c"], async (b, i) => {
+      calls.push(i);
+      if (b === "b") throw new Error("boom");
+      return b.toUpperCase();
+    }, (p) => progress.push(`${p.index}:${p.state}`));
+    expect(calls).toEqual([0, 1, 2]);
+    expect(out.map((o) => o.state)).toEqual(["done", "failed", "done"]);
+    expect(out[0]).toEqual({ index: 0, state: "done", result: "A" });
+    expect(progress).toEqual(["0:running", "0:done", "1:running", "1:failed", "2:running", "2:done"]);
   });
 });

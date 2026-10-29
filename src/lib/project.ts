@@ -595,3 +595,138 @@ export function projectSnapshot(input: {
     maskFiles: [...masks.values()].map((m) => ({ name: m.file, maskId: m.id })),
   };
 }
+
+// ------------------------------------------------------------ fit check (SPEC 6, 8, 9)
+// Client-safe: the browser and the server import the same constants and the same canonical
+// string, so a fit hash made in one place is valid in the other.
+
+/** Dated legal seed. Changing `version` makes every fit result stale (SPEC 9). */
+export const LEGAL_SEED = {
+  version: "2026-10-29",
+  sources: [
+    { title: "TÜV Rheinland: Vollabnahme und Tuning", url: "https://www.tuv.com/germany/de/lp/mobilit%C3%A4t/vollabnahme/main-navigation/tuner/" },
+    { title: "StVZO §72", url: "https://www.gesetze-im-internet.de/stvzo_2012/__72.html" },
+    { title: "StVZO §21", url: "https://www.gesetze-im-internet.de/stvzo_2012/__21.html" },
+    // StVZO §19 is deliberately absent: it was not verified (PLAN.md section 16).
+  ],
+} as const;
+
+export const FIT_PRECHECK_NOTE =
+  "Pre-check only. The shop and inspection authority must verify fit and road-use requirements.";
+
+/** Fit research older than this is stale. Same value as the fit cache expiry (cache.ts re-exports it). */
+export const FIT_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Stable JSON: object keys sorted, arrays kept in the order given. */
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const rec = value as Record<string, unknown>;
+    const keys = Object.keys(rec).filter((k) => rec[k] !== undefined).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${stableJson(rec[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/** Code-point order, independent of the locale (default sort compares UTF-16 units, also stable). */
+const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+/** Only what makes the part physically what it is. Prices, labor, notes and fit data stay out. */
+function physicalItem(item: BuildItemData) {
+  const p = item.product;
+  return {
+    slot: item.slot, title: item.title, intent: item.intent,
+    spec: [...item.spec].map((s) => ({ key: s.key, value: s.value }))
+      .sort((a, b) => byText(a.key, b.key) || byText(a.value, b.value)),
+    product: p === null ? null : {
+      name: p.name, partNumber: p.partNumber, url: p.url, approval: p.approval, approvalText: p.approvalText,
+    },
+  };
+}
+
+/**
+ * The exact text the fit input hash is made from (SPEC 9): confirmed bike revision, physical
+ * item data sorted by slot then id, shop rules and the legal seed version. A price or labor edit
+ * does not change it, so the fit survives; anything physical does.
+ */
+export function fitInputCanonical(
+  bikeRevision: BikeRevision, activeItemList: readonly BuildItemData[],
+  shopRules: readonly string[], legalSeedVersion: string,
+): string {
+  const items = [...activeItemList]
+    .sort((a, b) => byText(a.slot, b.slot) || byText(a.id, b.id))
+    .map(physicalItem);
+  return stableJson({
+    v: 1, bike: { id: bikeRevision.id, revision: bikeRevision.revision, confirmed: bikeRevision.confirmed, data: bikeRevision.bike },
+    items, shopRules: [...shopRules].sort(byText), legalSeed: legalSeedVersion,
+  });
+}
+
+/** sha256 hex of the canonical text. WebCrypto exists in browsers and in Node 22. */
+export async function sha256OfText(text: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+export async function fitInputHash(
+  bikeRevision: BikeRevision, activeItemList: readonly BuildItemData[],
+  shopRules: readonly string[], legalSeedVersion: string,
+): Promise<string> {
+  return sha256OfText(fitInputCanonical(bikeRevision, activeItemList, shopRules, legalSeedVersion));
+}
+
+export const FIT_BATCH_SIZE = 3;
+export type ActiveBuildEntryData = { itemId: string; slot: SlotId; title: string; spec: { key: string; value: string }[] };
+
+/** Batches of at most 3 items (slot then id order) plus the whole-build summary every batch sends. */
+export function fitBatches(activeItemList: readonly BuildItemData[]): {
+  batches: BuildItemData[][]; activeBuild: ActiveBuildEntryData[];
+} {
+  const sorted = [...activeItemList].sort((a, b) => byText(a.slot, b.slot) || byText(a.id, b.id));
+  const batches: BuildItemData[][] = [];
+  for (let i = 0; i < sorted.length; i += FIT_BATCH_SIZE) batches.push(sorted.slice(i, i + FIT_BATCH_SIZE));
+  const activeBuild = sorted.map((it) => ({
+    itemId: it.id, slot: it.slot, title: it.title, spec: it.spec.map((s) => ({ key: s.key, value: s.value })),
+  }));
+  return { batches, activeBuild };
+}
+
+export type FitStatus = "ok" | "verify" | "problem" | "stale" | "not_checked";
+
+/** Stale when the stored hash is not the current one or the check is older than 24 h. `now` is ms. */
+export function fitStatusOf(item: BuildItemData, currentHash: string, now: number): FitStatus {
+  if (item.fit === null) return "not_checked";
+  if (item.fitInputHash !== currentHash || item.fitCheckedAt === null) return "stale";
+  const checked = Date.parse(item.fitCheckedAt);
+  if (!Number.isFinite(checked) || now - checked > FIT_TTL_MS) return "stale";
+  return item.fit.status;
+}
+
+export type FitBatchOutcome<R> =
+  | { index: number; state: "done"; result: R }
+  | { index: number; state: "failed"; error: unknown };
+export type FitBatchProgress = { index: number; total: number; state: "running" | "done" | "failed" };
+
+/**
+ * Run the batches one after another. A failed batch is recorded and the next one still runs;
+ * finished batches are never undone. There is no automatic retry: the caller decides.
+ */
+export async function runFitBatches<B, R>(
+  batches: readonly B[], send: (batch: B, index: number) => Promise<R>,
+  onProgress?: (p: FitBatchProgress) => void,
+): Promise<FitBatchOutcome<R>[]> {
+  const outcomes: FitBatchOutcome<R>[] = [];
+  for (let index = 0; index < batches.length; index++) {
+    const total = batches.length;
+    onProgress?.({ index, total, state: "running" });
+    try {
+      const result = await send(batches[index] as B, index);
+      outcomes.push({ index, state: "done", result });
+      onProgress?.({ index, total, state: "done" });
+    } catch (error) {
+      outcomes.push({ index, state: "failed", error });
+      onProgress?.({ index, total, state: "failed" });
+    }
+  }
+  return outcomes;
+}

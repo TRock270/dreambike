@@ -8,6 +8,7 @@
 import { z } from "zod";
 import { CacheEntry as CacheEntrySchema, Hash, StoredImage as StoredImageSchema } from "./contracts";
 import { assertOpen, assertWritable, runTx, writeTx, type DreamDb, type ReadTx, type WriteTx } from "./db";
+import { FIT_TTL_MS } from "./project";
 import type { CacheEntry, StoredImage } from "./types";
 
 // ------------------------------------------------------------------- keys
@@ -54,7 +55,7 @@ export function cacheFamily(key: string): CacheFamily {
 }
 
 export const SEARCH_TTL_MS = 60 * 60 * 1000;
-export const FIT_TTL_MS = 24 * 60 * 60 * 1000;
+export { FIT_TTL_MS };
 
 /** Search expires in 1 hour, fit research in 24 hours, everything else never. */
 export function expiresAtFor(key: string, now: number): number | null {

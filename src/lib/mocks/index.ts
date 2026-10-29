@@ -1,5 +1,6 @@
 // Labeled mock responses for MOCK=1 UI work. Every mock says it is a mock in
 // visible text so it can never pass for a real model result or a real check.
+import { LEGAL_SEED } from "../project";
 import type { BikeData, FitData, InstructionData } from "../types";
 
 export const MOCK_LABEL = "Mock data — not from an AI model";
@@ -25,6 +26,16 @@ const fit: FitData = {
   reasons: [`${MOCK_LABEL}. No fit or paperwork research was done.`],
   toMeasure: [], extraParts: [], conditions: [], sources: [], confidence: 0,
 };
+
+/** The mock fit result for one item; carries one seeded legal link so the source UI can be checked offline. */
+export function mockFitFor(itemId: string, accessedAt: string): FitData {
+  const seed = LEGAL_SEED.sources[1];
+  return {
+    ...fit, itemId,
+    sources: seed ? [{ url: seed.url, title: `Mock source (not researched): ${seed.title}`, accessedAt,
+      supports: `${MOCK_LABEL}. A seeded law link, not evidence for this part.` }] : [],
+  };
+}
 
 export const MOCKS = { identify: { bike }, instruction: { instruction }, fit } as const;
 export type MockName = keyof typeof MOCKS;

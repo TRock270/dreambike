@@ -151,9 +151,9 @@ function isAbort(error: unknown): boolean {
   return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
 }
 
-// ------------------------------------------------- Muse Spark (6.3), no tools
+// ------------------------------------------- Muse Spark (6.3), tools only when grounded
 
-export type SparkFormat = "bike_identification_v1" | "edit_instruction_v1";
+export type SparkFormat = "bike_identification_v1" | "edit_instruction_v1" | "fit_check_v1";
 
 /** Trusted instructions: the versioned prompt file, read from disk (traced into the bundle). */
 export function promptText(file: string): string {
@@ -169,22 +169,46 @@ export function promptBody(file: string): string {
   return text.slice(end + 2);
 }
 
-/** stripHeader is off by default so the identify.v1 request stays byte-identical to its live evidence. */
+/** Search grounding for the fit check (owner decision 1A): low context, Germany, at most 2 tool calls. */
+const GROUNDED_FIELDS = {
+  tools: [{ type: "web_search", search_context_size: "low", user_location: { type: "approximate", country: "DE" } }],
+  max_tool_calls: 2,
+  include: ["web_search_call.results"],
+} as const;
+
+/**
+ * stripHeader is off by default so the identify.v1 request stays byte-identical to its live evidence.
+ * grounded is off by default too: without it no tools, max_tool_calls or include are sent.
+ */
 export function sparkBody(model: string, promptFile: string, format: SparkFormat, task: unknown, imageUrl: string | null,
-  stripHeader = false) {
+  stripHeader = false, grounded = false) {
   const content: unknown[] = [{ type: "input_text", text: JSON.stringify(task) }];
   if (imageUrl) content.push({ type: "input_image", image_url: imageUrl });
-  return {
+  const base = {
     model, stream: false, store: false, max_output_tokens: 4096,
     instructions: stripHeader ? promptBody(promptFile) : promptText(promptFile),
     input: [{ type: "message", role: "user", content }],
     text: { format: { type: "json_schema", name: format, strict: true, schema: modelJsonSchema(format) } },
   };
+  return grounded ? { ...base, ...GROUNDED_FIELDS } : base;
 }
 
 export type SparkUsage = { input_tokens?: unknown; output_tokens?: unknown; total_tokens?: unknown;
   output_tokens_details?: { reasoning_tokens?: unknown } };
-export type SparkOutput = { json: unknown };
+export type SparkCitation = { url: string; title: string };
+export type SparkSearchCall = { id: string | null; status: string | null };
+export type SparkSearchHit = { url: string; title: string; snippet: string };
+export type SparkOutput = {
+  json: unknown;
+  /** url_citation annotations from every output_text block (unchecked: the route filters them). */
+  citations: SparkCitation[];
+  /** Every web_search_call item with its status. */
+  searchCalls: SparkSearchCall[];
+  /** Result hits of the web_search_call items; empty when the shape is unknown (U02). */
+  results: SparkSearchHit[];
+  /** True only when at least one web_search_call has status "completed". */
+  searched: boolean;
+};
 
 type SparkItem = { type?: unknown; content?: unknown };
 
@@ -200,16 +224,62 @@ export function readSparkResponse(body: unknown): SparkOutput {
   if (r.status === "failed" || r.status === "cancelled") throw new AppError("UPSTREAM_REJECTED");
   if (!Array.isArray(r.output) || !r.output.every((i) => i && typeof i === "object")) throw new AppError("SCHEMA_INVALID");
   const blocks = (r.output as SparkItem[]).flatMap((item) => (Array.isArray(item.content) ? item.content : []))
-    .filter((b): b is { type?: unknown; text?: unknown } => Boolean(b) && typeof b === "object");
+    .filter((b): b is { type?: unknown; text?: unknown; annotations?: unknown } => Boolean(b) && typeof b === "object");
   if (blocks.some((b) => b.type === "refusal")) throw new AppError("UPSTREAM_REJECTED", "The AI model declined this request.");
   if (r.status !== "completed") throw new AppError("SCHEMA_INVALID", "The AI answer was incomplete.");
-  const text = blocks.filter((b) => b.type === "output_text").map((b) => (typeof b.text === "string" ? b.text : "")).join("");
+  const textBlocks = blocks.filter((b) => b.type === "output_text");
+  const text = textBlocks.map((b) => (typeof b.text === "string" ? b.text : "")).join("");
   if (!text) throw new AppError("SCHEMA_INVALID");
+  let json: unknown;
   try {
-    return { json: JSON.parse(text) as unknown };
+    json = JSON.parse(text) as unknown;
   } catch {
     throw new AppError("SCHEMA_INVALID");
   }
+  const searchCalls = (r.output as SparkItem[]).filter((i) => i.type === "web_search_call").map(searchCallOf);
+  return {
+    json, citations: citationsOf(textBlocks),
+    searchCalls, results: (r.output as SparkItem[]).filter((i) => i.type === "web_search_call").flatMap(hitsOf),
+    searched: searchCalls.some((c) => c.status === "completed"),
+  };
+}
+
+const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
+const obj = (v: unknown): Record<string, unknown> | null => (v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : null);
+
+function citationsOf(blocks: { annotations?: unknown }[]): SparkCitation[] {
+  const out: SparkCitation[] = [];
+  for (const b of blocks) {
+    if (!Array.isArray(b.annotations)) continue;
+    for (const a of b.annotations) {
+      const o = obj(a);
+      const url = o && o.type === "url_citation" ? str(o.url) : null;
+      if (url) out.push({ url, title: str(o?.title) ?? "" });
+    }
+  }
+  return out;
+}
+
+function searchCallOf(item: SparkItem): SparkSearchCall {
+  const o = item as Record<string, unknown>;
+  return { id: str(o.id), status: str(o.status) };
+}
+
+/**
+ * Result hits of one web_search_call. The exact location is UNVERIFIED (U02): the
+ * docs say include web_search_call.results returns title/url/snippet, so look at
+ * item.results and item.action.results only; anything else yields no hits.
+ */
+function hitsOf(item: SparkItem): SparkSearchHit[] {
+  const o = item as Record<string, unknown>;
+  const list = Array.isArray(o.results) ? o.results : Array.isArray(obj(o.action)?.results) ? obj(o.action)!.results as unknown[] : [];
+  const hits: SparkSearchHit[] = [];
+  for (const h of list) {
+    const e = obj(h);
+    const url = e ? str(e.url) : null;
+    if (url) hits.push({ url, title: str(e?.title) ?? "", snippet: str(e?.snippet) ?? "" });
+  }
+  return hits;
 }
 
 const count = (v: unknown): number | null => (typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : null);
@@ -230,6 +300,21 @@ export function sparkCharge(usage: unknown, prices: { inputMicroUsdPerMillionTok
   const reasoning = u.output_tokens_details?.reasoning_tokens;
   if (reasoning !== undefined && (count(reasoning) === null || count(reasoning)! > output)) return null;
   return Math.ceil((input * prices.inputMicroUsdPerMillionTokens + output * prices.outputMicroUsdPerMillionTokens) / 1_000_000);
+}
+
+/**
+ * Grounded charge: token cost plus the per-query search fee. null (unknown: keep
+ * the full reservation) when usage is unusable or the query count is not a
+ * known non-negative integer; a missing count is never treated as zero.
+ */
+export function sparkChargeGrounded(usage: unknown, searchQueries: unknown, prices: { inputMicroUsdPerMillionTokens: number;
+  outputMicroUsdPerMillionTokens: number; webSearchMicroUsdPerQuery: number }): number | null {
+  // searchQueries must be a count the API reports (U06), never the number of web_search_call
+  // items: one tool call can run several billed queries (SPEC 712).
+  const queries = count(searchQueries);
+  if (queries === null || count(prices.webSearchMicroUsdPerQuery) === null) return null;
+  const tokens = sparkCharge(usage, prices);
+  return tokens === null ? null : tokens + queries * prices.webSearchMicroUsdPerQuery;
 }
 
 /** The usage object of a raw answer, if any (read before the answer is judged). */

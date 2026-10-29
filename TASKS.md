@@ -96,6 +96,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 
 ## T9 — Sourced fit and German paperwork pre-check
 
+- Status: IN PROGRESS 2026-10-29. Offline and mock part done and committed; the paid U06 probe and the live app run wait for the owner's go. Fresh checking stays off until U06 is settled. See log.
 - Priority: MVP. Estimate: 3h, Oct 31. Depends on: T8, U02 grounded profile, U06 cost bound; owner's rule review remains visible if pending.
 - Files: prompts/fit-check.v1.md, src/app/api/check/route.ts, src/lib/server/meta.ts, src/lib/project.ts/cache.ts, src/components/FitBadge.tsx/EvidenceLinks.tsx/PaperworkSummary.tsx, tests/fit-policy.test.ts.
 - Work: <=3 target items plus whole-build context; exact IDs; citation/result extraction; conservative source applicability; all German fields; batch progress/failure; stale hash protection; interaction invalidation. No standalone legal chatbot.
@@ -1085,3 +1086,46 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Spend: ledger lifetime 714096 µ$ ($0.714), matching Meta Billing $0.71; Meta daily limit $5.
 - Next: T9, prepared in docs/t9-start.md: code state, the U06 research (Meta documents no query bound per search call), three owner decisions (probe or stay gated, the T9 cap, the four live test items), the `/build-ticket` units M1, S1, R1, U1, the paid steps and the done-when map. The offline build needs no decision; paid steps need the owner's go.
 - Owner inputs for T10 are recorded in "Owner inputs before T9".
+
+### T9 — 2026-10-29, started about 10:30 ET
+
+- Owner decisions, asked once (docs/t9-start.md):
+  1. U06: A, probe. Up to 3 grounded spike calls, max_tool_calls 2, search_context_size low, user_location DE, SEARCH_QUERY_RESERVE=20.
+  2. Cap: TICKET_CAP_USD=2 and DAILY_CAP_USD=2 with BUDGET_TICKET=T9, in the process env only.
+  3. Live items: the four proposed ones (taller handlebar, US-market exhaust without papers, front wheel swap with ABS ring, a part with ABE and an inspection condition).
+- Paid steps run only after the owner's explicit go, once the offline part is done.
+- Offline build, about 10:30–11:20 ET: `/build-ticket` with units M1, S1, R1, U1 from docs/t9-start.md (37 agents, about 36 min).
+  - Plan check changes: S1 also owns db.ts, cache.ts, tests/db.test.ts and tests/cache.test.ts (attachFitResponse, the fit:<hash> cache); LEGAL_SEED and the canonical hash moved to client-safe project.ts; R1 owns requestCheck in sparkClient.ts; R1 dropped the 429 retry (SPEC 405 allows it only as a new reserved attempt) and refuses SEARCH_QUERY_RESERVE=0; U1 got security-reviewer (one click fans out into paid batches).
+  - M1 (models): round 1 had 5 blocking findings (prompt used `build` instead of `activeBuild`, wrong legalSources shape); fixed in round 2, all 4 reviewers approved.
+  - S1 (shop): round 1 had 7; fixed in round 2, approved.
+  - R1 (models route): round 1 had 4 (duplicate item ids, unchecked price and reservation values); fixed in round 2, all 4 approved.
+  - U1 (ui): round 1 had 3 (current batches resent, an answered but unsaved batch paid again, no cost text); fixed in round 2, approved.
+  - Verify: all five checks passed. Done-when gate: 5 of 7 items met offline; item 1 (live evidence) and item 7 (gated or not) wait for the probe. Status needs_lead for these and one lint warning.
+- Files: prompts/fit-check.v1.md, src/lib/server/meta.ts, spike/responses_spark.py, src/lib/server/fitPolicy.ts, src/lib/project.ts, src/lib/db.ts, src/lib/cache.ts, src/app/api/check/route.ts, src/lib/mocks/index.ts, src/lib/browser/sparkClient.ts, src/components/FitBadge.tsx, EvidenceLinks.tsx, PaperworkSummary.tsx, BuildSheet.tsx, Workspace.tsx, tests/spark.test.ts, tests/fit-policy.test.ts, tests/check.test.ts, tests/project.test.ts, tests/db.test.ts; SPEC.md 475 dated note.
+- Lead fixes after the run (review-changes quick: models, shop, security, general; green, 1 minor):
+  - spike/responses_spark.py: the evidence parsing after a paid answer now skips non-object entries and writes the response structure, so a paid probe always leaves evidence (minor raised by 4 reviewers); test item slot `mirror` → `mirrors`; the exhaust test item has no product; the ABE test part keeps url null on purpose.
+  - prompts/fit-check.v1.md: asks for the throttle type (cable or ride-by-wire); never says an Änderungsabnahme or Einzelabnahme will succeed (SPEC 578-579).
+  - meta.ts sparkChargeGrounded: null when the per-query price is not a known integer; comment that the count must be API-reported, never the number of web_search_call items.
+  - BuildSheet.tsx: a labeled mock result never counts as a current check, so a later live run checks those parts again (gate F2).
+  - tests/check.test.ts: lint warning removed.
+  - SPEC.md 475: dated note on search_context_size "low" and user_location DE; max_tool_calls is not on Meta's grounding page, so a rejection would be a SPEC conflict for the owner.
+- Lead decisions on open minors:
+  - Gate F1 (fit:<hash> cache is written but never read back, SPEC 594): kept open; cache reuse comes with T13/T17. The live run is one run on fresh input.
+  - Review minor (the sheet's hash and 24 h TTL are only recomputed when head or bike change; display only, persisting rechecks): kept open.
+  - S1's list of general hosts (law and authority sites never count as part-specific evidence) is the builder's choice, not in SPEC; kept because it only makes results more conservative.
+  - In mock mode the Check fit text still says each request costs money; minor, left.
+- Mock browser check ($0, MOCK=1, headless Chrome 156, synthetic gradient JPEG, fresh profile deleted afterwards): bike confirmed, four mock parts (tank, front wheel, rear wheel, handlebar).
+  - Check fit on two parts: one batch, "✓ saved", both "Verify fit" with "⚠ Mock result", the mock banner, and the pre-check sentence; the details show approval, coverage, inspection, Eintragung, documents to carry as "?unknown"; the source link has target _blank and rel noopener noreferrer, with an accessed date.
+  - Product edit on the tank: every fit goes back to "Not checked".
+  - Four parts, second request forced to 503: batch 1 (handlebar, tank, front wheel) saved with "Verify fit", batch 2 (rear wheel) "✕ The request failed." with "Retry batch 2" and its cost text; the retry saved it; all four results survived a reload.
+- Checks after the lead fixes: typecheck, lint (0 problems), build exit 0; npm test 595/595 in 22 files; local_images.py 71 passed, 0 failed, 0 skipped. Grounded dry-runs (SEARCH_QUERY_RESERVE=20, batch 1 and 2) print tools with search_context_size low and user_location DE, max_tool_calls 2, include web_search_call.results, reserve 380000 µ$.
+- Consultant: PAL chat nim-nemotron35 on fitPolicy.ts and the check route (319 lines). 10 points, none adopted:
+  - unknown query count charges zero: wrong, sparkChargeGrounded returns null and the reservation is kept;
+  - reservation leak on exceptions: withReservation keeps the reservation on unknown outcomes (budget tests);
+  - url_citation annotations are model-controlled: they are API metadata, and SPEC 477 defines exactly this check;
+  - inspection none with an ABE and no condition: that is a legitimate result;
+  - a tangential specific source keeps ok: ok also needs covered documents, known inspection and Eintragung and no open measurement; a page check cannot be done mechanically;
+  - non-null byId, more than 3 items, prices.reservations missing: unreachable (exact id check, schema max 3, and the price guard fails closed before reserving);
+  - withAdded drops server entries: wrong, server additions keep their room first.
+  Gemini was not asked.
+- Spend: $0 so far.

@@ -14,13 +14,13 @@
 import { openDB, type DBSchema, type IDBPDatabase, type IDBPTransaction, type StoreNames } from "idb";
 import { z } from "zod";
 import {
-  BikeRevision as BikeRevisionSchema, Project as ProjectSchema,
+  BikeRevision as BikeRevisionSchema, CheckResponse as CheckResponseSchema, FitResult as FitResultSchema, Project as ProjectSchema,
   Settings, StoredImage as StoredImageSchema, StoredMask as StoredMaskSchema,
   Part as PartSchema, ProjectSnapshot as ProjectSnapshotSchema, Version as VersionSchema,
 } from "./contracts";
-import { adjustLedger, cleanupSafeCache, collectReferences, dropCacheForRemovedBlobs, evictTransient, readLedger, ledgerTotal } from "./cache";
+import { adjustLedger, cacheKeys, cleanupSafeCache, getCache, putCache, collectReferences, dropCacheForRemovedBlobs, evictTransient, readLedger, ledgerTotal } from "./cache";
 import { AppError } from "./errors";
-import { children, pathToRoot, undoTarget } from "./project";
+import { children, fitInputCanonical, LEGAL_SEED, pathToRoot, sha256OfText, undoTarget } from "./project";
 import type {
   BikeRevision, CacheEntry, ImageRef, MaskMeta, MetaRecordData, Part, Project, ProjectSnapshot, ShopSettings,
   StoredImage, StoredMask, Version,
@@ -395,12 +395,14 @@ export async function setLastOpenProject(h: DreamDb, projectId: string | null): 
 
 // ---------------------------------------------------------------- settings
 
+const SettingsRecordSchema = z.object({ id: z.string(), updatedAt: z.number(), settings: Settings }).strict();
+
 /** Shop settings store for T10; the validator is the SPEC 4 Settings schema. */
 export async function getShopSettings(h: DreamDb, id: string): Promise<SettingsRecord | null> {
   assertOpen(h);
   const raw = await h.db.get("settings", id);
   if (!raw) return null;
-  const rec = parseRecord(z.object({ id: z.string(), updatedAt: z.number(), settings: Settings }).strict(), raw, "settings", id);
+  const rec = parseRecord(SettingsRecordSchema, raw, "settings", id);
   return rec;
 }
 
@@ -841,6 +843,94 @@ async function removeImageIfUnused(tx: WriteTx, imageId: string): Promise<void> 
   await adjustLedger(tx, { imageBytes: -img.bytes });
   await dropCacheForRemovedBlobs(tx, new Set([imageId]), new Set()); // adjusts the ledger itself
 
+}
+
+// ------------------------------------------------------------- fit results
+
+type CheckResponseData = z.infer<typeof CheckResponseSchema>;
+export type AttachFitInput = {
+  projectId: string; versionId: string;
+  /** The canonical text the request's inputHash was made from (fitInputCanonical at send time). */
+  canonical: string;
+  response: CheckResponseData;
+};
+export type AttachFitResult =
+  | { status: "attached"; attachedItemIds: string[]; cached: boolean }
+  | { status: "cache_only"; reason: "version_missing" | "project_mismatch" | "not_head" | "input_changed" | "no_matching_items"; attachedItemIds: []; cached: boolean };
+
+/**
+ * One build has several batches of at most 3 items under the same build-wide hash, so the cache
+ * entry fit:<hash> holds the merged results of all batches (SPEC 9 key family is unchanged).
+ */
+const CachedFitSchema = z.object({
+  inputHash: CheckResponseSchema.shape.inputHash, checkedAt: CheckResponseSchema.shape.checkedAt,
+  results: z.array(FitResultSchema).min(1).max(60),
+}).strict();
+let fitCacheQueue: Promise<unknown> = Promise.resolve();
+
+/** Merge a batch response into fit:<hash> by itemId; serialized so batches cannot overwrite each other. */
+function cacheFitResponse(h: DreamDb, response: CheckResponseData): Promise<void> {
+  const run = async () => {
+    const key = cacheKeys.fit(response.inputHash);
+    const prev = await getCache(h, key, CachedFitSchema);
+    const byId = new Map((prev?.value.results ?? []).map((r) => [r.itemId, r]));
+    for (const r of response.results) byId.set(r.itemId, r);
+    const checkedAt = prev && prev.value.checkedAt > response.checkedAt ? prev.value.checkedAt : response.checkedAt;
+    await putCache(h, { key, value: { inputHash: response.inputHash, checkedAt, results: [...byId.values()].slice(-60) }, schema: CachedFitSchema });
+  };
+  const next = fitCacheQueue.then(run, run);
+  fitCacheQueue = next.catch(() => undefined);
+  return next;
+}
+
+/**
+ * Store a fit response and, only when it is still current, attach it to the version's items
+ * (SPEC 9: fit results belong to the exact input hash; completion updates derived check data,
+ * never the image head). The response is always cached under its hash. It is attached only when
+ * the version exists and the canonical text recomputed inside the transaction from the stored
+ * items, the project's bike revision and the shop rules equals `canonical`. The hash of
+ * `canonical` is computed before the transaction because IndexedDB closes a transaction that
+ * awaits anything but its own requests. No version is created and headVersionId never changes.
+ */
+export async function attachFitResponse(h: DreamDb, input: AttachFitInput): Promise<AttachFitResult> {
+  const response = parseInput(CheckResponseSchema, input.response, "fit response");
+  if ((await sha256OfText(input.canonical)) !== response.inputHash) {
+    throw new InvalidWriteError("The fit response hash does not belong to the canonical input it was sent with.");
+  }
+  let cached = true;
+  try {
+    await cacheFitResponse(h, response);
+  } catch (e) {
+    // A failed cache write only means the result is not cached; attaching below may still work.
+    if (e instanceof ReadOnlyError || e instanceof StorageClosedError) throw e;
+    cached = false;
+  }
+
+  return writeTx<AttachFitResult>(h, async (tx) => {
+    const version = await getParsedVersion(tx, input.versionId);
+    if (!version) return { status: "cache_only", reason: "version_missing", attachedItemIds: [], cached };
+    const project = await getParsedProject(tx, version.projectId);
+    if (!project || project.id !== input.projectId) return { status: "cache_only", reason: "project_mismatch", attachedItemIds: [], cached };
+    // Only the current head gets the result; an undone or superseded version stays untouched (SPEC 9).
+    if (project.headVersionId !== version.id) return { status: "cache_only", reason: "not_head", attachedItemIds: [], cached };
+    const rawSettings = await tx.objectStore("settings").get(project.settingsId);
+    const settings = rawSettings ? parseRecord(SettingsRecordSchema, rawSettings, "settings", project.settingsId) : null;
+    const now = fitInputCanonical(project.bikeRevision, version.items, settings?.settings.shopRules ?? [], LEGAL_SEED.version);
+    if (now !== input.canonical) return { status: "cache_only", reason: "input_changed", attachedItemIds: [], cached };
+
+    const byId = new Map(response.results.map((r) => [r.itemId, r]));
+    const attached: string[] = [];
+    const items = version.items.map((it) => {
+      const r = byId.get(it.id);
+      if (!r) return it;
+      attached.push(it.id);
+      // A new check clears an earlier mechanic acknowledgment of the old result.
+      return { ...it, fit: r, fitInputHash: response.inputHash, fitCheckedAt: response.checkedAt, fitReviewedHash: null };
+    });
+    if (attached.length === 0) return { status: "cache_only", reason: "no_matching_items", attachedItemIds: [], cached };
+    await tx.objectStore("versions").put(parseInput(VersionSchema, { ...version, items }, "version"));
+    return { status: "attached", attachedItemIds: attached, cached };
+  });
 }
 
 // ------------------------------------------------------------- bike revision

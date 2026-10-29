@@ -4,14 +4,14 @@ import { openDB } from "idb";
 import { z } from "zod";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  acceptSheet, acceptVisual, attachParts, closeDreamDb, CorruptRecordError, createProject, deleteProject,
+  acceptSheet, acceptVisual, attachFitResponse, attachParts, closeDreamDb, CorruptRecordError, createProject, deleteProject,
   getLastOpenProject, getStoredImage, moveHead, StorageClosedError, getStoredMask, InvalidWriteError, listProjects, loadProject,
   importProject, openDreamDb, putShopSettings, snapshotSources, StorageUnavailableError, getShopSettings, ReadOnlyError, redo, setHead, undo, updateBikeRevision,
   type DreamDb, type PreparedAccept,
 } from "@/lib/db";
 import { cacheKeys, getCache, putCache, rebuildLedger, storageStatus } from "@/lib/cache";
 import { AppError } from "@/lib/errors";
-import { activeItems, exportPlan, pathFromRoot, projectSnapshot, sheetChild, visualChild, type VisualChildInput } from "@/lib/project";
+import { activeItems, exportPlan, fitInputCanonical, LEGAL_SEED, sha256OfText, pathFromRoot, projectSnapshot, sheetChild, visualChild, type VisualChildInput } from "@/lib/project";
 import type { StoredImage, StoredMask, Version } from "@/lib/types";
 import { bikeRevision, freshIndexedDb, hash, makeImage, makeMask, makePart, makeProject, uuid } from "./support/idb";
 
@@ -1024,5 +1024,83 @@ describe("openDreamDb failures", () => {
       e instanceof StorageUnavailableError && e.message.includes("UnknownError: Connection to Indexed Database server lost."));
     vi.restoreAllMocks();
     expect(real).toBeTypeOf("function");
+  });
+});
+
+describe("attachFitResponse", () => {
+  const fit = (itemId: string) => ({
+    itemId, status: "verify" as const, approval: "unknown" as const, documentCoverage: "unknown" as const,
+    inspection: "unknown" as const, eintragung: "unknown" as const, carryDocuments: "unknown" as const,
+    reasons: ["Unknown."], toMeasure: [], extraParts: [], conditions: [], sources: [], confidence: 0.3,
+  });
+  async function fitSetup() {
+    const s = await setup();
+    const a = prepare(s.rootVersion, "tank", "Red tank", "b", 10);
+    await acceptVisual(h, s.project.id, s.rootVersion.id, a);
+    const version = (await loadProject(h, s.project.id))!.versions.find((v) => v.id === a.version.id)!;
+    const canonical = fitInputCanonical(s.project.bikeRevision, version.items, [], LEGAL_SEED.version);
+    const inputHash = await sha256OfText(canonical);
+    const response = { inputHash, checkedAt: "2026-10-29T10:00:00.000Z", results: [fit(version.items[0]!.id)] };
+    return { ...s, version, canonical, inputHash, response };
+  }
+
+  it("attaches to the exact version, caches the response, creates no version and keeps the head", async () => {
+    const f = await fitSetup();
+    const before = (await loadProject(h, f.project.id))!;
+    const r = await attachFitResponse(h, { projectId: f.project.id, versionId: f.version.id, canonical: f.canonical, response: f.response });
+    expect(r).toEqual({ status: "attached", attachedItemIds: [f.version.items[0]!.id], cached: true });
+    const after = (await loadProject(h, f.project.id))!;
+    expect(after.versions).toHaveLength(before.versions.length);
+    expect(after.project.headVersionId).toBe(before.project.headVersionId);
+    const item = after.versions.find((v) => v.id === f.version.id)!.items[0]!;
+    expect(item).toMatchObject({ fitInputHash: f.inputHash, fitCheckedAt: f.response.checkedAt, fitReviewedHash: null });
+    expect(item.fit?.status).toBe("verify");
+    expect(await getCache(h, cacheKeys.fit(f.inputHash), z.unknown())).not.toBeNull();
+  });
+
+  it("a late response whose canonical no longer matches stays cache only", async () => {
+    const f = await fitSetup();
+    // The bike was corrected after the request went out.
+    const revision = { ...f.project.bikeRevision, revision: f.project.bikeRevision.revision + 1 };
+    await updateBikeRevision(h, f.project.id, revision);
+    const before = (await loadProject(h, f.project.id))!;
+    const r = await attachFitResponse(h, { projectId: f.project.id, versionId: f.version.id, canonical: f.canonical, response: f.response });
+    expect(r).toMatchObject({ status: "cache_only", reason: "input_changed", attachedItemIds: [], cached: true });
+    const after = (await loadProject(h, f.project.id))!;
+    expect(after.project.headVersionId).toBe(before.project.headVersionId);
+    expect(after.versions.find((v) => v.id === f.version.id)!.items[0]!.fit).toBeNull();
+    expect(await getCache(h, cacheKeys.fit(f.inputHash), z.unknown())).not.toBeNull();
+  });
+
+  it("a result for a version that is no longer the head stays cache only and leaves that version untouched", async () => {
+    const f = await fitSetup();
+    const b = prepare(f.version, "seat", "Seat", "c", 11);
+    await acceptVisual(h, f.project.id, f.version.id, b);
+    const before = (await loadProject(h, f.project.id))!;
+    expect(before.project.headVersionId).not.toBe(f.version.id);
+    const r = await attachFitResponse(h, { projectId: f.project.id, versionId: f.version.id, canonical: f.canonical, response: f.response });
+    expect(r).toMatchObject({ status: "cache_only", reason: "not_head", attachedItemIds: [], cached: true });
+    const after = (await loadProject(h, f.project.id))!;
+    expect(after.versions.find((v) => v.id === f.version.id)).toEqual(before.versions.find((v) => v.id === f.version.id));
+    expect(after.project.headVersionId).toBe(before.project.headVersionId);
+  });
+
+  it("two batches with the same hash both stay in the cache", async () => {
+    const f = await fitSetup();
+    const second = { ...f.response, results: [fit(uuid())] };
+    await attachFitResponse(h, { projectId: f.project.id, versionId: f.version.id, canonical: f.canonical, response: f.response });
+    await attachFitResponse(h, { projectId: f.project.id, versionId: f.version.id, canonical: f.canonical, response: second });
+    const hit = await getCache(h, cacheKeys.fit(f.inputHash), z.object({ results: z.array(z.object({ itemId: z.string() })) }));
+    expect(hit!.value.results.map((x) => x.itemId).sort()).toEqual([f.version.items[0]!.id, second.results[0]!.itemId].sort());
+  });
+
+  it("stays cache only for a missing version or another project, and rejects a hash that is not the canonical's", async () => {
+    const f = await fitSetup();
+    expect(await attachFitResponse(h, { projectId: f.project.id, versionId: uuid(), canonical: f.canonical, response: f.response }))
+      .toMatchObject({ status: "cache_only", reason: "version_missing" });
+    expect(await attachFitResponse(h, { projectId: uuid(), versionId: f.version.id, canonical: f.canonical, response: f.response }))
+      .toMatchObject({ status: "cache_only", reason: "project_mismatch" });
+    await expect(attachFitResponse(h, { projectId: f.project.id, versionId: f.version.id, canonical: f.canonical + " ", response: f.response }))
+      .rejects.toBeInstanceOf(InvalidWriteError);
   });
 });

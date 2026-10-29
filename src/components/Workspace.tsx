@@ -5,7 +5,8 @@ import {
   applySuggestion, bikeFormFromRevision, bikeRevisionFromForm, editField, emptyBikeForm, type BikeFormState,
 } from "@/lib/bikeForm";
 import {
-  deleteProject, getLastOpenProject, getStoredImage, getStoredMask, listProjects, setLastOpenProject, snapshotSources, type DreamDb,
+  attachFitResponse, deleteProject, getLastOpenProject, getShopSettings, getStoredImage, getStoredMask, listProjects, loadProject,
+  setLastOpenProject, snapshotSources, type DreamDb,
 } from "@/lib/db";
 import { children, exportPlan, projectSnapshot, type PendingRef, type SnapshotResult } from "@/lib/project";
 import {
@@ -32,7 +33,7 @@ import { slotInfo } from "@/lib/slots";
 import type { BinaryMask, InstructionData, NormalizedPhoto, SlotId, Version } from "@/lib/types";
 import { AppShell } from "./AppShell";
 import { BikeConfirm } from "./BikeConfirm";
-import { BuildSheet, type SheetChange, type SheetSaveResult } from "./BuildSheet";
+import { BuildSheet, type FitSupport, type SheetChange, type SheetSaveResult } from "./BuildSheet";
 import { DescribeForm } from "./DescribeForm";
 import { EditReview, type RenderState } from "./EditReview";
 import { ImageCanvas } from "./ImageCanvas";
@@ -139,6 +140,7 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [sheetSaving, setSheetSaving] = useState(false);
   const sheetBusy = useRef(false); // second guard next to the disabled buttons
+  const [fitBusy, setFitBusy] = useState(false); // a fit check is running: Undo, Redo and jumps wait
   const [prefill, setPrefill] = useState<{ selectionKey: string; text: string } | null>(null);
 
   // One render belongs to one prepared instruction; the cached generation is the resume point.
@@ -708,6 +710,26 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
     }
   }
 
+  // ---- fit check: storage calls for the build sheet (the sheet itself runs the batches)
+  const readyForFit = readyStorage();
+  const bikeRevision = session?.project.bikeRevision ?? null;
+  const fitSupport: FitSupport | null = session && readyForFit && !readyForFit.readOnly && bikeRevision ? {
+    bikeRevision,
+    loadShopRules: async () => (await getShopSettings(readyForFit.h, session.project.settingsId))?.settings.shopRules ?? [],
+    persist: (input) => attachFitResponse(readyForFit.h, input),
+    // Reload the saved rows. The current version stays the one shown: a project that moved on is left alone.
+    onPersisted: async () => {
+      await persistChain.current;
+      const cur = sessionRef.current;
+      if (!cur) return;
+      const loaded = await loadProject(readyForFit.h, cur.project.id);
+      const now = sessionRef.current;
+      if (loaded && now && now.project.id === loaded.project.id && now.project.headVersionId === loaded.project.headVersionId) {
+        setSession({ project: loaded.project, versions: loaded.versions });
+      }
+    },
+  } : null;
+
   // ---- build sheet: a saved edit or removal becomes a new "sheet" step on the same photo
   async function saveSheetChange(change: SheetChange): Promise<SheetSaveResult> {
     if (sheetBusy.current) return { ok: false, message: "A sheet save is already running." };
@@ -1124,7 +1146,7 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
   // Why this photo is not stored, or null when it is. A failed save, or no stored project for the photo, is "Not saved".
   const notSavedDetail = !photo ? null : lastSaveFailure ?? (!session ? storageDetail(storage) : null);
   const saveStatus = !photo ? null : notSavedDetail ? "Not saved" : readOnly ? "Read-only: changes are not saved" : "Saved on this device";
-  const busy = navBusy || renderRunning || accept.saving || pointBusy || sheetSaving;
+  const busy = navBusy || renderRunning || accept.saving || pointBusy || sheetSaving || fitBusy;
   // Build sheet: why it is read-only (permanent), and why saving waits (temporary).
   const sheetReason = !photo ? "Open or import a photo first. Its sheet shows here."
     : storage?.status === "unavailable" ? "Local storage is not available, so the sheet is read-only."
@@ -1237,7 +1259,8 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
           className={`flex min-h-0 shrink-0 flex-col gap-4 overflow-y-auto rounded-card border border-hairline bg-surface-1 p-4 ${sheetOpen ? "w-1/2" : "w-[360px]"}`}>
           {sheetOpen && (
             <BuildSheet head={session && head ? head : null} readOnlyReason={sheetReason} blockedReason={sheetBlocked}
-              saving={sheetSaving} onSave={saveSheetChange} onClose={() => setSheetOpen(false)} />
+              saving={sheetSaving} onSave={saveSheetChange} onClose={() => setSheetOpen(false)}
+              fit={fitSupport} onFitRunning={setFitBusy} />
           )}
           {/* "contents" keeps the folds in the same flex column; "hidden" keeps them mounted but out of sight and out of tab order. */}
           <div className={sheetOpen ? "hidden" : "contents"}>
