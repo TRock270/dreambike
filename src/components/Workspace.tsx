@@ -4,10 +4,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   applySuggestion, bikeFormFromRevision, bikeRevisionFromForm, editField, emptyBikeForm, type BikeFormState,
 } from "@/lib/bikeForm";
-import { deleteProject, getStoredImage, listProjects, type DreamDb } from "@/lib/db";
-import { children, exportPlan, type PendingRef } from "@/lib/project";
 import {
-  folderErrorText, folderPermission, isFolderExportSupported, pickFolder, rememberedFolder, saveProjectToFolder,
+  deleteProject, getLastOpenProject, getStoredImage, getStoredMask, listProjects, setLastOpenProject, snapshotSources, type DreamDb,
+} from "@/lib/db";
+import { children, exportPlan, projectSnapshot, type PendingRef, type SnapshotResult } from "@/lib/project";
+import {
+  folderErrorText, folderImportErrorText, folderPermission, isFolderExportSupported, pickFolder, pickProjectFolderForImport,
+  readProjectFolder, rememberedFolder, saveProjectToFolder,
 } from "@/lib/browser/folderExport";
 import {
   buildPartMap, derive, emptyPartMap, followUpPart, otherWheelSlot, partMapAfterEdit, recutBike, refreshedPart, selectByPoint, boxPart, boxAcceptable, withPointPart, type PartMapState,
@@ -43,6 +46,21 @@ import { UploadNotice } from "./UploadNotice";
 import { VersionStrip } from "./VersionStrip";
 
 const isStorageFull = (e: unknown) => e instanceof AppError && e.code === "STORAGE_FULL";
+
+/** "QuotaExceededError: message": the error's own name (AppError has no name of its own, so its code) and message. */
+function errorDetail(e: unknown): string {
+  if (e instanceof AppError) return `${e.code}: ${e.message}`;
+  if (e instanceof Error) return `${e.name}: ${e.message}`;
+  return `Error: ${String(e)}`;
+}
+
+/** Why nothing is stored, from the storage state alone (no thrown error exists in these cases). */
+function storageDetail(s: StorageState | null): string {
+  if (!s) return "StorageNotReady: local storage had not finished opening.";
+  if (s.status === "unavailable") return s.message; // F1's StorageUnavailableError message, with the browser's detail
+  if (s.readOnly) return `ReadOnlyError: ${s.readOnlyReason ?? "Local storage is read-only."}`;
+  return "NoProject: no project was stored for this photo.";
+}
 
 type FoldKey = "bike" | "parts" | "change" | "project";
 
@@ -144,6 +162,14 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
   const [listError, setListError] = useState<string | null>(null);
   const [savingProject, setSavingProject] = useState(false);
   const [saveNote, setSaveNote] = useState<string | null>(null);
+  // Why the photo on screen is NOT stored in this browser. Set when a save fails or storage cannot be
+  // written; cleared only by a save that succeeds (or when the photo is closed), never by other actions.
+  const [lastSaveFailure, setLastSaveFailure] = useState<string | null>(null);
+  // "Open project from folder": busy flag and the message shown by the project list.
+  const [openingFolder, setOpeningFolder] = useState(false);
+  const openingFolderRef = useRef(false);
+  const [openFolderNote, setOpenFolderNote] = useState<{ tone: "info" | "danger"; text: string } | null>(null);
+  const restoreTried = useRef(false); // the reload restore runs once per page load
   const [staleNotice, setStaleNotice] = useState<string | null>(null);
   const [navNote, setNavNote] = useState<string | null>(null);
   const [navBusy, setNavBusy] = useState(false);
@@ -209,16 +235,34 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
           const perm = await folderPermission(handle, false);
           setFolderPerm(perm);
           if (perm !== "granted") break; // the status line then offers "Reconnect folder"
+          // The snapshot is read from the stored records (not React state). If that read fails, the
+          // history is still saved and project.json is reported as not written.
+          let sources: Awaited<ReturnType<typeof snapshotSources>> = null;
+          let sourcesError: string | null = null;
+          try { sources = await snapshotSources(ready.h, pid); } catch (e) { sourcesError = errorDetail(e); }
+          const exportProject = sources?.project ?? s.project;
+          const exportVersions = sources?.versions ?? s.versions;
           const plan = exportPlan({
-            project: s.project, versions: s.versions, headId: s.project.headVersionId, exportedAt: new Date().toISOString(),
+            project: exportProject, versions: exportVersions, headId: exportProject.headVersionId, exportedAt: new Date().toISOString(),
           });
-          const result = await saveProjectToFolder(handle, plan, async (id) => (await getStoredImage(ready.h, id))?.blob ?? null);
-          const notExported = result.missing.length + (s.versions.length - plan.files.length);
+          const snapshot: SnapshotResult = sources
+            ? projectSnapshot({ project: sources.project, versions: sources.versions, cutouts: sources.cutouts, masks: sources.masks, plan })
+            : { complete: false, reason: sourcesError ? `The saved project could not be read for project.json (${sourcesError}).` : "The saved project was not found for project.json." };
+          const result = await saveProjectToFolder(
+            handle, plan, async (id) => (await getStoredImage(ready.h, id))?.blob ?? null, undefined,
+            { snapshot, readMask: async (id) => (await getStoredMask(ready.h, id))?.pixels ?? null },
+          );
+          const notExported = result.missing.length + (exportVersions.length - plan.files.length);
           setFolderStatus((all) => ({
             ...all,
             [pid]: { rootName: handle.name, folderName: result.folderName, savedAt: Date.now(), written: result.written, notExported },
           }));
           setFolderNote((n) => (n && n.projectId === pid ? null : n));
+          if (result.projectJson === "not_written") {
+            // History and pictures are in the folder, but it cannot be opened again; say why.
+            setFolderNote({ projectId: pid, tone: "warning",
+              text: `project.json was not written, so this folder cannot be opened again with Open project from folder. ${result.projectJsonReason ?? ""}`.trim() });
+          }
         } catch (e) {
           const reason = folderErrorText(e).replace(/\.$/, "");
           setFolderNote({
@@ -364,6 +408,7 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
         const updated = saved?.versions.find((v) => v.id === headVersion(saved).id);
         if (saved && updated && now && now.project.id === saved.project.id) {
           setSession({ ...now, versions: now.versions.map((v) => (v.id === updated.id ? updated : v)) });
+          setLastSaveFailure(null);
         }
       } catch (e) {
         if (isStorageFull(e)) {
@@ -446,6 +491,10 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
     autoDetect.current = null;
     recutPending.current = false;
     if (!next) {
+      // Closing leaves nothing unsaved on screen, so the warning about that photo ends here.
+      setLastSaveFailure(null);
+      const ready0 = readyStorage();
+      if (ready0 && !ready0.readOnly) void setLastOpenProject(ready0.h, null).catch(() => undefined); // best effort
       setSession(null);
       setPhoto(null);
       setBikeForm(emptyBikeForm());
@@ -460,20 +509,21 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
     const ready = readyStorage();
     if (ready && !ready.readOnly) {
       setSavingProject(true);
+      let failure: string | null = null;
       try {
         created = await createFromPhoto(ready.h, next);
       } catch (e) {
         full = isStorageFull(e);
-        setSaveNote(`This photo could not be saved: ${saveErrorText(e)} You can keep working, but nothing will be saved.`);
+        failure = errorDetail(e);
       } finally {
         setSavingProject(false);
       }
       if (token !== importToken.current) return; // another import or open started meanwhile
+      setLastSaveFailure(failure); // a successful save clears an older warning; a failed one sets it
       if (full) { setStorageFull("import"); void refreshList(); }
-    } else if (ready) {
-      setSaveNote(`${ready.readOnlyReason ?? "Local storage is read-only."} You can keep working, but nothing will be saved.`);
     } else {
-      setSaveNote("Local storage is not available in this browser. You can keep working, but nothing will be saved.");
+      // Unavailable, read-only or not opened yet: the photo stays in memory only, with a lasting warning.
+      setLastSaveFailure(storageDetail(storageRef.current));
     }
     autoDetect.current = next.hash;
     partsDirty.current = true;
@@ -499,20 +549,22 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
       setSession(created);
       setStorageFull(null);
       setSaveNote(null);
+      setLastSaveFailure(null);
       // A confirmed bike was only in memory; save it on the new project too.
       if (form.confirmed) void saveConfirmedBike(form);
     } catch (e) {
       if (token !== importToken.current) return;
-      setSaveNote(`This photo could not be saved: ${saveErrorText(e)} You can keep working, but nothing will be saved.`);
+      setLastSaveFailure(errorDetail(e));
       if (isStorageFull(e)) { setStorageFull("import"); void refreshList(); }
     } finally {
       setSavingProject(false);
     }
   }
 
-  async function openSaved(id: string) {
+  /** Opens a saved project. `quiet` (the reload restore) shows no error: the project list simply stays. Returns true when it opened. */
+  async function openSaved(id: string, quiet = false): Promise<boolean> {
     const ready = readyStorage();
-    if (!ready) return;
+    if (!ready) return false;
     const token = ++importToken.current;
     setListBusy(id);
     setListError(null);
@@ -523,7 +575,8 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
       const cached = opened.hasSavedBike || !root ? null : await cachedIdentify(ready.h, root.image.hash);
       let form = bikeFormFromRevision(opened.session.project.bikeRevision);
       if (cached) form = applySuggestion(form, cached.bike);
-      if (token !== importToken.current) return; // another open or import started while this one was loading
+      if (token !== importToken.current) return false; // another open or import started while this one was loading
+      setLastSaveFailure(null); // this project is stored; an older "Not saved" warning belongs to a dropped photo
       setSheetOpen(false);
       setStaleNotice(null);
       setNavNote(null);
@@ -534,10 +587,78 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
       setFolded("bike", !form.confirmed);
       setIdentify({ status: cached ? "done" : "off", message: null });
       setIdentifyCachedAt(cached?.cachedAt ?? null);
+      // Remember it for the next reload (best effort; read-only storage cannot write this).
+      if (!ready.readOnly) void setLastOpenProject(ready.h, id).catch(() => undefined);
+      return true;
     } catch (e) {
-      setListError(`This project could not be opened: ${saveErrorText(e)} It was not changed.`);
+      if (quiet) {
+        // The remembered project is gone or unreadable: forget it so the list shows and nothing is retried.
+        if (!ready.readOnly) void setLastOpenProject(ready.h, null).catch(() => undefined);
+      } else {
+        setListError(`This project could not be opened: ${saveErrorText(e)} It was not changed.`);
+      }
+      return false;
     } finally {
       setListBusy(null);
+    }
+  }
+
+  // Reload: once storage is ready, reopen the project that was open (unless a photo was dropped meanwhile).
+  useEffect(() => {
+    if (!storage || storage.status !== "ready" || restoreTried.current) return;
+    restoreTried.current = true;
+    // importToken starts at 0 and every drop, open or import raises it, so a nonzero value means the
+    // user already acted while storage was still opening: never replace their work.
+    if (importToken.current !== 0 || sessionRef.current) return;
+    const startToken = importToken.current;
+    void (async () => {
+      try {
+        const id = await getLastOpenProject(storage.h);
+        if (!id || importToken.current !== startToken) return;
+        await openSaved(id, true);
+      } catch {
+        // An unreadable "last open" record: show the project list as usual.
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once, when storage first becomes ready
+  }, [storage]);
+
+  /** "Open project from folder": pick, validate everything, import atomically, then open it. */
+  async function openFromFolder() {
+    const ready = readyStorage();
+    if (!ready || ready.readOnly || openingFolderRef.current) return;
+    openingFolderRef.current = true;
+    setOpeningFolder(true);
+    setOpenFolderNote(null);
+    try {
+      let dir: FileSystemDirectoryHandle;
+      try {
+        dir = await pickProjectFolderForImport(); // needs the click that called this function
+      } catch (e) {
+        // Closing the dialog is not an error: show nothing.
+        if ((e as { name?: string } | null)?.name !== "AbortError") setOpenFolderNote({ tone: "danger", text: folderImportErrorText(e) });
+        return;
+      }
+      setOpenFolderNote({ tone: "info", text: "Checking the folder and opening the project. Nothing is stored unless every file matches." });
+      const tokenBefore = importToken.current;
+      const res = await readProjectFolder(dir, { db: ready.h });
+      if (!res.ok) {
+        setOpenFolderNote({ tone: "danger", text: res.message });
+        return;
+      }
+      await refreshList();
+      if (importToken.current !== tokenBefore) {
+        // A photo was dropped meanwhile; do not replace it.
+        setOpenFolderNote({ tone: "info", text: "The project was added to the saved projects. Open it from the list." });
+        return;
+      }
+      setOpenFolderNote(null);
+      await openSaved(res.projectId);
+    } catch (e) {
+      setOpenFolderNote({ tone: "danger", text: `${folderImportErrorText(e)} Nothing was added.` });
+    } finally {
+      openingFolderRef.current = false;
+      setOpeningFolder(false);
     }
   }
 
@@ -608,6 +729,7 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
       if (out.status === "unchanged") return { ok: true, unchanged: true };
       // Only the session changes: the photo, parts and part map stay as they are.
       if (sessionRef.current?.project.id === out.session.project.id) setSession(out.session);
+      setLastSaveFailure(null);
       // Same background folder save as after an accepted visual change; never awaited.
       if (folderHandleRef.current) void requestFolderSave(folderHandleRef.current, true);
       return { ok: true, unchanged: false };
@@ -640,6 +762,7 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
       const now = sessionRef.current;
       if (now && now.project.id === saved.project.id) setSession({ ...now, project: saved.project });
       setSaveNote(null);
+      setLastSaveFailure(null);
     } catch (e) {
       setSaveNote(`The confirmed bike could not be saved: ${saveErrorText(e)} It stays on screen.`);
     }
@@ -856,10 +979,12 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
           return;
         }
         setSession(out.session);
+        setLastSaveFailure(null);
         // Background save of the new step; never awaited, so folder trouble cannot touch accept.
         if (folderHandleRef.current) void requestFolderSave(folderHandleRef.current, true);
       } catch (e) {
-        setAccept({ saving: false, error: saveErrorText(e) });
+        // Keep the browser's error name (e.g. Safari's UnknownError) so a failed save can be diagnosed.
+        setAccept({ saving: false, error: isStorageFull(e) ? saveErrorText(e) : `Not saved: ${errorDetail(e)}` });
         if (isStorageFull(e)) { setStorageFull("accept"); void refreshList(); }
         return;
       } finally {
@@ -867,6 +992,9 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
       }
     }
 
+    // No stored session (in memory, read-only or unavailable): the edit is shown but never saved, so the
+    // lasting warning stays or starts here. Only a real save clears it.
+    if (!(saved && ready && !ready.readOnly && entry.ref)) setLastSaveFailure((f) => f ?? storageDetail(storageRef.current));
     runAbort.current?.abort();
     autoDetect.current = null; // the confirmed bike stays; only the outline and the edited part refresh
     partsDirty.current = true;
@@ -991,7 +1119,9 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
   const readOnly = storage?.status === "ready" && storage.readOnly;
   const redoKids = session && head ? children(session.versions, head.id) : [];
   const projectName = session?.project.name ?? (photo ? "Unsaved photo" : null);
-  const saveStatus = !photo ? null : !session ? "Not saved" : readOnly ? "Read-only: changes are not saved" : "Saved on this device";
+  // Why this photo is not stored, or null when it is. A failed save, or no stored project for the photo, is "Not saved".
+  const notSavedDetail = !photo ? null : lastSaveFailure ?? (!session ? storageDetail(storage) : null);
+  const saveStatus = !photo ? null : notSavedDetail ? "Not saved" : readOnly ? "Read-only: changes are not saved" : "Saved on this device";
   const busy = navBusy || renderRunning || accept.saving || pointBusy || sheetSaving;
   // Build sheet: why it is read-only (permanent), and why saving waits (temporary).
   const sheetReason = !photo ? "Open or import a photo first. Its sheet shows here."
@@ -1073,6 +1203,12 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
             ) : <div className="m-auto">{noticeAccepted ? <UploadDropzone onPhoto={(p) => void choosePhoto(p)} />
               : <UploadNotice onAccept={() => setNoticeAccepted(true)} />}</div>}
           </section>
+          {notSavedDetail && (
+            <p role="alert" className="rounded-chip bg-warning-soft px-3 py-2 text-warning-soft-text text-[13px]">
+              <span aria-hidden="true" className="mr-1 font-semibold">⚠</span>
+              Not saved: this browser did not store the project. {notSavedDetail} You can keep working, but the project is lost if you reload or close this tab.
+            </p>
+          )}
           {saveNote && (
             <p role="alert" className="rounded-chip bg-warning-soft px-3 py-2 text-warning-soft-text text-[13px]">
               <span aria-hidden="true" className="mr-1 font-semibold">⚠</span>{saveNote}
@@ -1108,7 +1244,9 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
             <>
               <p className="text-text-muted text-[13px]">Import a photo of your own bike to start, or open a saved project.</p>
               {savingProject && <p role="status" className="text-text-secondary text-[13px]">Saving the project…</p>}
-              <ProjectList state={list} busyId={listBusy} error={listError} onOpen={(id) => void openSaved(id)} onDelete={(id) => void deleteSaved(id)} />
+              <ProjectList state={list} busyId={listBusy} error={listError} onOpen={(id) => void openSaved(id)} onDelete={(id) => void deleteSaved(id)}
+                onOpenFolder={folderApi && storage?.status === "ready" && !storage.readOnly ? () => void openFromFolder() : undefined}
+                openFolderBusy={openingFolder} openFolderNote={openFolderNote} />
             </>
           )}
           {photo && (

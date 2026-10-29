@@ -20,12 +20,16 @@ type Props = {
   excludeId?: string | null;
   /** Shown when nothing can be deleted (deleteOnly mode). */
   emptyText?: string;
+  /** "Open project from folder". The parent passes it only where the browser and storage allow it. */
+  onOpenFolder?: () => void;
+  openFolderBusy?: boolean;
+  openFolderNote?: { tone: "info" | "danger"; text: string } | null;
 };
 
 const button = "rounded-full border border-hairline px-3 py-1 text-[13px] disabled:opacity-50";
 
 /** Saved projects on this device, newest first. Delete asks first; nothing is deleted on a read error. */
-export function ProjectList({ state, busyId, error, onOpen, onDelete, deleteOnly = false, excludeId = null, emptyText }: Props) {
+export function ProjectList({ state, busyId, error, onOpen, onDelete, deleteOnly = false, excludeId = null, emptyText, onOpenFolder, openFolderBusy = false, openFolderNote = null }: Props) {
   const [confirming, setConfirming] = useState<string | null>(null);
 
   if (state.kind === "loading") {
@@ -82,6 +86,19 @@ export function ProjectList({ state, busyId, error, onOpen, onDelete, deleteOnly
         <p role="status" className="rounded-chip bg-warning-soft px-3 py-2 text-warning-soft-text text-[13px]">
           <span aria-hidden="true" className="mr-1 font-semibold">⚠</span>{state.readOnlyReason}
         </p>
+      )}
+      {onOpenFolder && !deleteOnly && !state.readOnlyReason && (
+        <div className="flex flex-col gap-2">
+          <button type="button" onClick={onOpenFolder} disabled={openFolderBusy || busyId !== null} className={`${button} self-start`}>
+            {openFolderBusy ? "Opening folder…" : "Open project from folder"}
+          </button>
+          {openFolderNote && (
+            <p role={openFolderNote.tone === "danger" ? "alert" : "status"}
+              className={`rounded-chip px-3 py-2 text-[13px] ${openFolderNote.tone === "danger" ? "bg-danger-soft text-danger-soft-text" : "bg-neutral-soft text-neutral-soft-text"}`}>
+              <span aria-hidden="true" className="mr-1 font-semibold">{openFolderNote.tone === "danger" ? "✕" : "ⓘ"}</span>{openFolderNote.text}
+            </p>
+          )}
+        </div>
       )}
       {error && (
         <p role="alert" className="rounded-chip bg-danger-soft px-3 py-2 text-danger-soft-text text-[13px]">

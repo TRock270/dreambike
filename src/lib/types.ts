@@ -9,6 +9,7 @@ import type {
   ImageRef as ImageRefSchema, StoredImage as StoredImageSchema, StoredMask as StoredMaskSchema,
   Part as PartSchema, BikeRevision as BikeRevisionSchema, Version as VersionSchema,
   Project as ProjectSchema, CacheEntry as CacheEntrySchema, MetaRecord as MetaRecordSchema,
+  ProjectSnapshot as ProjectSnapshotSchema, SnapshotImage as SnapshotImageSchema, SnapshotMask as SnapshotMaskSchema,
 } from "./contracts";
 
 export type EditModeId = z.infer<typeof EditMode>;
@@ -34,6 +35,11 @@ export type Part = z.infer<typeof PartSchema>;
 export type BikeRevision = z.infer<typeof BikeRevisionSchema>;
 export type Version = z.infer<typeof VersionSchema>;
 export type Project = z.infer<typeof ProjectSchema>;
+export type ProjectSnapshot = z.infer<typeof ProjectSnapshotSchema>;
+export type SnapshotImage = z.infer<typeof SnapshotImageSchema>;
+export type SnapshotMask = z.infer<typeof SnapshotMaskSchema>;
+/** A stored mask without its pixel bytes. */
+export type MaskMeta = Omit<StoredMask, "pixels">;
 export type MetaRecordData = z.infer<typeof MetaRecordSchema>;
 export type PendingEdit = {
   slot: SlotId; selectedPartId: string; mode: "text" | "paint" | "reference";

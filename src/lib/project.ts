@@ -3,9 +3,9 @@
 // The caller generates every ID before the transaction so a retry reuses them.
 import type {
   BikeRevision, BuildItemData, CompositeReason, EditModeId, FeeData, ImageRef, InstructionData, Part,
-  ProductData, Project, SlotId, Version,
+  MaskMeta, ProductData, Project, SlotId, Version,
 } from "./types";
-import { BuildItem, Cents, Product } from "./contracts";
+import { BuildItem, Cents, Product, ProjectSnapshot } from "./contracts";
 import { slotInfo } from "./slots";
 
 /** Same values as the contracts EditMode enum (one source of truth). */
@@ -527,4 +527,71 @@ export function exportPlan(input: {
   const historyJson = JSON.stringify(
     { project: { id: project.id, name: project.name }, exportedAt, headId, versions: entries }, null, 2);
   return { folderName: exportFolderName(project.name, project.id), files, historyJson, historyMarkdown: md.join("\n") };
+}
+
+// ------------------------------------------------------------ project snapshot
+// project.json for "Open project from folder" (OF1). Pure: the caller reads the stored records
+// (db.snapshotSources) and writes the files. Incomplete when anything it points to cannot be
+// written, so a folder never claims to be restorable when it is not.
+
+export type SnapshotResult =
+  | {
+    complete: true;
+    json: string;
+    /** Every image the snapshot lists (version images and cutouts): file name in the folder + image id. */
+    imageFiles: { name: string; imageId: string }[];
+    /** One file per mask, written to masks/<name>. */
+    maskFiles: { name: string; maskId: string }[];
+  }
+  | { complete: false; reason: string };
+
+/**
+ * `plan.files` names the version images (same names as the saved pictures). Cutouts get
+ * "cutout-<id>.webp". `cutouts` are the stored cutout image refs and `masks` the stored mask
+ * metadata, both read from the database, not from React state.
+ */
+export function projectSnapshot(input: {
+  project: Project;
+  versions: readonly Version[];
+  cutouts: readonly ImageRef[];
+  masks: readonly MaskMeta[];
+  plan: Pick<ExportPlan, "files">;
+}): SnapshotResult {
+  const { project, versions } = input;
+  const nameByImage = new Map(input.plan.files.map((f) => [f.imageId, f.name]));
+  const cutoutById = new Map(input.cutouts.map((c) => [c.id, c]));
+  const maskById = new Map(input.masks.map((m) => [m.id, m]));
+  const images = new Map<string, ImageRef & { file: string }>();
+  const masks = new Map<string, MaskMeta & { file: string }>();
+  const fail = (reason: string): SnapshotResult => ({ complete: false, reason });
+  const writable = (r: ImageRef) => r.rights === "owner" || r.rights === "visitor";
+
+  for (const v of versions) {
+    if (!writable(v.image)) return fail("An image from the web is not saved to the folder, so the project cannot be restored from it.");
+    const file = nameByImage.get(v.image.id);
+    if (!file) return fail(`The picture of version ${v.id} has no file in the export.`);
+    images.set(v.image.id, { ...v.image, file });
+    if (v.cutoutImageId) {
+      const cut = cutoutById.get(v.cutoutImageId);
+      if (!cut) return fail(`The cutout image ${v.cutoutImageId} is not stored.`);
+      if (!writable(cut)) return fail("A cutout from the web is not saved to the folder, so the project cannot be restored from it.");
+      images.set(cut.id, { ...cut, file: `cutout-${cut.id}.webp` });
+    }
+    const maskIds = [...v.parts.map((p) => p.maskId), ...(v.bikeMaskId ? [v.bikeMaskId] : [])];
+    for (const id of maskIds) {
+      const m = maskById.get(id);
+      if (!m) return fail(`Mask ${id} is not stored.`);
+      masks.set(id, { ...m, file: `${id}.bin` });
+    }
+  }
+  const parsed = ProjectSnapshot.safeParse({
+    formatVersion: 1, project, versions: [...versions], images: [...images.values()], masks: [...masks.values()],
+  });
+  if (!parsed.success) return fail(`The project is too large or invalid for a snapshot: ${parsed.error.issues[0]?.message ?? "invalid"}.`);
+  return {
+    complete: true,
+    json: JSON.stringify(parsed.data, null, 2),
+    imageFiles: [...images.values()].map((i) => ({ name: i.file, imageId: i.id })),
+    maskFiles: [...masks.values()].map((m) => ({ name: m.file, maskId: m.id })),
+  };
 }

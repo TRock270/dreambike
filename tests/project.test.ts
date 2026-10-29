@@ -5,7 +5,7 @@ import {
 } from "@/lib/contracts";
 import {
   activeItems, canAcceptPending, children, defaultProjectName, laterSteps, newProject, newRootVersion,
-  exportPlan, editItem, formatEuroCents, laborDisplay, manualProduct, parseEuroInput, priceDisplay,
+  exportPlan, projectSnapshot, editItem, formatEuroCents, laborDisplay, manualProduct, parseEuroInput, priceDisplay,
   removeItem, sheetChangeLabel, sheetChild, pathFromRoot, redoTargets, undoTarget, visualChild, type VisualChildInput,
 } from "@/lib/project";
 import type { BuildItemData, FitData, Part, ProductData, Version } from "@/lib/types";
@@ -532,5 +532,61 @@ describe("visualChild fits", () => {
     expect(kept).toHaveLength(2);
     expect(kept.every((i) => i.fit === null && i.fitInputHash === null && i.fitCheckedAt === null && i.fitReviewedHash === null)).toBe(true);
     expect(parent.items.every((i) => i.fit !== null)).toBe(true);
+  });
+});
+
+const bike = {
+  id: crypto.randomUUID(), confirmed: false, revision: 0, confirmedAt: null,
+  bike: { make: null, model: null, family: "unknown", engine: null, yearFrom: null, yearTo: null, abs: "unknown", style: null, facing: "left", confidence: 0.5, limitations: [] },
+};
+
+describe("projectSnapshot", () => {
+  const mk = (rights: "owner" | "external_runtime" = "owner", withCutout = false) => {
+    const projectId = id();
+    const image = { ...img("a", 8, 4), rights };
+    const root = newRootVersion({ id: id(), projectId, image, createdAt: 1 });
+    const maskId = id();
+    const cutId = id();
+    const v: Version = {
+      ...root, parts: [part("tank", maskId)], cutoutImageId: withCutout ? cutId : null,
+    };
+    const plan = exportPlan({ project: { id: projectId, name: "P" }, versions: [v], headId: v.id, exportedAt: "t" });
+    const mask = { id: maskId, imageHash: image.hash, width: 8, height: 4, createdAt: 1 };
+    const cut = { id: cutId, hash: hash("c"), width: 8, height: 4, bytes: 10, rights: "owner" as const };
+    return { v, plan, mask, cut };
+  };
+  const proj = (v: Version) => ({
+    ...newProject({ id: v.projectId, rootVersionId: v.id, bikeRevision: BikeRevision.parse(bike), now: new Date(1000) }),
+  });
+
+  it("is complete with image, cutout and mask files, and the JSON parses back", () => {
+    const f = mk("owner", true);
+    const r = projectSnapshot({ project: proj(f.v), versions: [f.v], cutouts: [f.cut], masks: [f.mask], plan: f.plan });
+    expect(r.complete).toBe(true);
+    if (!r.complete) return;
+    expect(r.maskFiles).toEqual([{ name: `${f.mask.id}.bin`, maskId: f.mask.id }]);
+    expect(r.imageFiles.map((x) => x.imageId).sort()).toEqual([f.v.image.id, f.cut.id].sort());
+    expect(r.imageFiles.find((x) => x.imageId === f.cut.id)!.name).toBe(`cutout-${f.cut.id}.webp`);
+    const parsed = JSON.parse(r.json);
+    expect(parsed.formatVersion).toBe(1);
+    expect(parsed.versions).toHaveLength(1);
+  });
+
+  it("is incomplete for an external image", () => {
+    const f = mk("external_runtime");
+    const r = projectSnapshot({ project: proj(f.v), versions: [f.v], cutouts: [], masks: [f.mask], plan: f.plan });
+    expect(r.complete).toBe(false);
+  });
+
+  it("is incomplete for a missing mask or cutout record", () => {
+    const f = mk("owner", true);
+    expect(projectSnapshot({ project: proj(f.v), versions: [f.v], cutouts: [f.cut], masks: [], plan: f.plan }).complete).toBe(false);
+    expect(projectSnapshot({ project: proj(f.v), versions: [f.v], cutouts: [], masks: [f.mask], plan: f.plan }).complete).toBe(false);
+  });
+
+  it("is incomplete for a cutout from the web", () => {
+    const f = mk("owner", true);
+    const r = projectSnapshot({ project: proj(f.v), versions: [f.v], cutouts: [{ ...f.cut, rights: "external_runtime" }], masks: [f.mask], plan: f.plan });
+    expect(r.complete).toBe(false);
   });
 });

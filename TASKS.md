@@ -185,6 +185,15 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 - Work: translate estimate labels and notes, keep schemas/amounts identical, verify long compound words and German legal terms. English remains the default hackathon output.
 - Done when: owner reviews translation; 1-page and 3-page PDFs render cleanly; values match English output exactly; no legal certification language is introduced. Never delay T18 for this ticket.
 
+## OF1 — Open project from folder and honest local save (owner follow-up, 2026-10-29)
+
+- Priority: owner request. Estimate: 2h. Depends on: T6, T8 and the folder save (e6747c5). No paid calls.
+- Status: DONE 2026-10-29 (offline and in mock; no paid calls). Owner checks in Chrome (folder round trip) and Safari (retest) pending. See log.
+- Owner decisions 2026-10-29: build "Open project from folder" now (overrides SPEC 614 "not an import format"); Safari lost a project on reload, so a failed local save must never look saved.
+- Files: src/lib/contracts.ts, src/lib/types.ts, src/lib/project.ts, src/lib/db.ts, src/lib/browser/folderExport.ts, src/components/Workspace.tsx, src/components/ProjectList.tsx, tests/project.test.ts, tests/db.test.ts, tests/folderexport.test.ts.
+- Work: the folder save also writes a versioned project.json snapshot (full Project and every Version as stored, image table with ImageRef and file name including cutouts, mask table) and masks/<id>.bin; one atomic importProject in db.ts; readProjectFolder with a read-mode picker that validates everything before any write; an "Open project from folder" button where the browser supports it; a lasting "Not saved" warning with the error name when the project cannot be stored; a reload reopens the last open project.
+- Done when: a saved folder imports back into an empty browser store with the same head, history tree, items, fees, bike revision, images and masks, and Undo works after import; a wrong hash, wrong dimensions, a missing file, invalid project.json, a cycle or foreign root, or an existing project id is refused before anything is written, and a failure inside the import transaction leaves no partial project; a folder without project.json shows the "saved before import existed" message; the button is hidden where folder access is unsupported; when the project cannot be stored, the user sees a lasting "Not saved" warning with the error name and Accept never looks saved; a reload reopens the last open project, or shows the project list if it is gone. Run build, lint, types, tests and the image checks.
+
 ## Completion log template
 
 For each completed ticket append actual date/time ET, files changed, checks and observations, cost ledger total, remaining U-gates, actual hours, and commit hash. For a cut/blocked ticket record the concrete fallback or missing input. A checkbox alone is not evidence. The final README and video use this actual log, not the estimates above.
@@ -1012,3 +1021,49 @@ For each completed ticket append actual date/time ET, files changed, checks and 
   - The Next dev overlay badge covers the "Build sheet" button in dev only (known).
   - The handoff item "allow line for tests/folderexport.test.ts" is done (4c21ec2).
   - Next on the critical path: T9, which needs U02 grounded and U06 cost bounds (paid, owner gates). Not started.
+
+### Owner inputs before T9 — 2026-10-29
+
+- Billing: the owner read $0.71 on the Meta Billing page; `ledger.py status` shows lifetime 714096 µ$ ($0.714), reserved 0, no halt flag. They agree. The owner set a $5 daily Billing limit with alerts at $1, $2 and so on. Recorded in docs/api-evidence.md.
+- Safari check (T2/T6), owner 2026-10-29: dropping a photo works; the .HEIC shows the JPEG message. A reload loses the whole project, and Back does not bring it back. Cause not yet proven. Code reading: a failed project write is caught and work continues in memory without a clear warning (Workspace.tsx choosePhoto and acceptRender), and a reload never reopens the last project. Fix planned as an owner follow-up (honest "Not saved" warning with the error name, reopen the last project); the owner retests in Safari afterwards.
+- Owner decision: build "Open project from folder" now (overrides the SPEC 614 "no import format" note; SPEC gets a dated note with that work).
+- Owner inputs for T10 (a fictional example shop, labeled as example values in UI and PDF):
+  - Rate: 100 € net per hour (10000 cents).
+  - Labor (minutes): tank 120, wheel_front 180, wheel_rear 180, sissy_bar 300, handlebar 60, grips 150 ("Armaturen", owner mapped it to grips), fender_front 180, fender_rear 180, exhaust 480. Wheels and fenders are per piece.
+  - Inspection: Einzelabnahme 180 € gross, so 15126 net cents (180/1.19). Änderungsabnahme with Teilegutachten 60 € gross, so 5042 net cents, plus about 15 € at the Zulassungsstelle. With ABE 0 €.
+  - The owner's research ranges (not a legal source): ABE 0–15 € (12–20 € if entered in the papers); Teilegutachten 35–80 € at TÜV plus 12–20 € Zulassungsstelle; Einzelabnahme 90–300 € or more plus Zulassungsstelle fees.
+  - Open for T10: the Zulassungsstelle fee is an official fee without VAT; SPEC only knows net allowances with 19 % VAT. T10 decides whether it becomes its own line without VAT.
+  - Shop: a fictional name (proposal "Nordwerk Customs", the owner confirms in T10) and a simple text logo as PNG that Claude makes in T10.
+
+### OF1 — 2026-10-29, about 08:50–10:05 ET (build-ticket workflow, lead fix, mock browser check)
+
+- Status: done offline and in mock. No paid calls.
+- Files: src/lib/contracts.ts (ProjectSnapshot, SnapshotImage, SnapshotMask with plain file names and count caps), src/lib/types.ts, src/lib/project.ts (projectSnapshot builder), src/lib/db.ts (snapshotSources, importProject in one writeTx, openDreamDb keeps the browser error name), src/lib/browser/folderExport.ts (writes cutouts, masks/<id>.bin and project.json last; removes a stale project.json when the snapshot is incomplete; pickProjectFolderForImport, readProjectFolder, folderImportErrorText), src/components/Workspace.tsx and ProjectList.tsx ("Open project from folder", lasting "Not saved" warning with the error name, reload reopens the last project), tests/project.test.ts, tests/db.test.ts, tests/folderexport.test.ts; SPEC.md 614 dated owner override.
+- Workflow build-ticket OF1, 3 units, all approved, 21 agents:
+  - F1 (shop): round 1 had 4 blocking findings (sha256 not checked in importProject, unreferenced images/masks and duplicate file names accepted); fixed in round 2.
+  - F2 (imaging routing): approved in round 1.
+  - U1 (ui): round 1 had 2 (the reload restore could replace a photo dropped while storage opened; a restored project kept a false "Not saved"); fixed in round 2.
+  - Verify: all five checks passed. Done-when gate: all 7 items met, 4 minors.
+- Lead decisions on the gate minors:
+  - G1 (a failed Accept in a stored session dropped the error name): fixed; the message is now "Not saved: <name>: <message>" except for STORAGE_FULL.
+  - G2 (a sheet or bike save on the stored head clears the "Not saved" warning while an in-memory photo is shown): kept as an open minor; an in-memory photo only exists without a stored session, and sheet and bike saves need one.
+  - G3 (types.ts missing from the OF1 Files line): fixed.
+  - G4 (sha256 computed twice per image on import): kept; harmless at about 20 images.
+- review-changes quick on the lead fix and docs: one unverified major from general-reviewer ("a new photo never writes lastOpenProject, so a reload does not reopen it"). Refuted: createProject writes lastOpenProject in the same transaction (db.ts:538), and the mock browser check below reopened a freshly imported project after reload.
+- Mock browser check (MOCK=1, headless Chrome 156, fresh profile, deleted afterwards):
+  - import a photo, Tank change, Accept: "Saved on this device"; reload: the project reopens by itself with Step 1 and the photo, still "Saved on this device" (3/3).
+  - IndexedDB open blocked with a simulated UnknownError: the lasting warning "Not saved: this browser did not store the project. Local storage is not available in this browser (UnknownError: Simulated Safari failure) …" and the header "Not saved"; after Accept still "Not saved", never "Saved on this device". The script's wait for "Step 1" timed out because History shows no steps without storage; that was a script error, checked by reading the page text.
+  - The folder picker cannot be driven headless; the round trip is covered by tests/folderexport.test.ts and tests/db.test.ts.
+- Checks after the lead fix: typecheck, lint, build pass; npm test 543/543 in 20 files; local_images.py 71 passed, 0 failed, 0 skipped.
+- Consultant: PAL chat nim-nemotron35 on an excerpt of importProject and the folder reader (272 lines, files_embedded 1). 15 points, none adopted:
+  - path tricks, count caps, mask bytes: already validated (SnapshotFileName regex, MAX_SNAPSHOT_* caps, StoredMaskSchema and the reader's 0/1 check);
+  - auto-commit inside writeTx: the helpers await only IDB requests (checked in F1 review), and runTx aborts on any throw;
+  - double hashing and holding about 20 MB of blobs: harmless at this size;
+  - decoding a hostile tiny file with huge dimensions before the size check: the folder is the owner's own export; noted, not fixed;
+  - cutout hash equal to the version hash: wrong, a cutout is a different image.
+  Gemini was not asked.
+- Spend: $0.
+- Open:
+  - Owner in Chrome: save a project to a folder, delete it in the browser, "Open project from folder"; image, History, sheet and Undo should match. A folder saved before OF1 has no project.json; save it once again first.
+  - Owner in Safari: drop a photo and Accept. If the "Not saved" warning appears, send the error name; otherwise reload and the project should reopen. If Blob storage is the cause, a separate plan follows (images as ArrayBuffer, DB v2 migration).
+  - G2 minor (above); no component tests for the new UI paths.

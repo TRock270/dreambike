@@ -6,12 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acceptSheet, acceptVisual, attachParts, closeDreamDb, CorruptRecordError, createProject, deleteProject,
   getLastOpenProject, getStoredImage, moveHead, StorageClosedError, getStoredMask, InvalidWriteError, listProjects, loadProject,
-  openDreamDb, putShopSettings, getShopSettings, ReadOnlyError, redo, setHead, undo, updateBikeRevision,
+  importProject, openDreamDb, putShopSettings, snapshotSources, StorageUnavailableError, getShopSettings, ReadOnlyError, redo, setHead, undo, updateBikeRevision,
   type DreamDb, type PreparedAccept,
 } from "@/lib/db";
 import { cacheKeys, getCache, putCache, rebuildLedger, storageStatus } from "@/lib/cache";
 import { AppError } from "@/lib/errors";
-import { activeItems, pathFromRoot, sheetChild, visualChild, type VisualChildInput } from "@/lib/project";
+import { activeItems, exportPlan, pathFromRoot, projectSnapshot, sheetChild, visualChild, type VisualChildInput } from "@/lib/project";
 import type { StoredImage, StoredMask, Version } from "@/lib/types";
 import { bikeRevision, freshIndexedDb, hash, makeImage, makeMask, makePart, makeProject, uuid } from "./support/idb";
 
@@ -722,5 +722,307 @@ describe("acceptSheet", () => {
     expect(await getStoredImage(h, image.id)).not.toBeNull();
     const { imageBytes, maskBytes, cacheBytes } = live;
     expect({ imageBytes, maskBytes, cacheBytes }).toEqual(await rebuildLedger(h));
+  });
+});
+
+// ------------------------------------------------------- import project (OF1)
+
+/** Folder contents as the reader would hand them to importProject. */
+type Folder = { snapshot: unknown; blobs: Map<string, Blob>; pixels: Map<string, Uint8Array>; digest: (b: Blob) => Promise<string> };
+
+let lastDigest: (b: Blob) => Promise<string> = async () => "unknown";
+
+async function folderOf(projectId: string): Promise<Folder> {
+  const src = await snapshotSources(h, projectId);
+  if (!src) throw new Error("project missing");
+  const plan = exportPlan({ project: src.project, versions: src.versions, headId: src.project.headVersionId, exportedAt: "t" });
+  const snap = projectSnapshot({ ...src, plan });
+  if (!snap.complete) throw new Error(snap.reason);
+  const blobs = new Map<string, Blob>();
+  const hashOfBlob = new Map<Blob, string>(); // fixtures carry fake hashes, so the digest is looked up
+  for (const f of snap.imageFiles) {
+    const stored = (await getStoredImage(h, f.imageId))!;
+    blobs.set(f.imageId, stored.blob);
+    hashOfBlob.set(stored.blob, stored.hash);
+  }
+  const pixels = new Map<string, Uint8Array>();
+  for (const f of snap.maskFiles) pixels.set(f.maskId, (await getStoredMask(h, f.maskId))!.pixels);
+  // Through JSON, exactly like a real project.json on disk.
+  lastDigest = async (b) => hashOfBlob.get(b) ?? "unknown";
+  return { snapshot: JSON.parse(snap.json), blobs, pixels, digest: lastDigest };
+}
+
+/** root -> v1 (tank) -> v2 (exhaust, with bike mask + cutout) -> sheet; plus a branch v1b off v1. */
+async function richProject() {
+  const { project, rootVersion } = await setup("a");
+  const a = prepare(rootVersion, "tank", "Red tank", "b", 10);
+  await acceptVisual(h, project.id, rootVersion.id, a);
+  const b = prepare(a.version, "exhaust", "Short exhaust", "c", 20);
+  await acceptVisual(h, project.id, a.version.id, b);
+  const bikeMask = makeMask(hash("c"));
+  const cutout = makeImage("e");
+  await attachParts(h, { versionId: b.version.id, imageHash: hash("c"), bikeMask, cutoutImage: cutout });
+  const v2 = (await loadProject(h, project.id))!.versions.find((v) => v.id === b.version.id)!;
+  const items = v2.items.map((i) => ({ ...i, partPriceCents: 11900, laborMinutes: 30 }));
+  const fee = { id: uuid(), label: "Aenderungsabnahme", kind: "aenderungsabnahme" as const, netCents: 10000, itemIds: [], confirmed: true };
+  const sheet = sheetChild(v2, { versionId: uuid(), createdAt: 30, items, fees: [fee] });
+  await acceptSheet(h, project.id, v2.id, sheet);
+  // A branch: go back to v1 and accept another edit there.
+  await setHead(h, project.id, a.version.id);
+  const branch = prepare(a.version, "seat", "Brown seat", "d", 40);
+  await acceptVisual(h, project.id, a.version.id, branch);
+  await setHead(h, project.id, sheet.id);
+  return { project, root: rootVersion, v1: a.version, v2, sheet, branch: branch.version, bikeMask, cutout };
+}
+
+async function ledgerOf(): Promise<unknown> {
+  return (await h.db.get("meta", "ledger"))?.value;
+}
+
+describe("importProject", () => {
+  it("round trips head, tree, items, fees, bike revision, images and masks, and undo works", async () => {
+    const r = await richProject();
+    const before = (await loadProject(h, r.project.id))!;
+    const folder = await folderOf(r.project.id);
+    const imageBytes = new Map<string, Uint8Array>();
+    for (const v of before.versions) imageBytes.set(v.image.id, new Uint8Array(await (await getStoredImage(h, v.image.id))!.blob.arrayBuffer()));
+    const maskBefore = (await getStoredMask(h, r.bikeMask.id))!;
+    expect(await deleteProject(h, r.project.id)).toBe(true);
+    expect(await countStores()).toEqual({ versions: 0, images: 0, masks: 0 });
+
+    const res = await importProject(h, folder.snapshot, folder.blobs, folder.pixels, 99, folder.digest);
+    expect(res.status).toBe("imported");
+    const after = (await loadProject(h, r.project.id))!;
+    expect(after.project).toEqual(before.project);
+    expect(after.project.bikeRevision.confirmed).toBe(true);
+    const sort = (vs: Version[]) => [...vs].sort((x, y) => x.id.localeCompare(y.id));
+    expect(sort(after.versions)).toEqual(sort(before.versions));
+    expect(after.versions.find((v) => v.id === r.sheet.id)!.fees).toHaveLength(1);
+    expect(after.versions.some((v) => v.parts.some((p) => p.stale))).toBe(true);
+    for (const v of before.versions) {
+      const img = (await getStoredImage(h, v.image.id))!;
+      expect(new Uint8Array(await img.blob.arrayBuffer())).toEqual(imageBytes.get(v.image.id));
+      expect(img.lastAccessedAt).toBe(99);
+    }
+    expect(await getStoredMask(h, r.bikeMask.id)).toEqual(maskBefore);
+    expect(await getStoredImage(h, r.cutout.id)).not.toBeNull();
+    await rebuildLedger(h);
+    // Undo, then redo, on the imported project.
+    const u = await undo(h, r.project.id, r.sheet.id);
+    expect(u.status).toBe("moved");
+    const rd = await redo(h, r.project.id, r.v2.id);
+    expect(rd.status).toBe("moved");
+    expect(after.project.headVersionId).toBe(r.sheet.id);
+  });
+
+  it("keeps the ledger consistent with a rebuild", async () => {
+    const r = await richProject();
+    const folder = await folderOf(r.project.id);
+    await deleteProject(h, r.project.id);
+    await importProject(h, folder.snapshot, folder.blobs, folder.pixels, undefined, folder.digest);
+    const ledger = await ledgerOf();
+    await rebuildLedger(h);
+    expect(await ledgerOf()).toEqual(ledger);
+  });
+
+  it("remaps image ids when another project already stores the same photo", async () => {
+    const r = await richProject();
+    const folder = await folderOf(r.project.id);
+    await deleteProject(h, r.project.id);
+    // Another project with the same root photo hash "a" but a different image id.
+    const other = makeProject("a");
+    const otherLoaded = await createProject(h, other);
+    const res = await importProject(h, folder.snapshot, folder.blobs, folder.pixels, undefined, folder.digest);
+    expect(res.status).toBe("imported");
+    const loaded = (await loadProject(h, r.project.id))!;
+    const root = loaded.versions.find((v) => v.id === r.root.id)!;
+    expect(root.image.id).toBe(otherLoaded.versions[0]!.image.id);
+    expect(await getStoredImage(h, root.image.id)).not.toBeNull();
+    expect((await loadProject(h, other.project.id))!.versions).toHaveLength(1);
+  });
+
+  it("refuses an existing project id and writes nothing", async () => {
+    const r = await richProject();
+    const folder = await folderOf(r.project.id);
+    const counts = await countStores();
+    const res = await importProject(h, folder.snapshot, folder.blobs, folder.pixels, undefined, folder.digest);
+    expect(res).toMatchObject({ status: "refused", reason: "project_exists" });
+    expect(res.status === "refused" && res.message).toContain("already in this browser");
+    expect(await countStores()).toEqual(counts);
+  });
+
+  it("refuses a version id that belongs to another project", async () => {
+    const r = await richProject();
+    const folder = await folderOf(r.project.id);
+    const snap = structuredClone(folder.snapshot) as { project: { id: string }; versions: { projectId: string }[] };
+    const newPid = uuid();
+    snap.project.id = newPid;
+    for (const v of snap.versions) v.projectId = newPid;
+    const counts = await countStores();
+    const res = await importProject(h, snap, folder.blobs, folder.pixels, undefined, folder.digest);
+    expect(res).toMatchObject({ status: "refused", reason: "version_exists" });
+    expect(await countStores()).toEqual(counts);
+    expect(await h.db.get("projects", newPid)).toBeUndefined();
+    // The original project's versions are untouched.
+    expect((await loadProject(h, r.project.id))!.versions.find((v) => v.id === r.root.id)!.projectId).toBe(r.project.id);
+  });
+
+  describe("refusals before any write", () => {
+    async function emptyFolder() {
+      const r = await richProject();
+      const folder = await folderOf(r.project.id);
+      await deleteProject(h, r.project.id);
+      return { r, folder };
+    }
+    const clone = <T,>(x: T): T => structuredClone(x);
+    type Snap = { project: { headVersionId: string; rootVersionId: string }; versions: { id: string; parentId: string | null; projectId: string; kind: string }[]; images: { id: string }[]; masks: { id: string }[] };
+
+    async function expectRefused(snap: unknown, blobs: Map<string, Blob>, pixels: Map<string, Uint8Array>, reason: string) {
+      const res = await importProject(h, snap, blobs, pixels, undefined, lastDigest);
+      expect(res).toMatchObject({ status: "refused", reason });
+      expect(await countStores()).toEqual({ versions: 0, images: 0, masks: 0 });
+      expect(await h.db.count("projects")).toBe(0);
+    }
+
+    it("a missing image file", async () => {
+      const { folder } = await emptyFolder();
+      const blobs = new Map(folder.blobs);
+      blobs.delete((folder.snapshot as Snap).images[0]!.id);
+      await expectRefused(folder.snapshot, blobs, folder.pixels, "missing_image");
+    });
+    it("a wrong blob size", async () => {
+      const { folder } = await emptyFolder();
+      const blobs = new Map(folder.blobs);
+      blobs.set((folder.snapshot as Snap).images[0]!.id, new Blob([new Uint8Array(3)]));
+      await expectRefused(folder.snapshot, blobs, folder.pixels, "bad_image");
+    });
+    it("a missing mask file", async () => {
+      const { folder } = await emptyFolder();
+      const pixels = new Map(folder.pixels);
+      pixels.delete((folder.snapshot as Snap).masks[0]!.id);
+      await expectRefused(folder.snapshot, folder.blobs, pixels, "missing_mask");
+    });
+    it("a mask with the wrong length", async () => {
+      const { folder } = await emptyFolder();
+      const pixels = new Map(folder.pixels);
+      pixels.set((folder.snapshot as Snap).masks[0]!.id, new Uint8Array(5));
+      await expectRefused(folder.snapshot, folder.blobs, pixels, "bad_mask");
+    });
+    it("a mask byte of 2", async () => {
+      const { folder } = await emptyFolder();
+      const pixels = new Map(folder.pixels);
+      const id = (folder.snapshot as Snap).masks[0]!.id;
+      const bad = new Uint8Array(pixels.get(id)!);
+      bad[3] = 2;
+      pixels.set(id, bad);
+      await expectRefused(folder.snapshot, folder.blobs, pixels, "bad_mask");
+    });
+    it("a mask not listed in the snapshot", async () => {
+      const { folder } = await emptyFolder();
+      const snap = clone(folder.snapshot) as Snap;
+      snap.masks = snap.masks.slice(1);
+      await expectRefused(snap, folder.blobs, folder.pixels, "missing_mask");
+    });
+    it("an image or mask that no version uses", async () => {
+      const { folder } = await emptyFolder();
+      const extraImage = clone(folder.snapshot) as Snap & { images: { id: string; file: string }[] };
+      extraImage.images.push({ ...extraImage.images[0]!, id: uuid(), file: "99-extra.webp" });
+      const blobs = new Map(folder.blobs);
+      blobs.set(extraImage.images[extraImage.images.length - 1]!.id, folder.blobs.get(extraImage.images[0]!.id)!);
+      await expectRefused(extraImage, blobs, folder.pixels, "invalid_snapshot");
+      const extraMask = clone(folder.snapshot) as Snap & { masks: { id: string }[] };
+      const id = uuid();
+      extraMask.masks.push({ ...extraMask.masks[0]!, id });
+      const pixels = new Map(folder.pixels);
+      pixels.set(id, folder.pixels.get(extraMask.masks[0]!.id)!);
+      await expectRefused(extraMask, folder.blobs, pixels, "invalid_snapshot");
+    });
+    it("same-size bytes that do not match the saved hash, with the real sha256", async () => {
+      const { folder } = await emptyFolder();
+      // Rewrite every fake fixture hash to the real sha256 of its blob, consistently across the JSON.
+      let text = JSON.stringify(folder.snapshot);
+      for (const img of (folder.snapshot as { images: { id: string; hash: string }[] }).images) {
+        const bytes = new Uint8Array(await folder.blobs.get(img.id)!.arrayBuffer());
+        const real = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), (b) => b.toString(16).padStart(2, "0")).join("");
+        text = text.split(img.hash).join(real);
+      }
+      const snap = JSON.parse(text) as Snap & { images: { id: string }[] };
+      const first = snap.images[0]!.id;
+      const original = folder.blobs.get(first)!;
+      const damaged = new Blob([new Uint8Array(original.size).fill(7)]);
+      const blobs = new Map(folder.blobs);
+      blobs.set(first, damaged);
+      await expectRefused(snap, blobs, folder.pixels, "bad_image");
+      // The untouched files import with the default (real) digest.
+      expect((await importProject(h, snap, folder.blobs, folder.pixels)).status).toBe("imported");
+    });
+    it("a cycle", async () => {
+      const { folder } = await emptyFolder();
+      const snap = clone(folder.snapshot) as Snap;
+      const leaf = snap.versions.find((v) => v.kind === "sheet")!;
+      const parent = snap.versions.find((v) => v.id === leaf.parentId)!;
+      const grand = snap.versions.find((v) => v.id === parent.parentId)!;
+      grand.parentId = leaf.id; // leaf -> parent -> grand -> leaf
+      await expectRefused(snap, folder.blobs, folder.pixels, "invalid_history");
+    });
+    it("a foreign root", async () => {
+      const { folder } = await emptyFolder();
+      const snap = clone(folder.snapshot) as Snap;
+      snap.project.rootVersionId = uuid();
+      await expectRefused(snap, folder.blobs, folder.pixels, "invalid_history");
+    });
+    it("a head outside the project", async () => {
+      const { folder } = await emptyFolder();
+      const snap = clone(folder.snapshot) as Snap;
+      snap.project.headVersionId = uuid();
+      await expectRefused(snap, folder.blobs, folder.pixels, "invalid_history");
+    });
+    it("a version of another project", async () => {
+      const { folder } = await emptyFolder();
+      const snap = clone(folder.snapshot) as Snap;
+      snap.versions[0]!.projectId = uuid();
+      await expectRefused(snap, folder.blobs, folder.pixels, "invalid_history");
+    });
+    it("an invalid or unknown-version snapshot", async () => {
+      const { folder } = await emptyFolder();
+      await expectRefused({ ...(folder.snapshot as object), formatVersion: 2 }, folder.blobs, folder.pixels, "invalid_snapshot");
+      await expectRefused({ ...(folder.snapshot as object), extra: 1 }, folder.blobs, folder.pixels, "invalid_snapshot");
+      await expectRefused(null, folder.blobs, folder.pixels, "invalid_snapshot");
+      const snap = clone(folder.snapshot) as Snap & { images: { file: string }[] };
+      snap.images[0]!.file = "../evil.webp";
+      await expectRefused(snap, folder.blobs, folder.pixels, "invalid_snapshot");
+      snap.images[0]!.file = "a/b.webp";
+      await expectRefused(snap, folder.blobs, folder.pixels, "invalid_snapshot");
+    });
+  });
+
+  it("a failure inside the transaction leaves nothing behind", async () => {
+    const r = await richProject();
+    const folder = await folderOf(r.project.id);
+    await deleteProject(h, r.project.id);
+    // Keep another project so the ledger is not zero, then try again with a tiny target.
+    const keep = await createProject(h, makeProject("f"));
+    const before = { counts: await countStores(), ledger: await ledgerOf(), projects: await h.db.count("projects") };
+    const small = await openDreamDb({ targetBytes: 5 });
+    try {
+      await expect(importProject(small, folder.snapshot, folder.blobs, folder.pixels, undefined, folder.digest)).rejects.toMatchObject({ code: "STORAGE_FULL" });
+    } finally {
+      closeDreamDb(small);
+    }
+    expect({ counts: await countStores(), ledger: await ledgerOf(), projects: await h.db.count("projects") }).toEqual(before);
+    expect(await loadProject(h, r.project.id)).toBeNull();
+    expect(await loadProject(h, keep.project.id)).not.toBeNull();
+  });
+});
+
+describe("openDreamDb failures", () => {
+  it("keeps the original error name in the message", async () => {
+    const err = Object.assign(new Error("Connection to Indexed Database server lost."), { name: "UnknownError" });
+    const real = indexedDB.open.bind(indexedDB);
+    vi.spyOn(indexedDB, "open").mockImplementation(() => { throw err; });
+    await expect(openDreamDb()).rejects.toSatisfy((e: unknown) =>
+      e instanceof StorageUnavailableError && e.message.includes("UnknownError: Connection to Indexed Database server lost."));
+    vi.restoreAllMocks();
+    expect(real).toBeTypeOf("function");
   });
 });

@@ -190,6 +190,35 @@ export const Project = z.object({
   settingsId: Short, createdAt: z.number().int().min(0), updatedAt: z.number().int().min(0),
 }).strict();
 
+// ------------------------------------------- project.json snapshot (SPEC 9, OF1)
+// What "Save project to folder" writes next to the images and what "Open project from folder"
+// validates before it writes anything. Images and masks are referenced by file name only.
+
+export const MAX_SNAPSHOT_VERSIONS = 500;
+export const MAX_SNAPSHOT_IMAGES = 1000; // version images plus cutouts
+export const MAX_SNAPSHOT_MASKS = 5000;
+
+/** A plain file name: no slash, no backslash, no "..", no control characters. */
+const SnapshotFileName = z.string().min(1).max(200)
+  .regex(/^[^/\\\u0000-\u001F]+$/, "file must be a plain file name")
+  .refine((f) => !f.includes("..") && f !== ".", "file must not contain '..'");
+
+export const SnapshotImage = ImageRef.extend({ file: SnapshotFileName }).strict();
+
+/** A mask without its pixels; the bytes live in masks/<id>.bin (one byte per pixel, 0 or 1). */
+export const SnapshotMask = z.object({
+  id: Id, imageHash: Hash, width: Dimension, height: Dimension,
+  createdAt: z.number().int().min(0), file: SnapshotFileName,
+}).strict().refine((m) => m.file === `${m.id}.bin`, { message: "mask file must be '<id>.bin'", path: ["file"] });
+
+export const ProjectSnapshot = z.object({
+  formatVersion: z.literal(1),
+  project: Project,
+  versions: z.array(Version).min(1).max(MAX_SNAPSHOT_VERSIONS),
+  images: z.array(SnapshotImage).max(MAX_SNAPSHOT_IMAGES),
+  masks: z.array(SnapshotMask).max(MAX_SNAPSHOT_MASKS),
+}).strict();
+
 export const CacheEntry = z.object({
   key: z.string().min(1).max(500), blobIds: z.array(Id).max(20), value: z.unknown(),
   bytes: z.number().int().min(0), createdAt: z.number().int().min(0),

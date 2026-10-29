@@ -16,14 +16,14 @@ import { z } from "zod";
 import {
   BikeRevision as BikeRevisionSchema, Project as ProjectSchema,
   Settings, StoredImage as StoredImageSchema, StoredMask as StoredMaskSchema,
-  Part as PartSchema, Version as VersionSchema,
+  Part as PartSchema, ProjectSnapshot as ProjectSnapshotSchema, Version as VersionSchema,
 } from "./contracts";
 import { adjustLedger, cleanupSafeCache, collectReferences, dropCacheForRemovedBlobs, evictTransient, readLedger, ledgerTotal } from "./cache";
 import { AppError } from "./errors";
 import { children, pathToRoot, undoTarget } from "./project";
 import type {
-  BikeRevision, CacheEntry, MetaRecordData, Part, Project, ShopSettings, StoredImage, StoredMask,
-  Version,
+  BikeRevision, CacheEntry, ImageRef, MaskMeta, MetaRecordData, Part, Project, ProjectSnapshot, ShopSettings,
+  StoredImage, StoredMask, Version,
 } from "./types";
 
 export const DB_NAME = "dreambike";
@@ -184,10 +184,10 @@ export async function openDreamDb(opts: { targetBytes?: number } = {}): Promise<
           readOnlyReason: `Local storage was written by a newer DreamBike (database version ${db.version}).`,
         };
       } catch (e2) {
-        throw new StorageUnavailableError(errText(e2));
+        throw new StorageUnavailableError(errWithName(e2));
       }
     }
-    throw new StorageUnavailableError(errText(e));
+    throw new StorageUnavailableError(errWithName(e));
   }
 }
 
@@ -198,6 +198,13 @@ export function closeDreamDb(h: DreamDb): void {
 
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/** "UnknownError: message": the browser's error name (for example Safari's UnknownError) is kept so the UI can show it. */
+function errWithName(e: unknown): string {
+  const name = (e as { name?: unknown } | null)?.name;
+  const msg = errText(e);
+  return typeof name === "string" && name !== "" && name !== "Error" && !msg.startsWith(name) ? `${name}: ${msg}` : msg;
 }
 
 // ------------------------------------------------------ transactions + parse
@@ -301,6 +308,11 @@ export async function loadProject(h: DreamDb, projectId: string): Promise<Loaded
   if (!rawProject) return null;
   const rawVersions = await tx.objectStore("versions").index("projectId").getAll(projectId);
   await tx.done;
+  return validateLoaded(rawProject, rawVersions, projectId);
+}
+
+/** Parse a project and its versions as stored and check that the tree is whole. */
+function validateLoaded(rawProject: unknown, rawVersions: unknown[], projectId: string): LoadedProject {
   const project = parseRecord(ProjectSchema, rawProject, "project", projectId);
   const versions = rawVersions.map((v) =>
     parseRecord(VersionSchema, v, "version", String((v as { id?: unknown }).id ?? "?")));
@@ -313,6 +325,45 @@ export async function loadProject(h: DreamDb, projectId: string): Promise<Loaded
     throw new CorruptRecordError("project", projectId, `its head does not lead back to the root (${errText(e)})`);
   }
   return { project, versions };
+}
+
+export type SnapshotSources = LoadedProject & { cutouts: ImageRef[]; masks: MaskMeta[] };
+
+/**
+ * Everything projectSnapshot needs, read in ONE readonly transaction from the stored records
+ * (not from React state): project, versions, the stored cutout image refs and mask metadata.
+ * A cutout or mask that is not stored is simply absent; projectSnapshot then reports incomplete.
+ */
+export async function snapshotSources(h: DreamDb, projectId: string): Promise<SnapshotSources | null> {
+  assertOpen(h);
+  const tx = h.db.transaction(["projects", "versions", "images", "masks"], "readonly");
+  const rawProject = await tx.objectStore("projects").get(projectId);
+  if (!rawProject) return null;
+  const rawVersions = await tx.objectStore("versions").index("projectId").getAll(projectId);
+  const loaded = validateLoaded(rawProject, rawVersions, projectId);
+  const cutoutIds = new Set<string>();
+  const maskIds = new Set<string>();
+  for (const v of loaded.versions) {
+    if (v.cutoutImageId) cutoutIds.add(v.cutoutImageId);
+    if (v.bikeMaskId) maskIds.add(v.bikeMaskId);
+    for (const p of v.parts) maskIds.add(p.maskId);
+  }
+  const cutouts: ImageRef[] = [];
+  for (const id of cutoutIds) {
+    const raw = await tx.objectStore("images").get(id);
+    if (!raw) continue;
+    const img = parseRecord(StoredImageSchema, raw, "image", id);
+    cutouts.push({ id: img.id, hash: img.hash, width: img.width, height: img.height, bytes: img.bytes, rights: img.rights });
+  }
+  const masks: MaskMeta[] = [];
+  for (const id of maskIds) {
+    const raw = await tx.objectStore("masks").get(id);
+    if (!raw) continue;
+    const m = parseRecord(StoredMaskSchema, raw, "mask", id);
+    masks.push({ id: m.id, imageHash: m.imageHash, width: m.width, height: m.height, createdAt: m.createdAt });
+  }
+  await tx.done;
+  return { ...loaded, cutouts, masks };
 }
 
 export async function getStoredImage(h: DreamDb, id: string): Promise<StoredImage | null> {
@@ -867,4 +918,152 @@ export async function deleteProject(h: DreamDb, projectId: string): Promise<bool
     if (last?.value === projectId) await tx.objectStore("meta").put({ key: "lastOpenProject", value: null });
     return true;
   });
+}
+
+// ------------------------------------------------------------ import project
+
+export type ImportRefusal =
+  | "invalid_snapshot" | "project_exists" | "version_exists" | "invalid_history"
+  | "missing_image" | "bad_image" | "missing_mask" | "bad_mask" | "inconsistent";
+export type ImportResult =
+  | { status: "imported"; project: Project; versions: Version[] }
+  | { status: "refused"; reason: ImportRefusal; message: string };
+
+const refuse = (reason: ImportRefusal, message: string): ImportResult => ({ status: "refused", reason, message });
+
+/** Pure checks of the snapshot against the loaded files; the first problem found is returned. */
+function checkSnapshot(
+  snap: ProjectSnapshot, blobsById: ReadonlyMap<string, Blob>, maskPixelsById: ReadonlyMap<string, Uint8Array>,
+): ImportResult | null {
+  const { project, versions } = snap;
+  const ids = new Set(versions.map((v) => v.id));
+  if (ids.size !== versions.length) return refuse("invalid_history", "Two versions share the same id.");
+  const roots = versions.filter((v) => v.parentId === null);
+  if (roots.length !== 1 || roots[0]?.id !== project.rootVersionId) {
+    return refuse("invalid_history", "The history must have exactly one root, and it must be the project's root.");
+  }
+  if (versions.some((v) => v.projectId !== project.id)) {
+    return refuse("invalid_history", "A version belongs to a different project.");
+  }
+  if (!ids.has(project.headVersionId)) return refuse("invalid_history", "The head is not a version of this project.");
+  for (const v of versions) {
+    let path: Version[];
+    try { path = pathToRoot(versions, v.id); } catch (e) { return refuse("invalid_history", errText(e)); }
+    if (path[path.length - 1]?.id !== project.rootVersionId) return refuse("invalid_history", "A version does not lead back to the root.");
+  }
+
+  const imageById = new Map(snap.images.map((i) => [i.id, i]));
+  if (imageById.size !== snap.images.length) return refuse("invalid_snapshot", "An image is listed twice.");
+  const maskById = new Map(snap.masks.map((m) => [m.id, m]));
+  if (maskById.size !== snap.masks.length) return refuse("invalid_snapshot", "A mask is listed twice.");
+
+  if (new Set(snap.images.map((i) => i.file)).size !== snap.images.length) return refuse("invalid_snapshot", "Two images share one file name.");
+  // No unreferenced extras: nothing could free them later (deleteProject follows versions only).
+  const usedImages = new Set(versions.flatMap((v) => (v.cutoutImageId ? [v.image.id, v.cutoutImageId] : [v.image.id])));
+  const usedMasks = new Set(versions.flatMap((v) => [...v.parts.map((p) => p.maskId), ...(v.bikeMaskId ? [v.bikeMaskId] : [])]));
+  if (snap.images.some((i) => !usedImages.has(i.id))) return refuse("invalid_snapshot", "An image is listed that no version uses.");
+  if (snap.masks.some((m) => !usedMasks.has(m.id))) return refuse("invalid_snapshot", "A mask is listed that no version uses.");
+
+  for (const img of snap.images) {
+    if (img.rights === "external_runtime") return refuse("invalid_snapshot", "Images from the web are never part of a saved project.");
+    const blob = blobsById.get(img.id);
+    if (!blob) return refuse("missing_image", `The file ${img.file} is missing.`);
+    if (blob.size !== img.bytes) return refuse("bad_image", `The file ${img.file} has the wrong size.`);
+  }
+  for (const v of versions) {
+    const ref = imageById.get(v.image.id);
+    if (!ref || ref.hash !== v.image.hash || ref.width !== v.image.width || ref.height !== v.image.height ||
+      ref.bytes !== v.image.bytes || ref.rights !== v.image.rights) {
+      return refuse("missing_image", `The picture of version ${v.id} is not listed correctly.`);
+    }
+    if (v.cutoutImageId) {
+      const cut = imageById.get(v.cutoutImageId);
+      if (!cut) return refuse("missing_image", `The cutout image ${v.cutoutImageId} is not listed.`);
+      if (cut.width !== v.image.width || cut.height !== v.image.height) return refuse("bad_image", "A cutout has the wrong size.");
+    }
+    const wanted = [...v.parts.map((p) => p.maskId), ...(v.bikeMaskId ? [v.bikeMaskId] : [])];
+    for (const id of wanted) if (!maskById.has(id)) return refuse("missing_mask", `Mask ${id} is not listed.`);
+  }
+  for (const m of snap.masks) {
+    const pixels = maskPixelsById.get(m.id);
+    if (!pixels) return refuse("missing_mask", `The file masks/${m.file} is missing.`);
+    // Same rules as the stored mask: exact length and only 0 or 1.
+    if (!StoredMaskSchema.safeParse({ id: m.id, imageHash: m.imageHash, width: m.width, height: m.height, pixels, createdAt: m.createdAt }).success) {
+      return refuse("bad_mask", `The file masks/${m.file} is not a valid mask for ${m.width}x${m.height} pixels.`);
+    }
+  }
+  return null;
+}
+
+async function sha256Hex(blob: Blob): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Restore a project from a validated folder snapshot, atomically (OF1). Refusals write nothing.
+ * Precondition for the reader (U1): image width/height are NOT decoded here; readProjectFolder must
+ * decode each file and refuse a mismatch with the listed width/height. Size and sha256 are checked here.
+ * Inside ONE tx: images (deduped by hash, so ids are remapped to what the store returns), masks,
+ * versions, project, mask checks, storage target. Any failure aborts and leaves the store as it was.
+ */
+export async function importProject(
+  h: DreamDb, snapshot: unknown, blobsById: ReadonlyMap<string, Blob>,
+  maskPixelsById: ReadonlyMap<string, Uint8Array>, now: number = Date.now(),
+  digest: (blob: Blob) => Promise<string> = sha256Hex, // injectable so fixtures with fake hashes can run
+): Promise<ImportResult> {
+  assertWritable(h);
+  const parsed = ProjectSnapshotSchema.safeParse(snapshot);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    return refuse("invalid_snapshot", `project.json is not valid: ${issue?.path.join(".") ?? ""} ${issue?.message ?? ""}`.trim());
+  }
+  const snap = parsed.data;
+  const refused = checkSnapshot(snap, blobsById, maskPixelsById);
+  if (refused) return refused;
+  // Hash check before the transaction (digest is async and must not run inside IDB).
+  for (const img of snap.images) {
+    const blob = blobsById.get(img.id);
+    if (blob && (await digest(blob)).toLowerCase() !== img.hash.toLowerCase()) {
+      return refuse("bad_image", `The file ${img.file} does not match its saved hash.`);
+    }
+  }
+
+  try {
+    return await writeTx<ImportResult>(h, async (tx) => {
+      if (await tx.objectStore("projects").get(snap.project.id)) {
+        return refuse("project_exists", "This project is already in this browser.");
+      }
+      // A put would silently overwrite another project's version with the same id.
+      for (const v of snap.versions) {
+        if (await tx.objectStore("versions").get(v.id)) return refuse("version_exists", `Version ${v.id} already exists in this browser.`);
+      }
+      const newId = new Map<string, string>();
+      for (const img of snap.images) {
+        const blob = blobsById.get(img.id);
+        if (!blob) throw new InvalidWriteError(`Image ${img.id} has no file.`);
+        const ref: ImageRef = { id: img.id, hash: img.hash, width: img.width, height: img.height, bytes: img.bytes, rights: img.rights };
+        newId.set(img.id, await putImageDeduped(tx, { ...ref, blob, lastAccessedAt: now }));
+      }
+      for (const m of snap.masks) {
+        const pixels = maskPixelsById.get(m.id);
+        if (!pixels) throw new InvalidWriteError(`Mask ${m.id} has no file.`);
+        await putMaskOnce(tx, { id: m.id, imageHash: m.imageHash, width: m.width, height: m.height, pixels: new Uint8Array(pixels), createdAt: m.createdAt });
+      }
+      const stored: Version[] = snap.versions.map((v) => ({
+        ...v,
+        image: { ...v.image, id: newId.get(v.image.id) ?? v.image.id },
+        cutoutImageId: v.cutoutImageId ? (newId.get(v.cutoutImageId) ?? v.cutoutImageId) : null,
+      }));
+      for (const v of stored) await tx.objectStore("versions").put(v);
+      await tx.objectStore("projects").put(snap.project);
+      for (const v of stored) await checkMaskReferences(tx, v);
+      await enforceTarget(tx, h);
+      return { status: "imported", project: snap.project, versions: stored };
+    });
+  } catch (e) {
+    // A history rule broken by the files (for example a mask for another image): nothing was written.
+    if (e instanceof InvalidWriteError) return refuse("inconsistent", e.message);
+    throw e;
+  }
 }
