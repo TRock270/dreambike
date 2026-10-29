@@ -18,7 +18,7 @@ import { requestEdit, type Composited, type Generated } from "@/lib/browser/rend
 import { blend } from "@/lib/browser/renderFlow";
 import {
   acceptEdit, cachedIdentify, closeStorage, createFromPhoto, headVersion, identifyForPhoto, jumpToVersion, newAcceptIds,
-  openProject, openStorage, persistPartMap, redoHead, saveBike, saveErrorText, undoHead,
+  openProject, openStorage, persistPartMap, redoHead, saveBike, saveErrorText, saveSheet, undoHead,
   type AcceptIds, type HeadView, type NavOutcome, type ProjectSession, type StorageState,
 } from "@/lib/browser/projectSession";
 import { requestInstruction } from "@/lib/browser/sparkClient";
@@ -29,6 +29,7 @@ import { slotInfo } from "@/lib/slots";
 import type { BinaryMask, InstructionData, NormalizedPhoto, SlotId, Version } from "@/lib/types";
 import { AppShell } from "./AppShell";
 import { BikeConfirm } from "./BikeConfirm";
+import { BuildSheet, type SheetChange, type SheetSaveResult } from "./BuildSheet";
 import { DescribeForm } from "./DescribeForm";
 import { EditReview, type RenderState } from "./EditReview";
 import { ImageCanvas } from "./ImageCanvas";
@@ -115,6 +116,11 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
   // Which right-panel sections are open. Session only; every section starts open.
   const [fold, setFold] = useState<Record<FoldKey, boolean>>({ bike: true, parts: true, change: true, project: true });
   const setFolded = (key: FoldKey, open: boolean) => setFold((f) => (f[key] === open ? f : { ...f, [key]: open }));
+  // The Build sheet panel replaces the edit folds while it is open. The folds stay mounted (hidden),
+  // so fold states and what the mechanic typed in the edit forms survive.
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [sheetSaving, setSheetSaving] = useState(false);
+  const sheetBusy = useRef(false); // second guard next to the disabled buttons
   const [prefill, setPrefill] = useState<{ selectionKey: string; text: string } | null>(null);
 
   // One render belongs to one prepared instruction; the cached generation is the resume point.
@@ -433,6 +439,7 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
   async function choosePhoto(next: NormalizedPhoto | null) {
     const token = ++importToken.current;
     resetWork();
+    setSheetOpen(false); // closing the panel also drops its unsaved drafts (BuildSheet unmounts)
     setStaleNotice(null);
     setNavNote(null);
     setSaveNote(null);
@@ -517,6 +524,7 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
       let form = bikeFormFromRevision(opened.session.project.bikeRevision);
       if (cached) form = applySuggestion(form, cached.bike);
       if (token !== importToken.current) return; // another open or import started while this one was loading
+      setSheetOpen(false);
       setStaleNotice(null);
       setNavNote(null);
       setSaveNote(null);
@@ -551,7 +559,7 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
   // ---- undo, redo, and jumping to a saved step
   async function navigate(run: (h: DreamDb, s: ProjectSession) => Promise<NavOutcome>) {
     const ready = readyStorage();
-    if (!ready || !sessionRef.current || navBusy) return;
+    if (!ready || !sessionRef.current || navBusy || sheetBusy.current) return;
     const hadPreview = render !== null;
     setNavBusy(true);
     setNavNote(null);
@@ -574,6 +582,40 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
       setNavNote(`That step could not be shown: ${saveErrorText(e)} The project is unchanged.`);
     } finally {
       setNavBusy(false);
+    }
+  }
+
+  // ---- build sheet: a saved edit or removal becomes a new "sheet" step on the same photo
+  async function saveSheetChange(change: SheetChange): Promise<SheetSaveResult> {
+    if (sheetBusy.current) return { ok: false, message: "A sheet save is already running." };
+    const ready = readyStorage();
+    if (!ready || ready.readOnly) return { ok: false, message: "Local storage cannot be written, so nothing was saved." };
+    sheetBusy.current = true;
+    setSheetSaving(true);
+    try {
+      // A part save after detection may still be writing; wait so the session is current (as navigate does).
+      await persistChain.current;
+      const cur = sessionRef.current;
+      if (!cur) return { ok: false, message: "There is no saved project, so nothing was saved." };
+      if (cur.project.headVersionId !== change.headId) {
+        return { ok: false, message: "The project moved to a different version, so this sheet change was not saved. Close the form and try again." };
+      }
+      const out = await saveSheet(ready.h, cur, {
+        ref: { projectId: cur.project.id, expectedHeadId: change.headId },
+        versionId: change.versionId, items: change.items, fees: change.fees,
+      });
+      if (out.status === "refused") return { ok: false, message: out.message };
+      if (out.status === "unchanged") return { ok: true, unchanged: true };
+      // Only the session changes: the photo, parts and part map stay as they are.
+      if (sessionRef.current?.project.id === out.session.project.id) setSession(out.session);
+      // Same background folder save as after an accepted visual change; never awaited.
+      if (folderHandleRef.current) void requestFolderSave(folderHandleRef.current, true);
+      return { ok: true, unchanged: false };
+    } catch (e) {
+      return { ok: false, message: `The sheet change could not be saved: ${saveErrorText(e)} The project is unchanged. You can try again.` };
+    } finally {
+      sheetBusy.current = false;
+      setSheetSaving(false);
     }
   }
 
@@ -621,7 +663,7 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
 
   /** A finished drag: the rectangle is the part. Nothing is sent anywhere. */
   function handleBox(box: [number, number, number, number]) {
-    if (!photo || !boxMode) return;
+    if (!photo || !boxMode || sheetOpen) return;
     if (map.imageHash !== photo.hash) return; // the part map belongs to another photo
     const part = boxPart(boxMode.slot, boxMode.label, box, photo.hash, photo.width, photo.height, boxMode.absent);
     if (!part) { setNotice("That box is too small or outside the photo. Drag a larger box."); return; }
@@ -659,7 +701,7 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
   }, [boxMode]);
 
   async function handleClick(point: ImagePoint) {
-    if (!photo) return;
+    if (!photo || sheetOpen) return; // the photo does not take clicks while the sheet is open
     if (Date.now() - boxEndedAt.current < 400) return; // the click that follows a box drag
     setNotice(null);
     if (!pointMode) {
@@ -950,7 +992,16 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
   const redoKids = session && head ? children(session.versions, head.id) : [];
   const projectName = session?.project.name ?? (photo ? "Unsaved photo" : null);
   const saveStatus = !photo ? null : !session ? "Not saved" : readOnly ? "Read-only: changes are not saved" : "Saved on this device";
-  const busy = navBusy || renderRunning || accept.saving || pointBusy;
+  const busy = navBusy || renderRunning || accept.saving || pointBusy || sheetSaving;
+  // Build sheet: why it is read-only (permanent), and why saving waits (temporary).
+  const sheetReason = !photo ? "Open or import a photo first. Its sheet shows here."
+    : storage?.status === "unavailable" ? "Local storage is not available, so the sheet is read-only."
+    : readOnly ? "Local storage is read-only, so the sheet is read-only."
+    : !session ? "This photo is not saved as a project yet, so there is no sheet to change."
+    : null;
+  const sheetBlocked = renderRunning || prepared?.state === "busy" || renderEntry !== null
+    ? "Accept or reject the preview first."
+    : navBusy || accept.saving || pointBusy ? "Wait until the current step change has finished." : null;
   // Folder block of the Project fold.
   const folderReason = !photo ? "Open or import a photo first."
     : storage?.status === "unavailable" ? "Local storage is not available, so there is no saved project to export."
@@ -1010,13 +1061,14 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
       canUndo={!!head && head.parentId !== null && !readOnly} canRedo={redoKids.length > 0 && !readOnly}
       undoHint={readOnly ? "Local storage is read-only" : undefined} redoHint={readOnly ? "Local storage is read-only" : undefined}
       onUndo={() => void navigate((h, s) => undoHead(h, s))}
-      onRedo={() => void navigate((h, s) => redoHead(h, s))}>
+      onRedo={() => void navigate((h, s) => redoHead(h, s))}
+      sheetOpen={sheetOpen} onToggleSheet={() => setSheetOpen((o) => !o)}>
       <main className="flex min-h-0 flex-1 gap-4 p-4">
         <div className="flex min-h-0 min-w-0 flex-[2] flex-col gap-4 overflow-y-auto">
           {/* The photo takes the height History leaves; without a photo the notice scrolls here instead of being cut off. */}
-          <section aria-label="Photo" className={`flex flex-col rounded-card border border-hairline bg-recess p-4 ${photo ? "min-h-[300px] flex-1" : "min-h-0 flex-1 overflow-y-auto"}`}>
+          <section aria-label="Photo" inert={sheetOpen} className={`flex flex-col rounded-card border border-hairline bg-recess p-4 ${photo ? "min-h-[300px] flex-1" : "min-h-0 flex-1 overflow-y-auto"}`}>
             {photo ? (
-              <ImageCanvas photo={photo} parts={view.parts} selectedId={selectedId} onImageClick={handleClick} boxMode={boxMode !== null} onBox={handleBox}
+              <ImageCanvas photo={photo} parts={view.parts} selectedId={selectedId} onImageClick={handleClick} boxMode={boxMode !== null && !sheetOpen} onBox={handleBox}
                 cursor={pointMode ? "crosshair" : "default"} />
             ) : <div className="m-auto">{noticeAccepted ? <UploadDropzone onPhoto={(p) => void choosePhoto(p)} />
               : <UploadNotice onAccept={() => setNoticeAccepted(true)} />}</div>}
@@ -1043,7 +1095,14 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
               onCancelChoice={() => setBranchChoices(null)} />
           )}
         </div>
-        <aside aria-label="Edit panel" className="flex min-h-0 w-[360px] shrink-0 flex-col gap-4 overflow-y-auto rounded-card border border-hairline bg-surface-1 p-4">
+        <aside aria-label={sheetOpen ? "Build sheet panel" : "Edit panel"}
+          className={`flex min-h-0 shrink-0 flex-col gap-4 overflow-y-auto rounded-card border border-hairline bg-surface-1 p-4 ${sheetOpen ? "w-1/2" : "w-[360px]"}`}>
+          {sheetOpen && (
+            <BuildSheet head={session && head ? head : null} readOnlyReason={sheetReason} blockedReason={sheetBlocked}
+              saving={sheetSaving} onSave={saveSheetChange} onClose={() => setSheetOpen(false)} />
+          )}
+          {/* "contents" keeps the folds in the same flex column; "hidden" keeps them mounted but out of sight and out of tab order. */}
+          <div className={sheetOpen ? "hidden" : "contents"}>
           <h2 className="text-[20px] leading-[1.35]">Edit</h2>
           {!photo && (
             <>
@@ -1182,13 +1241,14 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
               )}
               <Fold title="Project" open={fold.project} onToggle={(o) => setFolded("project", o)} className="border-t border-hairline pt-3">
                 {folderBlock}
-                <button type="button" onClick={() => void choosePhoto(null)} disabled={pointBusy || renderRunning || accept.saving}
+                <button type="button" onClick={() => void choosePhoto(null)} disabled={pointBusy || renderRunning || accept.saving || sheetSaving}
                   className="self-start rounded-full border border-hairline px-4 py-1.5 text-[13px] disabled:opacity-50">
                   Close project
                 </button>
               </Fold>
             </>
           )}
+          </div>
         </aside>
       </main>
     </AppShell>

@@ -1,6 +1,6 @@
 "use client";
 
-import { activeItems, children, laterSteps, pathFromRoot } from "@/lib/project";
+import { activeItems, children, laterSteps, pathFromRoot, sheetChangeLabel } from "@/lib/project";
 import { slotInfo } from "@/lib/slots";
 import type { Version } from "@/lib/types";
 
@@ -16,7 +16,12 @@ type Props = {
 };
 
 /** Short text for one step, e.g. "Fork: Matte black fork". */
-function stepLabel(v: Version): string {
+function stepLabel(v: Version, versions: Version[]): string {
+  if (v.kind === "sheet") {
+    // A sheet step has no photo change; its text comes from comparing it with its parent.
+    const parent = versions.find((p) => p.id === v.parentId);
+    return parent ? `Sheet: ${sheetChangeLabel(parent, v)}` : "Sheet change";
+  }
   if (v.kind === "root" || !v.change) return "Start photo";
   return `${slotInfo(v.change.slot).label}: ${v.change.instruction}`;
 }
@@ -54,13 +59,13 @@ export function VersionStrip({ versions, headId, branchChoices, disabled, onJump
             <li key={v.id}>
               <button type="button" disabled={disabled || current} aria-current={current ? "step" : undefined}
                 onClick={() => onJump(v.id)}
-                aria-label={`${current ? "Current step" : "Go to step"} ${i}: ${stepLabel(v)}`}
+                aria-label={`${current ? "Current step" : "Go to step"} ${i}: ${stepLabel(v, versions)}`}
                 className={`flex max-w-[220px] flex-col items-start rounded-chip border px-3 py-1.5 text-left text-[12px] ${current ? "border-hairline bg-primary-soft text-primary-soft-text" : "border-hairline bg-surface-2"}`}>
                 <span className="font-semibold">
                   <span aria-hidden="true" className="mr-1">{current ? "●" : "○"}</span>
                   {i === 0 ? "Start" : `Step ${i}`}{current ? " (shown now)" : ""}
                 </span>
-                <span className="max-w-full truncate">{stepLabel(v)}</span>
+                <span className="max-w-full truncate">{stepLabel(v, versions)}</span>
                 {v.kind === "visual" && !v.composed && (
                   <span className="text-warning-soft-text"><span aria-hidden="true">⚠</span> Full image, not blended</span>
                 )}
@@ -75,13 +80,13 @@ export function VersionStrip({ versions, headId, branchChoices, disabled, onJump
           return (
             <li key={v.id}>
               <button type="button" disabled={disabled} onClick={() => onJump(v.id)}
-                aria-label={`Go to later step ${n}: ${stepLabel(v)}`}
+                aria-label={`Go to later step ${n}: ${stepLabel(v, versions)}`}
                 className="flex max-w-[220px] flex-col items-start rounded-chip border border-dashed border-hairline bg-surface-1 px-3 py-1.5 text-left text-[12px] text-text-muted">
                 <span className="font-semibold">
                   <span aria-hidden="true" className="mr-1">◌</span>
                   {`Step ${n} (later)`}
                 </span>
-                <span className="max-w-full truncate">{stepLabel(v)}</span>
+                <span className="max-w-full truncate">{stepLabel(v, versions)}</span>
                 {others > 0 && <span className="tabular">{`+${others} other ${others === 1 ? "branch" : "branches"}`}</span>}
               </button>
             </li>
@@ -97,7 +102,7 @@ export function VersionStrip({ versions, headId, branchChoices, disabled, onJump
               <li key={c.id}>
                 <button type="button" disabled={disabled} onClick={() => onChooseBranch(c.id)}
                   className="rounded-full border border-hairline bg-surface-3 px-3 py-1 text-left text-text">
-                  {stepLabel(c)}
+                  {stepLabel(c, versions)}
                   {/* Two variants can share a title; the time tells them apart. */}
                   <span className="tabular ml-2 text-text-muted text-[12px]">accepted {new Date(c.createdAt).toLocaleTimeString()}</span>
                 </button>

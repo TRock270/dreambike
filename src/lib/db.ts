@@ -565,6 +565,53 @@ export async function acceptVisual(
   });
 }
 
+// ------------------------------------------------------------- accept sheet
+
+/**
+ * Accept a sheet-only version (items/fees changed, same picture). Same guards as acceptVisual.
+ * Parts, cutout and bike mask are copied from the STORED parent, not the caller's copy: persistParts
+ * may have attached newer parts to the parent after the session copy was taken. No blobs are written.
+ */
+export async function acceptSheet(
+  h: DreamDb, projectId: string, expectedHeadId: string, input: Version,
+): Promise<AcceptResult> {
+  const version = parseInput(VersionSchema, input, "version");
+  if (version.kind !== "sheet" || version.projectId !== projectId || version.parentId !== expectedHeadId) {
+    throw new InvalidWriteError("The new sheet version must be a child of the expected head in this project.");
+  }
+  return writeTx<AcceptResult>(h, async (tx) => {
+    const project = await getParsedProject(tx, projectId);
+    if (!project) return { status: "project_missing" };
+
+    const existing = await getParsedVersion(tx, version.id);
+    if (existing) {
+      if (existing.projectId !== projectId || existing.parentId !== expectedHeadId) {
+        throw new InvalidWriteError(`Version ${version.id} already exists elsewhere.`);
+      }
+      if (project.headVersionId === existing.id) return { status: "accepted", project, version: existing, idempotent: true };
+      return { status: "stale_head", headVersionId: project.headVersionId };
+    }
+    if (project.headVersionId !== expectedHeadId) return { status: "stale_head", headVersionId: project.headVersionId };
+    const parent = await getParsedVersion(tx, expectedHeadId);
+    if (!parent) throw new CorruptRecordError("version", expectedHeadId, "the head version is missing");
+
+    const a = version.image, b = parent.image;
+    if (a.id !== b.id || a.hash !== b.hash || a.width !== b.width || a.height !== b.height ||
+      a.bytes !== b.bytes || a.rights !== b.rights) {
+      throw new InvalidWriteError("A sheet version must use the same image as its parent.");
+    }
+    const stored: Version = {
+      ...version, image: { ...b }, parts: parent.parts, cutoutImageId: parent.cutoutImageId, bikeMaskId: parent.bikeMaskId,
+    };
+    await checkMaskReferences(tx, stored);
+    await tx.objectStore("versions").put(stored);
+    const next: Project = { ...project, headVersionId: stored.id, updatedAt: Math.max(stored.createdAt, project.updatedAt) };
+    await tx.objectStore("projects").put(next);
+    await enforceTarget(tx, h);
+    return { status: "accepted", project: next, version: stored, idempotent: false };
+  });
+}
+
 // -------------------------------------------------------------- head moves
 
 /** Select an existing version as head (undo, redo, branch choice). Never creates a node. */

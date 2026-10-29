@@ -2,9 +2,10 @@
 // these functions to build the records it then writes in one transaction.
 // The caller generates every ID before the transaction so a retry reuses them.
 import type {
-  BikeRevision, BuildItemData, CompositeReason, EditModeId, ImageRef, InstructionData, Part, Project,
-  SlotId, Version,
+  BikeRevision, BuildItemData, CompositeReason, EditModeId, FeeData, ImageRef, InstructionData, Part,
+  ProductData, Project, SlotId, Version,
 } from "./types";
+import { BuildItem, Cents, Product } from "./contracts";
 import { slotInfo } from "./slots";
 
 /** Same values as the contracts EditMode enum (one source of truth). */
@@ -88,7 +89,8 @@ function childParts(parent: Version, input: VisualChildInput): Part[] {
  * sibling of whatever children parent already has. The parent is never modified.
  */
 export function visualChild(parent: Version, input: VisualChildInput): Version {
-  const kept = parent.items.filter((i) => i.slot !== input.slot);
+  // Adding or replacing a part is a physical change: every other item's fit is stale (SPEC 9).
+  const kept = parent.items.filter((i) => i.slot !== input.slot).map(clearFit);
   const removedIds = new Set(parent.items.filter((i) => i.slot === input.slot).map((i) => i.id));
   const composed = input.composite.composed;
   return {
@@ -109,6 +111,214 @@ export function visualChild(parent: Version, input: VisualChildInput): Version {
     composed, aligned: input.composite.aligned, drift: input.composite.drift,
     fallbackReason: composed ? null : input.composite.reason, createdAt: input.createdAt,
   };
+}
+
+// ------------------------------------------------------------- sheet versions
+
+/** The item with every fit field cleared; the fit must be checked again. */
+function clearFit(item: BuildItemData): BuildItemData {
+  return { ...item, fit: null, fitInputHash: null, fitCheckedAt: null, fitReviewedHash: null };
+}
+
+/**
+ * A sheet-only version: same picture, parts and review as the parent, new items/fees.
+ * inspectionReview is tied to fitInputHash, so it goes stale by itself after a physical change.
+ */
+export function sheetChild(
+  parent: Version,
+  input: { versionId: string; createdAt: number; items: BuildItemData[]; fees: FeeData[] },
+): Version {
+  return {
+    id: input.versionId, projectId: parent.projectId, parentId: parent.id, kind: "sheet",
+    image: { ...parent.image }, cutoutImageId: parent.cutoutImageId, bikeMaskId: parent.bikeMaskId,
+    parts: parent.parts.map((p) => ({ ...p })),
+    items: input.items, fees: input.fees,
+    inspectionReview: parent.inspectionReview ? { ...parent.inspectionReview } : null,
+    change: null, composed: parent.composed, aligned: parent.aligned, drift: parent.drift,
+    fallbackReason: parent.fallbackReason, createdAt: input.createdAt,
+  };
+}
+
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
+/** Short history text such as "Tank: price, Rear wheel removed"; at most 80 characters. */
+export function sheetChangeLabel(parent: Version, child: Version): string {
+  const parts: string[] = [];
+  const old = new Map(parent.items.map((i) => [i.id, i]));
+  const now = new Set(child.items.map((i) => i.id));
+  for (const it of child.items) {
+    const label = slotInfo(it.slot).label;
+    const prev = old.get(it.id);
+    if (!prev) { parts.push(`${label}: added`); continue; }
+    if (prev.title !== it.title) parts.push(`${label}: title`);
+    if (!same(prev.spec, it.spec)) parts.push(`${label}: details`);
+    if (prev.costKind !== it.costKind) parts.push(`${label}: cost type`);
+    if (!same(prev.product, it.product)) parts.push(`${label}: product`);
+    if (prev.partPriceCents !== it.partPriceCents || prev.taxBasis !== it.taxBasis) parts.push(`${label}: price`);
+    if (prev.laborMinutes !== it.laborMinutes || prev.zeroLaborConfirmed !== it.zeroLaborConfirmed) {
+      parts.push(`${label}: labor`);
+    }
+    if (prev.mechanicNotes !== it.mechanicNotes) parts.push(`${label}: notes`);
+  }
+  for (const it of parent.items) if (!now.has(it.id)) parts.push(`${slotInfo(it.slot).label} removed`);
+  if (!same(parent.fees, child.fees)) parts.push("Fees");
+  if (parts.length === 0) return "No change";
+  const text = parts.join(", ");
+  const chars = Array.from(text);
+  return chars.length <= 80 ? text : chars.slice(0, 79).join("") + "\u2026";
+}
+
+export type ItemPatch = Partial<Pick<BuildItemData,
+  "title" | "spec" | "product" | "costKind" | "partPriceCents" | "taxBasis" | "laborMinutes" |
+  "zeroLaborConfirmed" | "mechanicNotes">>;
+export type EditResult =
+  | { ok: true; items: BuildItemData[]; fitsCleared: boolean }
+  | { ok: false; message: string };
+
+/** Product fields that change what the part physically is (the fit depends on them). */
+function sameProductIdentity(a: ProductData | null, b: ProductData | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.name === b.name && a.brand === b.brand && a.partNumber === b.partNumber && a.url === b.url &&
+    a.approval === b.approval && a.approvalText === b.approvalText;
+}
+
+function clearAllFits(items: BuildItemData[]): { items: BuildItemData[]; fitsCleared: boolean } {
+  return { items: items.map(clearFit), fitsCleared: items.some((i) => i.fit !== null) };
+}
+
+/** Apply a mechanic's edit to one item. Never throws for user input. */
+export function editItem(items: readonly BuildItemData[], itemId: string, patch: ItemPatch): EditResult {
+  const old = items.find((i) => i.id === itemId);
+  if (!old) return { ok: false, message: "That build item no longer exists." };
+  const next: BuildItemData = { ...old };
+  // Only defined keys apply (null is a real value for price and product).
+  for (const k of Object.keys(patch) as (keyof ItemPatch)[]) {
+    if (patch[k] !== undefined) (next as Record<string, unknown>)[k] = patch[k];
+  }
+  // Same name/brand/number/link: it is still the same product, keep its id.
+  if (next.product && old.product && patch.product &&
+      next.product.name === old.product.name && next.product.brand === old.product.brand &&
+      next.product.partNumber === old.product.partNumber && next.product.url === old.product.url) {
+    next.product = { ...next.product, id: old.product.id };
+  }
+  if (next.costKind === "labor_only") {
+    if (patch.partPriceCents !== undefined && patch.partPriceCents !== 0) {
+      return { ok: false, message: "Labor only means no part cost. Switch to Part to enter a price." };
+    }
+    if (patch.product) return { ok: false, message: "Labor only has no product. Switch to Part to add one." };
+    next.partPriceCents = 0; next.product = null; next.taxBasis = "net";
+  } else if (old.costKind === "labor_only") {
+    // Back to a part: never invent a price.
+    next.partPriceCents = patch.partPriceCents ?? null;
+    next.taxBasis = patch.taxBasis ?? "unknown";
+  }
+  if (next.costKind === "part" && patch.partPriceCents === 0) {
+    return { ok: false, message: "Use Labor only for no part cost." };
+  }
+  if (next.laborMinutes === 0 && !(next.zeroLaborConfirmed && next.mechanicNotes.trim() !== "")) {
+    return { ok: false, message: "Zero labor needs the confirmation box and a note saying why." };
+  }
+  const parsed = BuildItem.safeParse(next);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    return { ok: false, message: `Invalid ${issue?.path.join(".") || "item"}: ${issue?.message ?? "not allowed"}.` };
+  }
+  const physical = old.title !== next.title || !same(old.spec, next.spec) || old.costKind !== next.costKind ||
+    !sameProductIdentity(old.product, next.product);
+  const list = items.map((i) => (i.id === itemId ? parsed.data : i));
+  if (!physical) return { ok: true, items: list, fitsCleared: false };
+  return { ok: true, ...clearAllFits(list) };
+}
+
+export type RemoveResult =
+  | { ok: true; items: BuildItemData[]; fees: FeeData[]; fitsCleared: boolean }
+  | { ok: false; message: string };
+
+/** Explicit removal: drops the item from every fee and clears all fits. */
+export function removeItem(items: readonly BuildItemData[], fees: readonly FeeData[], itemId: string): RemoveResult {
+  if (!items.some((i) => i.id === itemId)) return { ok: false, message: "That build item no longer exists." };
+  const cleared = clearAllFits(items.filter((i) => i.id !== itemId));
+  return {
+    ok: true, ...cleared,
+    fees: fees.map((f) => ({ ...f, itemIds: f.itemIds.filter((id) => id !== itemId) })),
+  };
+}
+
+export type ManualProductInput = {
+  name: string; brand?: string | null; partNumber?: string | null; url: string;
+  priceText?: string | null; approval?: ProductData["approval"]; approvalText?: string | null;
+};
+
+/** A product typed in by the mechanic. The price that counts stays on the item. */
+export function manualProduct(
+  input: ManualProductInput, ctx: { id: string; now: Date },
+): { ok: true; product: ProductData } | { ok: false; message: string } {
+  const orNull = (t: string | null | undefined) => (t && t.trim() !== "" ? t.trim() : null);
+  const name = input.name.trim();
+  if (name === "") return { ok: false, message: "A product needs a name." };
+  const url = input.url.trim();
+  if (!/^https:\/\//i.test(url)) return { ok: false, message: "A product needs an https link." };
+  const parsed = Product.safeParse({
+    id: ctx.id, name, brand: orNull(input.brand), partNumber: orNull(input.partNumber), url,
+    imageUrl: null, priceText: orNull(input.priceText), priceEurCents: null, taxBasis: "unknown",
+    approval: input.approval ?? "unknown", approvalText: orNull(input.approvalText),
+    fulfillmentRegion: "unknown",
+    source: { url, title: name, accessedAt: ctx.now.toISOString(), supports: "Entered by the mechanic" },
+    linkState: "unchecked",
+  });
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    return { ok: false, message: `Invalid ${issue?.path.join(".") || "product"}: ${issue?.message ?? "not allowed"}.` };
+  }
+  return { ok: true, product: parsed.data };
+}
+
+// ------------------------------------------------------------ money text
+
+/** Parse typed euros to integer cents. No rounding: anything unclear is refused. */
+export function parseEuroInput(text: string): { ok: true; cents: number } | { ok: false; message: string } {
+  const bad = (message: string) => ({ ok: false as const, message });
+  let t = text.trim();
+  for (let i = 0; i < 2; i++) t = t.replace(/^(€|EUR)\s*/i, "").replace(/\s*(€|EUR)$/i, "").trim();
+  if (t === "") return bad("Enter an amount.");
+  if (t.startsWith("-")) return bad("The amount cannot be negative.");
+  if (!/^[\d.,]+$/.test(t)) return bad("Use digits only, for example 1.234,56.");
+  let whole: string; let frac = "";
+  if (t.includes(",")) {
+    const m = /^(\d{1,3}(?:\.\d{3})+|\d+),(\d*)$/.exec(t);
+    if (!m) return bad("Write 1234 or 1.234,00");
+    whole = m[1]!.replace(/\./g, ""); frac = m[2]!;
+    if (frac === "") return bad("Add the cents after the comma, or leave the comma out.");
+  } else if (/^\d+$/.test(t)) {
+    whole = t;
+  } else {
+    const m = /^(\d+)\.(\d+)$/.exec(t);
+    if (!m) return bad("Write 1234 or 1.234,00");
+    if (m[2]!.length === 3) return bad("Write 1234 or 1.234,00");
+    whole = m[1]!; frac = m[2]!;
+  }
+  if (frac.length > 2) return bad("Use at most 2 decimals; cents are not rounded.");
+  if (whole.replace(/^0+(?=\d)/, "").length > 9) return bad("That amount is too large.");
+  const cents = Number(whole) * 100 + Number(frac.padEnd(2, "0"));
+  if (!Cents.safeParse(cents).success) return bad("That amount is too large.");
+  return { ok: true, cents };
+}
+
+const euro = new Intl.NumberFormat("en-IE", { style: "currency", currency: "EUR" });
+export function formatEuroCents(cents: number): string {
+  return euro.format(cents / 100);
+}
+
+/** What the sheet and history.md show for the part price. Unknown is never shown as 0. */
+export function priceDisplay(item: BuildItemData): string {
+  if (item.costKind === "labor_only") return "Labor only, no part cost";
+  if (item.partPriceCents === null) return "Price unknown";
+  const basis = item.taxBasis === "gross" ? " gross" : item.taxBasis === "net" ? " net" : " (tax basis unknown)";
+  return formatEuroCents(item.partPriceCents) + basis;
+}
+
+export function laborDisplay(item: BuildItemData): string {
+  return item.laborMinutes === null ? "Labor unknown" : `${item.laborMinutes} min`;
 }
 
 // ------------------------------------------------------------------- queries
@@ -263,6 +473,8 @@ export function exportPlan(input: {
   const onPath = new Set(pathToRoot(versions, headId).map((v) => v.id));
   const ordered = [...versions].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
   const files: ExportPlan["files"] = [];
+  const fileByImage = new Map<string, string>(); // a sheet version shares its image's file
+  const byVersionId = byId(versions);
   const entries: Record<string, unknown>[] = [];
   const md: string[] = [`# ${oneLine(project.name)}`, "", `Exported ${exportedAt}`, ""];
 
@@ -272,8 +484,14 @@ export function exportPlan(input: {
     const step = v.parentId === null ? "Start" : `Step ${depth}`;
     const exported = v.image.rights === "owner" || v.image.rights === "visitor";
     const label = v.parentId === null ? "start" : v.change ? v.change.slot : "step";
-    const file = exported ? `${nn}-${label}-${v.id.slice(0, 8)}.webp` : null;
-    if (file) files.push({ name: file, versionId: v.id, imageId: v.image.id });
+    let file: string | null = null;
+    if (exported) {
+      file = fileByImage.get(v.image.id) ?? `${nn}-${label}-${v.id.slice(0, 8)}.webp`;
+      if (!fileByImage.has(v.image.id)) {
+        fileByImage.set(v.image.id, file);
+        files.push({ name: file, versionId: v.id, imageId: v.image.id });
+      }
+    }
     const sheet = activeItems(v).map((it) => ({ slot: it.slot, title: it.title }));
 
     entries.push({
@@ -285,6 +503,10 @@ export function exportPlan(input: {
 
     let heading = `## ${nn} ${step}`;
     if (v.change) heading += ` \u2014 ${slotInfo(v.change.slot).label}`;
+    const sheetParent = v.parentId === null ? undefined : byVersionId.get(v.parentId);
+    if (v.kind === "sheet") {
+      heading += ` \u2014 Sheet change: ${sheetParent ? sheetChangeLabel(sheetParent, v) : "unknown"}`;
+    }
     if (v.id === headId) heading += " (shown now)";
     if (!onPath.has(v.id)) heading += " (other branch)";
     md.push(heading, "");
@@ -295,7 +517,10 @@ export function exportPlan(input: {
       }
     }
     md.push(file ? `File: ${file}` : "File: image not exported (external image)");
-    if (sheet.length > 0) md.push("Build sheet:", ...sheet.map((s) => `- ${slotInfo(s.slot).label}: ${oneLine(s.title)}`));
+    if (sheet.length > 0) {
+      md.push("Build sheet:", ...activeItems(v).map((it) =>
+        `- ${slotInfo(it.slot).label}: ${oneLine(it.title)} (${priceDisplay(it)}; ${laborDisplay(it)})`));
+    }
     md.push("");
   });
 

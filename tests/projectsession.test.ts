@@ -6,7 +6,7 @@ import { closeDreamDb, openDreamDb, type DreamDb } from "@/lib/db";
 import { AppError } from "@/lib/errors";
 import { activeItems, pathFromRoot } from "@/lib/project";
 import {
-  acceptEdit, cachedIdentify, createFromPhoto, headVersion, identifyForPhoto, jumpToVersion, loadHeadView, newAcceptIds,
+  acceptEdit, cachedIdentify, saveSheet, createFromPhoto, headVersion, identifyForPhoto, jumpToVersion, loadHeadView, newAcceptIds,
   openProject, openStorage, persistParts, redoHead, saveBike, saveErrorText, undoHead, type AcceptIds, type AcceptInput, type ProjectSession,
 } from "@/lib/browser/projectSession";
 import { bikeFormFromRevision, bikeRevisionFromForm, confirmBike, editField, emptyBikeForm } from "@/lib/bikeForm";
@@ -408,5 +408,76 @@ describe("navigation failures leave the stored head alone", () => {
     const out = await jumpToVersion(h, stale, rootId); // this tab still thinks head = v1
     expect(out.status).toBe("nothing");
     expect((await h.db.get("projects", s.project.id))!.headVersionId).toBe(s.project.headVersionId);
+  });
+});
+
+describe("saveSheet", () => {
+  const refOf = (s: ProjectSession) => ({ projectId: s.project.id, expectedHeadId: s.project.headVersionId });
+  const retitled = (s: ProjectSession, title: string) => headVersion(s).items.map((i) => ({ ...i, title }));
+
+  it("saves a sheet version, then undo restores the parent's sheet and redo brings it back", async () => {
+    const s = await accept(await start(), "tank", "Red tank", "b");
+    const parent = headVersion(s);
+    const out = await saveSheet(h, s, { ref: refOf(s), versionId: crypto.randomUUID(), items: retitled(s, "Edited"), fees: [], now: 200 });
+    if (out.status !== "saved") throw new Error(out.status);
+    expect(headVersion(out.session).kind).toBe("sheet");
+    expect(headVersion(out.session).image).toEqual(parent.image);
+    const undone = await undoHead(h, out.session);
+    if (undone.status !== "moved") throw new Error(undone.status);
+    expect(headVersion(undone.session).items[0]!.title).toBe(parent.items[0]!.title);
+    const redone = await redoHead(h, undone.session);
+    if (redone.status !== "moved") throw new Error(redone.status);
+    expect(headVersion(redone.session).items[0]!.title).toBe("Edited");
+  });
+
+  it("refuses a stale head or another project and writes nothing", async () => {
+    const s0 = await start();
+    const s1 = await accept(s0, "tank", "Red tank", "b");
+    const before = await h.db.count("versions");
+    const stale = await saveSheet(h, s1, { ref: { projectId: s1.project.id, expectedHeadId: s0.project.headVersionId }, versionId: crypto.randomUUID(), items: [], fees: [] });
+    expect(stale).toMatchObject({ status: "refused", reason: "stale_head" });
+    const wrong = await saveSheet(h, s1, { ref: { projectId: "other", expectedHeadId: s1.project.headVersionId }, versionId: crypto.randomUUID(), items: [], fees: [] });
+    expect(wrong).toMatchObject({ status: "refused", reason: "wrong_project" });
+    expect(await h.db.count("versions")).toBe(before);
+    expect((await h.db.get("projects", s1.project.id))!.headVersionId).toBe(s1.project.headVersionId);
+  });
+
+  it("a retry with the same versionId writes one version", async () => {
+    const s = await accept(await start(), "tank", "Red tank", "b");
+    const input = { ref: refOf(s), versionId: crypto.randomUUID(), items: retitled(s, "Once"), fees: [] };
+    const first = await saveSheet(h, s, input);
+    const n = await h.db.count("versions");
+    const again = await saveSheet(h, s, input); // the UI still holds the old session
+    expect(first).toMatchObject({ status: "saved", idempotent: false });
+    expect(again).toMatchObject({ status: "saved", idempotent: true });
+    expect(await h.db.count("versions")).toBe(n);
+  });
+
+  it("an unchanged sheet writes nothing", async () => {
+    const s = await accept(await start(), "tank", "Red tank", "b");
+    const before = await h.db.count("versions");
+    const out = await saveSheet(h, s, { ref: refOf(s), versionId: crypto.randomUUID(), items: structuredClone(headVersion(s).items), fees: [] });
+    expect(out).toEqual({ status: "unchanged" });
+    expect(await h.db.count("versions")).toBe(before);
+  });
+
+  it("parts attached to the stored parent after the session copy end up on the sheet version", async () => {
+    const s = await accept(await start(), "tank", "Red tank", "b");
+    const stale = s; // the copy the sheet form was built from
+    const map = { ...emptyPartMap(hash("b")), pointParts: [refreshedPart("seat", "Seat", mask(), hash("b"))!] };
+    const saved = await persistParts(h, s, hash("b"), derive(map));
+    expect(saved).not.toBeNull();
+    const attached = headVersion(saved!).parts.map((p) => p.maskId).sort();
+    expect(attached).not.toEqual(headVersion(stale).parts.map((p) => p.maskId).sort());
+    const out = await saveSheet(h, stale, { ref: refOf(stale), versionId: crypto.randomUUID(), items: retitled(stale, "Later"), fees: [] });
+    if (out.status !== "saved") throw new Error(out.status);
+    expect(headVersion(out.session).parts.map((p) => p.maskId).sort()).toEqual(attached);
+    // The parent copy in the returned session must carry the stored parts too, so Undo shows them.
+    const parentId = headVersion(out.session).parentId!;
+    const parentCopy = out.session.versions.find((v) => v.id === parentId)!;
+    expect(parentCopy.parts.map((p) => p.maskId).sort()).toEqual(attached);
+    const back = await undoHead(h, out.session);
+    if (back.status !== "moved") throw new Error(back.status);
+    expect(headVersion(back.session).parts.map((p) => p.maskId).sort()).toEqual(attached);
   });
 });

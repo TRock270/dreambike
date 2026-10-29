@@ -88,6 +88,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 
 ## T8 — Build sheet and manual product input
 
+- Status: DONE 2026-10-28 (offline and in mock; no paid calls involved). "Seed mock product/check data" deferred to T9/T13. Owner check on a real project pending. See log.
 - Priority: MVP. Estimate: 2h, Oct 31. Depends on: T6; T7 is not a dependency.
 - Files: src/components/BuildSheet.tsx/ProductFields.tsx, src/lib/project.ts, tests/project.test.ts, seed mock product/check data.
 - Work: active slot lines, title/spec, manual source URL, price-as-listed and gross/net/unknown basis, labor minutes, explicit labor-only switch, remove/replace, semantic sheet revisions. No automated product fetching yet.
@@ -961,3 +962,53 @@ For each completed ticket append actual date/time ET, files changed, checks and 
   4. The Safari check for T2 and T6.
 - Still open in tickets: T0 live profiles (see T0 session 3); T3 live point clicks (SAM points return the whole bike; the box is the workaround); U02 strict-JSON note on T4; minor: the Next dev overlay badge covers the "Build sheet" button in dev only.
 - Next ticket on the critical path: T8, build sheet and manual product input. It is prepared in docs/t8-start.md: owner decision (wide right panel, photo stays visible), unit split with exact files, the `/build-ticket` args, the done-when map and the steps after the run. The owner wants it started without further questions; stop after T8. T9 follows and needs U02 grounded and U06 cost bounds.
+
+### T8 — 2026-10-28, about 23:10–23:55 ET (build-ticket workflow, lead checks; about 0.75 h)
+
+- Plan: docs/t8-start.md (owner decision: wide right panel, the photo stays visible). Units S1, S2, U1 as written there.
+- Files:
+  - src/lib/project.ts: sheetChild, sheetChangeLabel, editItem, removeItem, manualProduct, parseEuroInput, formatEuroCents, priceDisplay, laborDisplay; exportPlan reuses the parent's image file for a sheet version and writes "Sheet change: <label>" plus price/labor per line in history.md.
+    - A physical change (title, spec, product identity, approval, cost type) or a removal clears fit, fitInputHash, fitCheckedAt and fitReviewedHash on every item; price, basis, labor and notes keep them.
+    - Labor only gives part price 0 and no product; switching back gives price null and basis unknown. A part with price 0 is refused ("Use Labor only for no part cost."). Zero labor needs the box and a note.
+    - parseEuroInput: "1.234,56" is 123456 cents; "1.234" is refused with "Write 1234 or 1.234,00"; more than 2 decimals, negatives, empty text and too-large values are refused.
+  - src/lib/db.ts: acceptSheet (one write transaction; project_missing and stale_head like acceptVisual; idempotent per version id; image must match the parent; parts, cutout and mask are taken from the stored parent; enforceTarget).
+  - src/lib/browser/projectSession.ts: saveSheet (unchanged sheet writes nothing; after a save the session is reloaded from storage).
+  - src/components/BuildSheet.tsx, ProductFields.tsx (new); AppShell.tsx ("Build sheet" toggle with aria-pressed, "Estimate (comes later)" disabled); Workspace.tsx (wide panel, folds stay mounted, photo inert while the sheet is open, saves blocked while a preview waits, folder auto-save after a sheet save); VersionStrip.tsx ("Sheet: <label>" steps).
+  - tests/project.test.ts, tests/db.test.ts, tests/projectsession.test.ts.
+  - SPEC.md section 10: dated owner-override note for the wide sheet panel.
+- Workflow build-ticket T8: green.
+  - Plan check passed. S1 was approved in round 1.
+  - S2 was approved in round 2: imaging-reviewer found that the returned session kept stale parent parts; fixed by reloading from storage.
+  - U1 was approved in round 2: 3 findings were fixed (draft id cleared after a save; a labor-only item starts as unknown price/basis when switched back).
+  - Verify checks all passed. The done-when gate met all 8 items with one minor (F1): no test showed that editItem leaves the parent's items unchanged.
+- Lead fixes: F1, snapshot assertions in the editItem and removeItem tests; the SPEC 10 note. review-changes quick on both: green, no findings.
+- Deferred, lead decision in docs/t8-start.md: "seed mock product/check data". Check data needs T9's FitResult flow, and seeded products belong to the T13 cached demo; mock products in T8 would risk mock data in real projects.
+- Browser check ($0, MOCK=1, headless Chrome over CDP, 1440x900, synthetic gradient JPEG, fresh profile deleted after): 22 of 23 script checks passed. The one failure was a script error (it looked for "MOCK" in upper case; the banner reads "Mock: Mock mode …" and is visible).
+  - While the preview waits, the sheet says "Accept or reject the preview first." The panel is wide and the photo stays visible next to it.
+  - After Accept, the tank line shows "Price unknown" with an icon, "Labor unknown" and "No product yet".
+  - "1.234" shows the hint. Saving "Test tank", https link, "1.234,56", gross and 90 min shows "€1,234.56 gross" and "90 min". The link opens in a new tab with noopener. History: "Step 2 — Sheet: Tank: product, Tank: price, …".
+  - 0 minutes without the box and a note is refused in words, and nothing is saved.
+  - Labor only shows "Labor only, no part cost" and removes the product. Undo brings back €1,234.56; Redo goes back to labor only.
+  - Remove asks to confirm, then shows the empty state; Undo brings the tank back. The toggle closes the panel.
+- Checks after the lead fixes: typecheck, lint, build pass; npm test 498 passed in 20 files; local_images.py --fixture-set all 71 passed.
+- Consultants: PAL chat nim-nemotron35, 2 calls on excerpts under 400 lines (project.ts lines 1–335; acceptVisual, acceptSheet and saveSheet), because PAL skips files of about 800 lines. Every point was checked against the code. None was adopted; the rejected points:
+  - "labor only turns an unknown price into 0": specified, labor only means no part cost;
+  - "the labor-only branch resets fields on every edit": those fields already have these values on a labor-only item;
+  - "zero labor reuses the old box and note": the rule checks the resulting item (SPEC 11), and the form always sends its own box value;
+  - "spec with undefined compares equal": stored data is schema-parsed JSON and has no undefined;
+  - "same text, new product id keeps fits": intended, identity is the visible product text;
+  - "removal should not clear other fits": SPEC 9 lists removing a part as a physical change, and combinations matter;
+  - "sheetChild aliases the input arrays": editItem and removeItem always build new arrays, and acceptSheet stores a parsed copy;
+  - "eleven zeros then ',50' is accepted": it is €0.50, the correct value;
+  - "same id, different content counts as idempotent": the version id is random per draft, and a changed draft gets a new id;
+  - "enforceTarget after the puts can leave a partial write": runTx aborts the transaction on any throw;
+  - "non-IDB awaits inside the transaction": checkMaskReferences and enforceTarget only await IDB requests;
+  - "a stale head from another tab leaves the session stale": same as the T6 visual accept path. The message tells the mechanic, and reopening the project loads the current head. This stays an open minor for multi-tab use.
+  Gemini was not asked.
+- Spend: $0 (no paid calls). The ledger total is unchanged from the last handoff; it is still unread.
+- Open:
+  - The owner checks a real project in their own Chrome: the same steps, then the folder copy should show the sheet change in history.md with no duplicate image.
+  - No component (DOM) test drives BuildSheet; the logic is unit-tested and the mock browser run covered the flow.
+  - The Next dev overlay badge covers the "Build sheet" button in dev only (known).
+  - The handoff item "allow line for tests/folderexport.test.ts" is done (4c21ec2).
+  - Next on the critical path: T9, which needs U02 grounded and U06 cost bounds (paid, owner gates). Not started.

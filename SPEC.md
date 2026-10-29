@@ -617,7 +617,7 @@ The read-only demo uses a manifest and same-origin static assets directly. Try e
 
 ## 10. Desktop screens and components
 
-One page, minimum supported viewport 1280×800. At smaller widths show a desktop recommendation; no mobile implementation. Header has project name, budget state, undo/redo, and Settings. Main area uses a flexible image canvas (about 2/3) and a 360 px edit panel. Bottom/tabs expose Build sheet and Estimate. Avoid separate navigation infrastructure. Keyboard focus and labels are required.
+One page, minimum supported viewport 1280×800. At smaller widths show a desktop recommendation; no mobile implementation. Header has project name, budget state, undo/redo, and Settings. Main area uses a flexible image canvas (about 2/3) and a 360 px edit panel. Bottom/tabs expose Build sheet and Estimate (owner override 2026-10-28: "Build sheet" toggles the right panel to a wide sheet panel of about half the window; the photo stays visible and contain-fitted on the left; "Back to editor" or the toggle returns to the edit panel). Avoid separate navigation infrastructure. Keyboard focus and labels are required.
 
 | Screen / components | Content and required states |
 | --- | --- |

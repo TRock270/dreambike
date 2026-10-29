@@ -5,9 +5,10 @@ import {
 } from "@/lib/contracts";
 import {
   activeItems, canAcceptPending, children, defaultProjectName, laterSteps, newProject, newRootVersion,
-  exportPlan, pathFromRoot, redoTargets, undoTarget, visualChild, type VisualChildInput,
+  exportPlan, editItem, formatEuroCents, laborDisplay, manualProduct, parseEuroInput, priceDisplay,
+  removeItem, sheetChangeLabel, sheetChild, pathFromRoot, redoTargets, undoTarget, visualChild, type VisualChildInput,
 } from "@/lib/project";
-import type { Part, Version } from "@/lib/types";
+import type { BuildItemData, FitData, Part, ProductData, Version } from "@/lib/types";
 
 const id = () => crypto.randomUUID();
 const hash = (c: string) => c.repeat(64);
@@ -319,5 +320,217 @@ describe("exportPlan", () => {
     const a = { ...r0, id: vid("a"), parentId: vid("b") as string | null, createdAt: 1 };
     const b = { ...r0, id: vid("b"), parentId: a.id as string | null, createdAt: 2 };
     expect(() => plan([a, b], a.id)).toThrow(/cycle/);
+  });
+});
+
+// ---------------------------------------------------------------- sheet logic
+const fitFor = (itemId: string): FitData => ({
+  itemId, status: "ok", approval: "abe", documentCoverage: "covered", inspection: "none",
+  eintragung: "not_required", carryDocuments: "not_required", reasons: ["ok"], toMeasure: [],
+  extraParts: [], conditions: [], sources: [], confidence: 0.5,
+});
+const withFit = (it: BuildItemData): BuildItemData => ({
+  ...it, fit: fitFor(it.id), fitInputHash: hash("e"), fitCheckedAt: "2026-10-28T10:00:00.000Z", fitReviewedHash: hash("f"),
+});
+const prod = (over: Partial<ProductData> = {}): ProductData => {
+  const r = manualProduct({ name: "Tank X", brand: "Acme", url: "https://example.com/x" }, { id: id(), now: new Date(0) });
+  if (!r.ok) throw new Error(r.message);
+  return { ...r.product, ...over };
+};
+function sheetFixture() {
+  const v1 = visualChild(rootWithParts, input({ slot: "tank", title: "Red tank" }));
+  const v2 = visualChild(v1, input({ slot: "seat", title: "Seat" }));
+  const items = v2.items.map(withFit).map((i) => ({ ...i, partPriceCents: 1000, taxBasis: "gross" as const, laborMinutes: 30 }));
+  return { v2, items, tank: items.find((i) => i.slot === "tank")!, seat: items.find((i) => i.slot === "seat")! };
+}
+const must = (r: ReturnType<typeof editItem>) => {
+  if (!r.ok) throw new Error(r.message);
+  return r;
+};
+
+describe("sheetChild", () => {
+  it("shares image and parts, copies review, validates, and leaves the parent unchanged", () => {
+    const { v2, items } = sheetFixture();
+    const parent: Version = { ...v2, items, inspectionReview: { fitInputHash: hash("1"), decision: "none", notes: "", reviewedAt: "2026-10-28T10:00:00.000Z" } };
+    const snap = structuredClone(parent);
+    const child = sheetChild(parent, { versionId: id(), createdAt: 9, items: items.slice(0, 1), fees: [] });
+    expect(child).toMatchObject({ kind: "sheet", parentId: parent.id, change: null, image: parent.image, parts: parent.parts });
+    expect(child.inspectionReview).toEqual(parent.inspectionReview);
+    expect(VersionSchema.safeParse(child).success).toBe(true);
+    expect(parent).toEqual(snap);
+  });
+});
+
+describe("editItem", () => {
+  it("physical changes clear fits on every item; price and labor keep them", () => {
+    const { items, tank, seat } = sheetFixture();
+    const snap = structuredClone(items);
+    const priced = must(editItem(items, tank.id, { partPriceCents: 5000, laborMinutes: 90 }));
+    expect(priced.fitsCleared).toBe(false);
+    expect(priced.items.every((i) => i.fit !== null && i.fitReviewedHash !== null)).toBe(true);
+
+    const withProduct = must(editItem(items, tank.id, { product: prod() }));
+    expect(withProduct.fitsCleared).toBe(true);
+    expect(withProduct.items.every((i) => i.fit === null && i.fitInputHash === null && i.fitCheckedAt === null && i.fitReviewedHash === null)).toBe(true);
+
+    const approved = must(editItem(withProduct.items.map(withFit), tank.id, { product: prod({ approval: "abe" }) }));
+    expect(approved.fitsCleared).toBe(true);
+    const title = must(editItem(items, seat.id, { title: "Other seat" }));
+    expect(title.items.every((i) => i.fit === null)).toBe(true);
+    // priceText alone is not physical
+    const priceText = must(editItem(withProduct.items.map(withFit), tank.id, { product: { ...withProduct.items.find((i) => i.id === tank.id)!.product!, priceText: "99" } }));
+    expect(priceText.fitsCleared).toBe(false);
+    // The parent version's items (history) are never written in place.
+    expect(items).toEqual(snap);
+  });
+
+  it("keeps the product id when identity text is unchanged", () => {
+    const { items, tank } = sheetFixture();
+    const first = must(editItem(items, tank.id, { product: prod() }));
+    const again = must(editItem(first.items, tank.id, { product: prod() }));
+    expect(again.items.find((i) => i.id === tank.id)!.product!.id).toBe(first.items.find((i) => i.id === tank.id)!.product!.id);
+  });
+
+  it("labor_only gives 0 part cost, switching back gives null, 0 for a part is refused", () => {
+    const { items, tank } = sheetFixture();
+    const lo = must(editItem(items, tank.id, { product: prod() }));
+    const l = must(editItem(lo.items, tank.id, { costKind: "labor_only" })).items.find((i) => i.id === tank.id)!;
+    expect(l).toMatchObject({ costKind: "labor_only", partPriceCents: 0, product: null, taxBasis: "net" });
+    expect(editItem(lo.items, tank.id, { costKind: "labor_only", partPriceCents: 500 }).ok).toBe(false);
+    const stillLo = [l];
+    expect(editItem(stillLo, tank.id, { partPriceCents: 500 }).ok).toBe(false);
+    expect(editItem(stillLo, tank.id, { product: prod() }).ok).toBe(false);
+    const back = must(editItem(stillLo, tank.id, { costKind: "part" })).items[0]!;
+    expect(back).toMatchObject({ costKind: "part", partPriceCents: null, taxBasis: "unknown" });
+    const zero = editItem(items, tank.id, { partPriceCents: 0 });
+    expect(zero).toEqual({ ok: false, message: "Use Labor only for no part cost." });
+  });
+
+  it("zero labor needs confirmation and a note", () => {
+    const { items, tank } = sheetFixture();
+    expect(editItem(items, tank.id, { laborMinutes: 0 }).ok).toBe(false);
+    expect(editItem(items, tank.id, { laborMinutes: 0, zeroLaborConfirmed: true, mechanicNotes: "  " }).ok).toBe(false);
+    expect(editItem(items, tank.id, { laborMinutes: 0, zeroLaborConfirmed: false, mechanicNotes: "done in shop" }).ok).toBe(false);
+    const ok = must(editItem(items, tank.id, { laborMinutes: 0, zeroLaborConfirmed: true, mechanicNotes: "included" }));
+    expect(ok.items.find((i) => i.id === tank.id)!.laborMinutes).toBe(0);
+  });
+
+  it("refuses unknown ids and schema failures without throwing", () => {
+    const { items, tank } = sheetFixture();
+    expect(editItem(items, id(), { title: "x" }).ok).toBe(false);
+    expect(editItem(items, tank.id, { title: "" }).ok).toBe(false);
+    expect(editItem(items, tank.id, { laborMinutes: 1.5 }).ok).toBe(false);
+    expect(editItem(items, tank.id, { mechanicNotes: "n".repeat(2001) }).ok).toBe(false);
+  });
+});
+
+describe("removeItem", () => {
+  it("removes the id from fees, clears fits, and refuses unknown ids", () => {
+    const { items, tank, seat } = sheetFixture();
+    const fee = { id: id(), label: "Inspection", kind: "other" as const, netCents: 100, itemIds: [tank.id, seat.id], confirmed: true };
+    const snap = structuredClone(items);
+    const r = removeItem(items, [fee], tank.id);
+    if (!r.ok) throw new Error(r.message);
+    expect(r.items.map((i) => i.id)).toEqual([seat.id]);
+    expect(r.fees[0]!.itemIds).toEqual([seat.id]);
+    expect(r.items[0]!.fit).toBeNull();
+    expect(r.fitsCleared).toBe(true);
+    expect(fee.itemIds).toHaveLength(2);
+    expect(items).toEqual(snap);
+    expect(removeItem(items, [fee], id()).ok).toBe(false);
+  });
+});
+
+describe("manualProduct", () => {
+  it("refuses http and blank names, fills the fixed fields", () => {
+    const now = new Date("2026-10-28T10:00:00.000Z");
+    expect(manualProduct({ name: "A", url: "http://x.com" }, { id: id(), now })).toEqual({ ok: false, message: "A product needs an https link." });
+    expect(manualProduct({ name: "  ", url: "https://x.com" }, { id: id(), now }).ok).toBe(false);
+    const r = manualProduct({ name: "Tank", url: "https://x.com/a", priceText: " ", brand: "" }, { id: id(), now });
+    if (!r.ok) throw new Error(r.message);
+    expect(r.product).toMatchObject({
+      imageUrl: null, fulfillmentRegion: "unknown", linkState: "unchecked", priceText: null, priceEurCents: null,
+      taxBasis: "unknown", brand: null,
+      source: { url: "https://x.com/a", title: "Tank", accessedAt: now.toISOString(), supports: "Entered by the mechanic" },
+    });
+  });
+});
+
+describe("parseEuroInput", () => {
+  it.each([
+    ["1.234,56", 123456], ["1234.5", 123450], ["12", 1200], ["€ 12,50", 1250], ["12,50 EUR", 1250],
+    ["12.5", 1250], ["0", 0], ["123.456,00", 12345600], ["1000000", 100000000],
+  ])("accepts %s", (text, cents) => {
+    expect(parseEuroInput(text)).toEqual({ ok: true, cents });
+  });
+  it.each(["1.234", "12,345", "-5", "", "  ", "1,234.56", "1.2345", "12,", "abc", "1000001", "99999999999999"])(
+    "refuses %j", (text) => {
+      expect(parseEuroInput(text).ok).toBe(false);
+    });
+  it("explains the ambiguous case", () => {
+    expect(parseEuroInput("1.234")).toEqual({ ok: false, message: "Write 1234 or 1.234,00" });
+  });
+});
+
+describe("display text", () => {
+  const { tank } = sheetFixture();
+  it("never shows 0 for unknown", () => {
+    expect(priceDisplay({ ...tank, partPriceCents: null })).toBe("Price unknown");
+    expect(priceDisplay({ ...tank, partPriceCents: 123456, taxBasis: "gross" })).toBe("\u20ac1,234.56 gross");
+    expect(priceDisplay({ ...tank, partPriceCents: 100, taxBasis: "net" })).toBe("\u20ac1.00 net");
+    expect(priceDisplay({ ...tank, partPriceCents: 100, taxBasis: "unknown" })).toBe("\u20ac1.00 (tax basis unknown)");
+    expect(priceDisplay({ ...tank, costKind: "labor_only", partPriceCents: 0 })).toBe("Labor only, no part cost");
+    expect(laborDisplay({ ...tank, laborMinutes: null })).toBe("Labor unknown");
+    expect(laborDisplay({ ...tank, laborMinutes: 0 })).toBe("0 min");
+    expect(formatEuroCents(5)).toBe("\u20ac0.05");
+  });
+});
+
+describe("sheetChangeLabel", () => {
+  it("describes diffs and caps at 80 characters", () => {
+    const { v2, items, tank, seat } = sheetFixture();
+    const parent: Version = { ...v2, items };
+    const mk = (its: BuildItemData[], fees = parent.fees) => sheetChild(parent, { versionId: id(), createdAt: 5, items: its, fees });
+    const swap = (it: BuildItemData, o: Partial<BuildItemData>) => items.map((i) => (i.id === it.id ? { ...i, ...o } : i));
+    expect(sheetChangeLabel(parent, mk(items))).toBe("No change");
+    expect(sheetChangeLabel(parent, mk(swap(tank, { partPriceCents: 7 })))).toBe("Tank: price");
+    expect(sheetChangeLabel(parent, mk(swap(tank, { laborMinutes: 5 })))).toBe("Tank: labor");
+    expect(sheetChangeLabel(parent, mk(swap(tank, { product: prod() })))).toBe("Tank: product");
+    expect(sheetChangeLabel(parent, mk(items.filter((i) => i.id !== seat.id)))).toBe("Seat removed");
+    const fee = { id: id(), label: "F", kind: "other" as const, netCents: 1, itemIds: [], confirmed: true };
+    expect(sheetChangeLabel(parent, mk(items, [fee]))).toBe("Fees");
+    expect(sheetChangeLabel(parent, mk(swap(tank, { partPriceCents: 7, laborMinutes: 5 })))).toBe("Tank: price, Tank: labor");
+    const long = items.map((i) => ({ ...i, title: "t", partPriceCents: 9, laborMinutes: 1, mechanicNotes: "n", product: prod() }));
+    const label = sheetChangeLabel(parent, mk(long));
+    expect(Array.from(label)).toHaveLength(80);
+    expect(label.endsWith("\u2026")).toBe(true);
+  });
+});
+
+describe("exportPlan with sheet versions", () => {
+  it("reuses the image file and names the sheet change", () => {
+    const { v2, items, tank } = sheetFixture();
+    const base: Version = { ...v2, id: "aaaaaaaa-0000-4000-8000-000000000000", parentId: null, kind: "root", change: null, items, createdAt: 1 };
+    const sheet = { ...sheetChild(base, { versionId: "bbbbbbbb-0000-4000-8000-000000000000", createdAt: 2, items: items.map((i) => (i.id === tank.id ? { ...i, partPriceCents: null } : i)), fees: [] }) };
+    const p = exportPlan({ project: { id: "abcdef12-0000-4000-8000-000000000000", name: "P" }, versions: [sheet, base], headId: sheet.id, exportedAt: "t" });
+    expect(p.files).toHaveLength(1);
+    const j = JSON.parse(p.historyJson);
+    expect(j.versions[1].file).toBe(p.files[0]!.name);
+    expect(p.historyMarkdown.match(/File: 01-start-aaaaaaaa\.webp/g) ?? []).toHaveLength(0);
+    expect(p.historyMarkdown.match(new RegExp(`File: ${p.files[0]!.name}`, "g"))).toHaveLength(2);
+    expect(p.historyMarkdown).toContain("Sheet change: Tank: price");
+    expect(p.historyMarkdown).toContain("Price unknown; 30 min");
+  });
+});
+
+describe("visualChild fits", () => {
+  it("clears the fit of kept items", () => {
+    const { v2, items } = sheetFixture();
+    const parent: Version = { ...v2, items };
+    const child = visualChild(parent, input({ slot: "exhaust" }));
+    const kept = child.items.filter((i) => i.slot !== "exhaust");
+    expect(kept).toHaveLength(2);
+    expect(kept.every((i) => i.fit === null && i.fitInputHash === null && i.fitCheckedAt === null && i.fitReviewedHash === null)).toBe(true);
+    expect(parent.items.every((i) => i.fit !== null)).toBe(true);
   });
 });

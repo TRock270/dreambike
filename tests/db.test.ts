@@ -4,14 +4,14 @@ import { openDB } from "idb";
 import { z } from "zod";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  acceptVisual, attachParts, closeDreamDb, CorruptRecordError, createProject, deleteProject,
+  acceptSheet, acceptVisual, attachParts, closeDreamDb, CorruptRecordError, createProject, deleteProject,
   getLastOpenProject, getStoredImage, moveHead, StorageClosedError, getStoredMask, InvalidWriteError, listProjects, loadProject,
   openDreamDb, putShopSettings, getShopSettings, ReadOnlyError, redo, setHead, undo, updateBikeRevision,
   type DreamDb, type PreparedAccept,
 } from "@/lib/db";
 import { cacheKeys, getCache, putCache, rebuildLedger, storageStatus } from "@/lib/cache";
 import { AppError } from "@/lib/errors";
-import { activeItems, pathFromRoot, visualChild, type VisualChildInput } from "@/lib/project";
+import { activeItems, pathFromRoot, sheetChild, visualChild, type VisualChildInput } from "@/lib/project";
 import type { StoredImage, StoredMask, Version } from "@/lib/types";
 import { bikeRevision, freshIndexedDb, hash, makeImage, makeMask, makePart, makeProject, uuid } from "./support/idb";
 
@@ -624,5 +624,103 @@ describe("quota as a transaction abort", () => {
     expect(err).toBeInstanceOf(AppError);
     expect((err as AppError).code).toBe("STORAGE_FULL");
     expect((await loadProject(h, project.id))!.project.headVersionId).toBe(rootVersion.id);
+  });
+});
+
+describe("acceptSheet", () => {
+  const retitled = (v: Version, title: string) => v.items.map((i) => ({ ...i, title }));
+  const sheetOf = (parent: Version, title: string, t = 50) =>
+    sheetChild(parent, { versionId: uuid(), createdAt: t, items: retitled(parent, title), fees: [] });
+
+  async function withVisual() {
+    const s = await setup();
+    const a = prepare(s.rootVersion, "tank", "Red tank", "b", 10);
+    await acceptVisual(h, s.project.id, s.rootVersion.id, a);
+    return { ...s, a };
+  }
+
+  it("accepts a sheet version; undo restores the parent's sheet and redo brings it back; no blobs are written", async () => {
+    const { project, a } = await withVisual();
+    const before = await countStores();
+    const sheet = sheetOf(a.version, "Renamed");
+    const res = await acceptSheet(h, project.id, a.version.id, sheet);
+    expect(res).toMatchObject({ status: "accepted", idempotent: false });
+    const after = await countStores();
+    expect(after).toEqual({ ...before, versions: before.versions + 1 });
+    expect((await loadProject(h, project.id))!.project.headVersionId).toBe(sheet.id);
+
+    await undo(h, project.id, sheet.id);
+    const loaded = (await loadProject(h, project.id))!;
+    expect(loaded.project.headVersionId).toBe(a.version.id);
+    expect(loaded.versions.find((v) => v.id === a.version.id)!.items[0]!.title).not.toBe("Renamed");
+    await redo(h, project.id, a.version.id);
+    const back = (await loadProject(h, project.id))!;
+    expect(back.project.headVersionId).toBe(sheet.id);
+    expect(back.versions.find((v) => v.id === sheet.id)!.items[0]!.title).toBe("Renamed");
+  });
+
+  it("refuses a stale head and writes nothing; project_missing for an unknown project", async () => {
+    const { project, rootVersion, a } = await withVisual();
+    const late = sheetOf(rootVersion, "Late");
+    const before = await countStores();
+    expect(await acceptSheet(h, project.id, rootVersion.id, late)).toEqual({ status: "stale_head", headVersionId: a.version.id });
+    expect(await countStores()).toEqual(before);
+    const orphan = { ...late, projectId: uuid() };
+    expect(await acceptSheet(h, orphan.projectId, rootVersion.id, orphan)).toEqual({ status: "project_missing" });
+  });
+
+  it("a retry with the same version id writes one version; stale once the head moved on", async () => {
+    const { project, a } = await withVisual();
+    const sheet = sheetOf(a.version, "Once");
+    await acceptSheet(h, project.id, a.version.id, sheet);
+    const n = (await countStores()).versions;
+    expect(await acceptSheet(h, project.id, a.version.id, sheet)).toMatchObject({ status: "accepted", idempotent: true });
+    expect((await countStores()).versions).toBe(n);
+    await undo(h, project.id, sheet.id);
+    expect((await acceptSheet(h, project.id, a.version.id, sheet)).status).toBe("stale_head");
+    const other = { ...sheet, parentId: uuid() };
+    await expect(acceptSheet(h, project.id, other.parentId!, other)).rejects.toBeInstanceOf(InvalidWriteError);
+  });
+
+  it("refuses a different image ref, a non-sheet kind and a wrong parent", async () => {
+    const { project, a, rootVersion } = await withVisual();
+    const sheet = sheetOf(a.version, "X");
+    const otherImage = { ...sheet, image: { ...sheet.image, id: uuid() } };
+    await expect(acceptSheet(h, project.id, a.version.id, otherImage)).rejects.toBeInstanceOf(InvalidWriteError);
+    const rights = { ...sheet, image: { ...sheet.image, rights: "visitor" as const } };
+    await expect(acceptSheet(h, project.id, a.version.id, rights)).rejects.toBeInstanceOf(InvalidWriteError);
+    await expect(acceptSheet(h, project.id, a.version.id, { ...sheet, kind: "visual" })).rejects.toBeInstanceOf(InvalidWriteError);
+    await expect(acceptSheet(h, project.id, rootVersion.id, sheet)).rejects.toBeInstanceOf(InvalidWriteError);
+    expect((await loadProject(h, project.id))!.project.headVersionId).toBe(a.version.id);
+  });
+
+  it("takes parts and bike mask from the stored parent, not from the caller's older copy", async () => {
+    const { project, a, image } = await withVisual();
+    const sheet = sheetOf(a.version, "Race"); // built from the copy without the new parts
+    const seat = makeMask(a.image.hash);
+    const bike = makeMask(a.image.hash);
+    await attachParts(h, { versionId: a.version.id, imageHash: a.image.hash, parts: [makePart("seat", seat)], masks: [seat], bikeMask: bike });
+    const res = await acceptSheet(h, project.id, a.version.id, sheet);
+    expect(res.status).toBe("accepted");
+    const stored = (await loadProject(h, project.id))!.versions.find((v) => v.id === sheet.id)!;
+    expect(stored.parts.map((p) => p.maskId)).toContain(seat.id);
+    expect(stored.bikeMaskId).toBe(bike.id);
+    expect(image.hash).not.toBe(a.image.hash);
+  });
+
+  it("the shared image counts once and survives enforceTarget", async () => {
+    closeDreamDb(h);
+    h = await openDreamDb({ targetBytes: 500 }); // tight: only the two images and masks fit
+    const { project, a, image } = await withVisual();
+    const sheet = sheetOf(a.version, "Shared");
+    const live0 = await storageStatus(h);
+    await acceptSheet(h, project.id, a.version.id, sheet);
+    const live = await storageStatus(h);
+    expect(live.imageBytes).toBe(live0.imageBytes);
+    expect(live.imageBytes).toBe(image.bytes + a.image.bytes);
+    expect(await getStoredImage(h, a.image.id)).not.toBeNull();
+    expect(await getStoredImage(h, image.id)).not.toBeNull();
+    const { imageBytes, maskBytes, cacheBytes } = live;
+    expect({ imageBytes, maskBytes, cacheBytes }).toEqual(await rebuildLedger(h));
   });
 });

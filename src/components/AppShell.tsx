@@ -11,6 +11,9 @@ type Props = {
   undoHint?: string;
   redoHint?: string;
   busy: boolean;
+  /** The Build sheet tab is a toggle: Workspace owns the state. */
+  sheetOpen: boolean;
+  onToggleSheet: () => void;
   onUndo: () => void;
   onRedo: () => void;
   children: ReactNode;
@@ -19,7 +22,7 @@ type Props = {
 const button = "rounded-full border border-hairline px-4 py-1.5 text-[13px] disabled:opacity-50";
 
 /** Header (project name, Undo, Redo, Settings), the page content, and the Build sheet / Estimate tabs. */
-export function AppShell({ projectName, saveStatus, canUndo, canRedo, undoHint, redoHint, busy, onUndo, onRedo, children }: Props) {
+export function AppShell({ projectName, saveStatus, canUndo, canRedo, undoHint, redoHint, busy, sheetOpen, onToggleSheet, onUndo, onRedo, children }: Props) {
   return (
     <>
       <header className="flex shrink-0 items-center gap-4 border-b border-hairline bg-surface-1 px-6 py-3">
@@ -34,8 +37,9 @@ export function AppShell({ projectName, saveStatus, canUndo, canRedo, undoHint, 
       </header>
       {children}
       <nav aria-label="Sheet and estimate" className="flex shrink-0 gap-2 border-t border-hairline bg-surface-1 px-6 py-3">
-        <button type="button" className="rounded-full bg-primary px-4 py-1.5 text-[13px] text-on-fill">Build sheet</button>
-        <button type="button" className="rounded-full border border-hairline px-4 py-1.5 text-[13px]">Estimate</button>
+        <button type="button" aria-pressed={sheetOpen} onClick={onToggleSheet}
+          className={`rounded-full px-4 py-1.5 text-[13px] ${sheetOpen ? "bg-primary text-on-fill" : "border border-hairline"}`}>Build sheet</button>
+        <button type="button" disabled className="rounded-full border border-hairline px-4 py-1.5 text-[13px] disabled:opacity-50">Estimate (comes later)</button>
       </nav>
     </>
   );
