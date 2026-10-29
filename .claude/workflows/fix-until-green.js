@@ -12,10 +12,10 @@ export const meta = {
 // Path rules: which builder fixes which files. First match wins, so the
 // single-file shop rule comes before imaging's src/lib/browser/ rule.
 const BUILDERS = [
-  { builder: 'shop-builder', re: /^(src\/lib\/browser\/projectSession\.ts|src\/lib\/bikeForm\.ts|tests\/(projectsession|bikeform))/ },
+  { builder: 'shop-builder', re: /^(src\/lib\/browser\/(projectSession|pdfExport)\.ts|src\/lib\/bikeForm\.ts|tests\/(projectsession|bikeform))/ },
   { builder: 'models-builder', re: /^(src\/lib\/server\/(meta|sse)\.ts|src\/lib\/editPolicy\.ts|prompts\/|src\/lib\/mocks\/|src\/app\/api\/(segment|identify|instruction|edit|check|search-parts|transcribe)\/|spike\/(responses_sam|responses_spark|images_edits|asr_transcribe|files|run_all)\.py|tests\/(meta|sam|spark|sse|instruction|identify|edit|check|search|transcribe))/ },
   { builder: 'imaging-builder', re: /^(src\/lib\/server\/images\.ts|src\/lib\/(coordinates|slots|parts)\.ts|src\/app\/api\/(normalize|composite)\/|spike\/(imaging|local_images)\.py|src\/lib\/browser\/|src\/lib\/imageFormat\.ts|tests\/(images|coordinates|masks|composite|slots|preflight|imageFormat|browser|partmap|renderflow))/ },
-  { builder: 'shop-builder', re: /^(src\/lib\/(db|project|cache|quote|pdf)\.ts|src\/lib\/server\/fit[^/]*\.ts|tests\/(db|project|cache|quote|pdf|fit))/ },
+  { builder: 'shop-builder', re: /^(src\/lib\/(db|project|cache|quote|pdf|estimate)\.ts|src\/lib\/server\/fit[^/]*\.ts|tests\/(db|project|cache|quote|pdf|fit))/ },
   { builder: 'platform-builder', re: /^(budget\/|src\/lib\/server\/(budget|config|fetch-product|http|paid)\.ts|src\/app\/api\/(budget|health|product-image)\/|spike\/(ledger|common|deployment)\.py|next\.config\.ts|vercel\.json$|\.env\.example$|tests\/(budget|config|fetch-product|http|deployment|paid))/ },
   { builder: 'ui-builder', re: /^(src\/components\/|src\/styles\/|src\/app\/(layout|page)\.tsx|src\/app\/globals\.css)/ },
 ]

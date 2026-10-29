@@ -25,10 +25,12 @@ import {
   openProject, openStorage, persistPartMap, redoHead, saveBike, saveErrorText, saveSheet, undoHead,
   type AcceptIds, type HeadView, type NavOutcome, type ProjectSession, type StorageState,
 } from "@/lib/browser/projectSession";
+import { scheduleWarmup } from "@/lib/browser/pdfExport";
 import { requestInstruction } from "@/lib/browser/sparkClient";
 import { hitTest, type ImagePoint } from "@/lib/coordinates";
 import { modeAllowed, retargetPaintText } from "@/lib/editPolicy";
 import { PAIRED_SLOTS } from "@/lib/parts";
+import type { AppMode } from "@/lib/server/config";
 import { slotInfo } from "@/lib/slots";
 import type { BinaryMask, InstructionData, NormalizedPhoto, Project, ShopSettings, SlotId, Version } from "@/lib/types";
 import { AppShell, type PanelMode } from "./AppShell";
@@ -100,7 +102,7 @@ function facingChangesParts(m: PartMapState): boolean {
   return Object.keys(PAIRED_SLOTS).some((phrase) => m.requests[phrase] === "done");
 }
 
-export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
+export function Workspace({ referenceEnabled, appMode }: { referenceEnabled: boolean; appMode: AppMode }) {
   const [noticeAccepted, setNoticeAccepted] = useState(false);
   const [photo, setPhoto] = useState<NormalizedPhoto | null>(null);
   const [map, setMap] = useState<PartMapState>(() => emptyPartMap());
@@ -751,6 +753,13 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
   }, [settingsDb, settingsId, settingsKey, settingsTry]);
   const shopSettings = shop && shop.key === settingsKey ? shop.settings : null;
   const shopLoadError = shopError && shopError.key === settingsKey && !shopSettings ? shopError.message : null;
+  // ---- estimate PDF: the fonts and the PDF chunk load in idle time once a project is open (about 0.6 MB of fonts and the
+  // pdf-lib chunk), so Export works offline in every order. The warm-up is memoized: this starts it once per session.
+  const projectOpen = session !== null;
+  useEffect(() => {
+    if (!projectOpen) return;
+    return scheduleWarmup(); // cancels a start that has not happened when the project closes or the page unmounts
+  }, [projectOpen]);
   const projectChanged = (next: Project) => {
     const cur = sessionRef.current;
     if (cur && cur.project.id === next.id) setSession({ ...cur, project: next });
@@ -1166,6 +1175,8 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
 
   const prefillFor = (key: string | null) => (key && prefill?.selectionKey === key ? prefill.text : undefined);
   const head = session ? headVersion(session) : null;
+  // The before photo of the estimate PDF: the root version's image (the PDF export reads it from the database).
+  const rootImage = session?.versions.find((v) => v.id === session.project.rootVersionId)?.image ?? null;
   const readOnly = storage?.status === "ready" && storage.readOnly;
   const redoKids = session && head ? children(session.versions, head.id) : [];
   const projectName = session?.project.name ?? (photo ? "Unsaved photo" : null);
@@ -1291,7 +1302,8 @@ export function Workspace({ referenceEnabled }: { referenceEnabled: boolean }) {
           {panel === "estimate" && (
             <EstimatePreview head={session && head ? head : null} readOnlyReason={sheetReason} blockedReason={sheetBlocked}
               saving={sheetSaving} settings={shopSettings} settingsError={shopLoadError} settingsId={settingsId} bikeRevision={bikeRevision}
-              onSave={saveSheetChange} onOpenSettings={() => setPanel("settings")} onClose={() => setPanel("edit")} />
+              onSave={saveSheetChange} onOpenSettings={() => setPanel("settings")} onClose={() => setPanel("edit")}
+              db={settingsDb} project={session?.project ?? null} rootImage={rootImage} appMode={appMode} />
           )}
           {panel === "settings" && (
             <ShopSettingsForm h={settingsDb} project={session?.project ?? null} saved={shopSettings}

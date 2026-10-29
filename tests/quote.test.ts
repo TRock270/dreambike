@@ -1,13 +1,16 @@
 // Integer EUR estimate math with literal expected numbers (SPEC 11), plus its invalidation rules.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { estimateSnapshot } from "@/lib/estimate";
 import { MOCK_LABEL } from "@/lib/mocks";
-import { newRootVersion, visualChild, activeItems, fitReviewHash, sha256OfText } from "@/lib/project";
+import {
+  FIT_TTL_MS, LEGAL_SEED, activeItems, fitInputHash, fitReviewHash, newRootVersion, sha256OfText, visualChild,
+} from "@/lib/project";
 import {
   EXAMPLE_LABEL, EXAMPLE_SETTINGS, REAL_SETTINGS_DEFAULT, computeQuote, divRoundHalfUp, grossToNet, laborNet,
   quoteCanonical, suggestFees, vatOf, type QuoteInput,
 } from "@/lib/quote";
 import { Settings } from "@/lib/contracts";
-import type { BuildItemData, FeeData, FitData } from "@/lib/types";
+import type { BikeRevision, BuildItemData, FeeData, FitData, Version } from "@/lib/types";
 
 const id = () => crypto.randomUUID();
 const H = "a".repeat(64);
@@ -373,5 +376,137 @@ describe("quote hash", () => {
     const z = (n: string) => item("tank", { laborMinutes: 0, zeroLaborConfirmed: true, mechanicNotes: n });
     const a = z("one"); const b = { ...a, mechanicNotes: "two" };
     expect(await hashOf(await inputFor([a]))).not.toBe(await hashOf(await inputFor([b])));
+  });
+});
+
+describe("estimateSnapshot (the one source for the screen and the PDF)", () => {
+  const checkedMs = Date.parse(CHECKED);
+  const bike = (confirmed: boolean): BikeRevision => ({
+    id: id(), confirmed, revision: 1, confirmedAt: confirmed ? 1 : null,
+    bike: {
+      make: "Harley-Davidson", model: "Sportster", family: "sportster", engine: null, yearFrom: 2012, yearTo: 2018,
+      abs: "no", style: null, facing: "right", confidence: 0.5, limitations: [],
+    },
+  });
+  const rootImage = { id: id(), hash: H, width: 10, height: 10, bytes: 1, rights: "owner" as const };
+
+  /** Items whose fit hash matches the bike, so the snapshot sees their fits as current. */
+  async function currentItems(rev: BikeRevision, list: BuildItemData[], reviewExpired = false) {
+    const hash = await fitInputHash(rev, list, settings.shopRules, LEGAL_SEED.version);
+    const items = await Promise.all(list.map(async (i) => {
+      const current = i.fit ? { ...i, fitInputHash: hash } : i;
+      return { ...current, fitReviewedHash: await fitReviewHash(current, reviewExpired) };
+    }));
+    return { hash, items };
+  }
+  const headOf = (items: BuildItemData[], hash: string): Version => ({
+    ...newRootVersion({ id: id(), projectId: id(), image: rootImage, createdAt: 0 }),
+    items, fees: [fee()], inspectionReview: review({ fitInputHash: hash }),
+  });
+  const snapshot = (head: Version, bikeRevision: BikeRevision | null, now: number) =>
+    estimateSnapshot({ head, settings, settingsId: "default", bikeRevision, now });
+
+  it("computes the hash of the confirmed bike, the quote and one row per item, in order", async () => {
+    const rev = bike(true);
+    const { items, hash } = await currentItems(rev, [item("tank"), item("seat")]);
+    const snap = await snapshot(headOf(items, hash), rev, NOW);
+    expect(snap.hash).toBe(await fitInputHash(rev, items, settings.shopRules, LEGAL_SEED.version));
+    expect(snap.rows.map((r) => r.item)).toEqual(items);
+    expect(snap.rows.every((r) => r.status === "ok" && r.hashMatches && !r.expired && r.reviewed && !r.mock)).toBe(true);
+    expect(snap.quote.lines.map((l) => l.itemId)).toEqual(items.map((i) => i.id));
+    expect(snap.quote).toMatchObject({ incomplete: false, netCents: 60000, staleFitItemIds: [] });
+    // Changing the shop rules changes the hash, and with it every fit.
+    const ruled = await estimateSnapshot({ head: headOf(items, hash), settings: { ...settings, shopRules: ["No chrome"] }, settingsId: "default", bikeRevision: rev, now: NOW });
+    expect(ruled.hash).not.toBe(snap.hash);
+    expect(ruled.quote.staleFitItemIds).toHaveLength(2);
+  });
+
+  it("has no fit hash when the bike is not confirmed or missing: every fit is stale, a missing fit is not checked", async () => {
+    const rev = bike(true);
+    const { items, hash } = await currentItems(rev, [item("tank"), item("seat", { fit: null, fitInputHash: null, fitCheckedAt: null })]);
+    const head = headOf(items, hash);
+    for (const bikeRevision of [bike(false), null]) {
+      const snap = await snapshot(head, bikeRevision, NOW);
+      expect(snap.hash).toBeNull();
+      expect(snap.rows.map((r) => [r.status, r.hashMatches, r.expired])).toEqual([["stale", false, false], ["not_checked", false, false]]);
+      expect(snap.quote).toMatchObject({ incomplete: true, netCents: null, vatCents: null, grossCents: null });
+      expect(snap.quote.staleFitItemIds).toEqual([items[0]!.id]);
+    }
+  });
+
+  it("rows and quote agree on the 24 h expiry at the boundary because both use the one now", async () => {
+    const rev = bike(true);
+    const { items, hash } = await currentItems(rev, [item("tank")]);
+    const head = headOf(items, hash);
+    const exactly = await snapshot(head, rev, checkedMs + FIT_TTL_MS); // exactly 24 h is still fresh
+    expect(exactly.rows[0]).toMatchObject({ status: "ok", expired: false, reviewed: true });
+    expect(exactly.quote).toMatchObject({ incomplete: false, staleFitItemIds: [] });
+    const after = await snapshot(head, rev, checkedMs + FIT_TTL_MS + 1); // one millisecond later it is not
+    expect(after.rows[0]).toMatchObject({ status: "stale", expired: true, hashMatches: true, reviewed: false });
+    expect(after.quote.staleFitItemIds).toEqual([items[0]!.id]);
+    expect(after.quote.exclusions.join()).toMatch(/not reviewed/);
+    // A review given on the expired check counts for it: complete, and still listed as stale.
+    const late = await currentItems(rev, [item("tank")], true);
+    const lateSnap = await snapshot(headOf(late.items, late.hash), rev, checkedMs + FIT_TTL_MS + 1);
+    expect(lateSnap.rows[0]).toMatchObject({ expired: true, reviewed: true });
+    expect(lateSnap.quote).toMatchObject({ incomplete: false, staleFitItemIds: [late.items[0]!.id] });
+  });
+
+  it("a reviewed fit that crosses the 24 h limit between the screen and the click flips complete to incomplete", async () => {
+    const rev = bike(true);
+    // The mechanic reviewed the check while it was fresh. The screen is calculated 1 min before the limit, the click 1 min after.
+    const { items, hash } = await currentItems(rev, [item("tank")]);
+    const head = headOf(items, hash);
+    const onScreen = await snapshot(head, rev, checkedMs + FIT_TTL_MS - 60_000);
+    const atClick = await snapshot(head, rev, checkedMs + FIT_TTL_MS + 60_000);
+    // The SPEC fixture: EUR 119.00 gross part, 90 min at EUR 100.00/h and one EUR 100.00 allowance.
+    expect(onScreen.quote).toMatchObject({ incomplete: false, netCents: 35000, vatCents: 6650, grossCents: 41650, exclusions: [], staleFitItemIds: [] });
+    // At the click the check is stale and its fresh-time review does not cover it: no totals, a known subtotal, and the reason.
+    expect(atClick.quote).toMatchObject({
+      incomplete: true, netCents: null, vatCents: null, grossCents: null, knownSubtotalNetCents: onScreen.quote.knownSubtotalNetCents,
+      staleFitItemIds: [items[0]!.id],
+    });
+    expect(atClick.quote.knownSubtotalNetCents).toBe(35000); // the known money stays; the totals are withheld, never 0
+    expect(atClick.quote.exclusions).toEqual([`${items[0]!.title}: fit not reviewed by the mechanic`]);
+    expect(atClick.rows[0]).toMatchObject({ status: "stale", expired: true, hashMatches: true, reviewed: false });
+    // The same head and the same bike: only the time moved, and the quote hash follows the result.
+    expect(atClick.quote.inputHash).not.toBe(onScreen.quote.inputHash);
+  });
+
+  it("takes the time only from `now`, never from the wall clock", async () => {
+    const rev = bike(true);
+    const { items, hash } = await currentItems(rev, [item("tank")]);
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.parse("2031-01-01T00:00:00.000Z")); // years after the check
+      const snap = await snapshot(headOf(items, hash), rev, checkedMs + 3_600_000);
+      expect(snap.rows[0]).toMatchObject({ status: "ok", expired: false });
+      expect(snap.quote).toMatchObject({ incomplete: false, staleFitItemIds: [], generatedAt: checkedMs + 3_600_000 });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("flags a mock result and an unreviewed fit; a recheck clears the review", async () => {
+    const rev = bike(true);
+    const t = item("tank");
+    const mock = { ...t, fit: fit(t.id, { reasons: [`${MOCK_LABEL}. No research was done.`] }) };
+    const plain = item("seat");
+    const rechecked = item("mirrors");
+    const { items, hash } = await currentItems(rev, [mock, plain, rechecked]);
+    const unreviewed = items.map((i) => (i.slot === "seat" ? { ...i, fitReviewedHash: null } : i));
+    const afterRecheck = unreviewed.map((i) => (i.slot === "mirrors" ? { ...i, fitCheckedAt: "2026-10-29T10:30:00.000Z" } : i));
+    const snap = await snapshot(headOf(afterRecheck, hash), rev, NOW);
+    const by = (slot: string) => snap.rows.find((r) => r.item.slot === slot)!;
+    expect(by("tank")).toMatchObject({ mock: true, reviewed: true });
+    expect(by("seat")).toMatchObject({ mock: false, reviewed: false, reviewHash: await fitReviewHash(unreviewed[1]!) });
+    expect(by("mirrors")).toMatchObject({ mock: false, reviewed: false });
+    expect(snap.quote.exclusions.join()).toMatch(/mock/);
+    expect(snap.quote.exclusions.filter((e) => /not reviewed/.test(e))).toHaveLength(2);
+  });
+
+  it("a fit that was never checked has no review hash and is not checked", async () => {
+    const rev = bike(true);
+    const { items, hash } = await currentItems(rev, [item("tank", { fit: null, fitInputHash: null, fitCheckedAt: null })]);
+    const snap = await snapshot(headOf(items, hash), rev, NOW);
+    expect(snap.rows[0]).toMatchObject({ status: "not_checked", mock: false, hashMatches: false, expired: false, reviewHash: null, reviewed: false });
   });
 });

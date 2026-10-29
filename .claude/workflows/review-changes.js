@@ -13,7 +13,7 @@ export const meta = {
 const RULES = [
   { reviewer: 'models-reviewer', re: /^(src\/lib\/server\/meta\.ts|prompts\/|src\/lib\/mocks\/|src\/app\/api\/(segment|identify|instruction|edit|check|search-parts|transcribe)\/|spike\/(responses_sam|responses_spark|images_edits|asr_transcribe|files|run_all)\.py|tests\/(meta|sam|spark|sse))/ },
   { reviewer: 'imaging-reviewer', re: /^(src\/lib\/server\/images\.ts|src\/lib\/coordinates\.ts|src\/app\/api\/(normalize|composite)\/|spike\/(imaging|local_images)\.py|src\/components\/(ImageCanvas|PartOverlay|PartSelector|BeforeAfter|UploadDropzone|ReferenceDropzone)\.tsx|src\/lib\/browser\/|src\/lib\/imageFormat\.ts|tests\/(images|coordinates|masks|composite))/ },
-  { reviewer: 'shop-reviewer', re: /^(src\/lib\/(db|project|cache|quote|pdf)\.ts|src\/lib\/server\/fit[^/]*\.ts|prompts\/fit-check|src\/components\/(BuildSheet|ProductFields|FitBadge|EvidenceLinks|PaperworkSummary|EstimatePreview|MissingCosts|InspectionFees|ExportButton|ShopSettingsForm|VersionStrip|ProjectList|EditReview)\.tsx|tests\/(project|cache|quote|fit-policy))/ },
+  { reviewer: 'shop-reviewer', re: /^(src\/lib\/(db|project|cache|quote|pdf|estimate)\.ts|src\/lib\/server\/fit[^/]*\.ts|prompts\/fit-check|src\/components\/(BuildSheet|ProductFields|FitBadge|EvidenceLinks|PaperworkSummary|EstimatePreview|MissingCosts|InspectionFees|ExportButton|ShopSettingsForm|VersionStrip|ProjectList|EditReview)\.tsx|tests\/(project|cache|quote|fit-policy))/ },
   { reviewer: 'security-reviewer', re: /^(budget\/|src\/lib\/server\/(budget|config|fetch-product|meta|http)\.ts|tests\/(budget|config|fetch-product)|src\/app\/api\/|spike\/(ledger|common|deployment)\.py|next\.config\.ts|\.env\.example$|\.gitignore$|\.claude\/settings\.json$|src\/(middleware|proxy)\.ts)/ },
   { reviewer: 'release-reviewer', re: /^(README\.md|CREDITS\.md|LICENSE|docs\/(submission|demo-script)\.md|public\/|src\/components\/(UploadNotice|DemoBanner)\.tsx)/ },
   { reviewer: 'models-reviewer', re: /^(src\/lib\/(contracts|types)\.ts$|src\/components\/(BikeConfirm|DescribeForm|PaintForm|ProgressStatus)\.tsx$|tests\/(contracts|instruction|identify|edit|check|search|transcribe|mocks)[^/]*\.test\.ts$)/ },
@@ -28,7 +28,7 @@ const RULES = [
   { reviewer: 'security-reviewer', re: /^(src\/lib\/server\/paid\.ts$|tests\/paid[^/]*\.test\.ts$|spike\/(run_all|responses_sam|responses_spark|images_edits|asr_transcribe|files)\.py$|spike\/requirements\.txt$)/ },
   { reviewer: 'models-reviewer', re: /^(src\/lib\/server\/(paid|sse)\.ts$|src\/lib\/(editPolicy|queue)\.ts$|src\/lib\/browser\/(renderFlow|renderClient|sparkClient|segmentClient)\.ts$|src\/components\/InstructionPreview\.tsx$|tests\/(paid|renderflow|masks)[^/]*\.test\.ts$)/ },
   { reviewer: 'imaging-reviewer', re: /^(src\/lib\/parts\.ts$|tests\/(partmap|renderflow)[^/]*\.test\.ts$)/ },
-  { reviewer: 'shop-reviewer', re: /^(src\/lib\/browser\/projectSession\.ts$|src\/lib\/bikeForm\.ts$|tests\/(projectsession|bikeform)[^/]*\.test\.ts$)/ },
+  { reviewer: 'shop-reviewer', re: /^(src\/lib\/browser\/(projectSession|pdfExport)\.ts$|src\/lib\/bikeForm\.ts$|tests\/(projectsession|bikeform)[^/]*\.test\.ts$)/ },
 ]
 const MAX_REFUTES = 12
 const DEPTHS = ['quick', 'full']

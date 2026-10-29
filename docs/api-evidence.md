@@ -44,7 +44,7 @@ Sizes are published unpacked sizes from the npm registry and wheel archives. The
 | npm set for T1 | see TASKS T1 | 421 packages, ~524 MB on disk (382 MB prod, 142 MB dev) | Approved |
 | next | 16.4.3 | 192.1 MB + 90.5 MB `@next/swc-darwin-arm64` | Approved |
 | typescript | 5.9.3 | 23.6 MB | Approved |
-| pdf-lib / @pdf-lib/fontkit | 1.17.1 / 1.1.1 | 19.5 / 4.3 MB | Approved; loaded only on PDF export |
+| pdf-lib / @pdf-lib/fontkit | 1.17.1 / 1.1.1 | 19.5 / 4.3 MB | Approved. A separate chunk, never in the first page load (final T11 production build, 2026-10-29 18:21 ET: one chunk, 1135 KiB minified, 496 KiB gzip measured locally). Owner decision 2026-10-29 (T11) replaced the earlier "loaded only on PDF export": the chunk and the three PDF fonts (562 KiB) preload in idle time once a project is open. Offline export verified in headless Chrome against a production build (TASKS.md T11 log) |
 | react-dom | 19.2.9 | 7.3 MB | Approved |
 | zod | 4.6.7 | 6.1 MB | Approved |
 | eslint | 9.39.5 | 3.0 MB | Approved |

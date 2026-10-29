@@ -2,15 +2,16 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { MOCK_LABEL } from "@/lib/mocks";
-import {
-  acknowledgeFit, activeItems, FIT_PRECHECK_NOTE, fitInputHash, fitReviewHash, fitStatusOf, formatEuroCents, LEGAL_SEED,
-  type FitStatus,
-} from "@/lib/project";
-import { computeQuote, EXAMPLE_LABEL } from "@/lib/quote";
+import { isCompleteEstimate, warmUpPdf } from "@/lib/browser/pdfExport";
+import type { DreamDb } from "@/lib/db";
+import { estimateSnapshot, type EstimateSnapshot, type FitRow } from "@/lib/estimate";
+import { acknowledgeFit, FIT_PRECHECK_NOTE, formatEuroCents } from "@/lib/project";
+import { EXAMPLE_LABEL } from "@/lib/quote";
+import type { AppMode } from "@/lib/server/config";
 import { slotInfo } from "@/lib/slots";
-import type { BikeRevision, BuildItemData, FeeData, InspectionReviewData, Quote, ShopSettings, Version } from "@/lib/types";
+import type { BikeRevision, BuildItemData, FeeData, ImageRef, InspectionReviewData, Project, ShopSettings, Version } from "@/lib/types";
 import type { SheetChange, SheetSaveResult } from "./BuildSheet";
+import { ExportButton } from "./ExportButton";
 import { FitBadge } from "./FitBadge";
 import { InspectionFees, type FeeSave } from "./InspectionFees";
 import { MissingCosts } from "./MissingCosts";
@@ -35,17 +36,18 @@ type Props = {
   onSave: (change: SheetChange) => Promise<SheetSaveResult>;
   onOpenSettings: () => void;
   onClose: () => void;
+  // What the PDF export needs (ExportButton). The pictures are read from the database at click.
+  /** The open database, or null when storage is not ready. */
+  db: DreamDb | null;
+  /** The open project, or null. */
+  project: Project | null;
+  /** The root version's image: the before photo of the PDF. */
+  rootImage: ImageRef | null;
+  appMode: AppMode;
 };
 
 /** Everything computed for one head, settings object and bike revision. */
-type Computed = {
-  head: Version; settings: ShopSettings; rev: BikeRevision | null;
-  hash: string | null; quote: Quote; rows: FitRow[];
-};
-type FitRow = {
-  item: BuildItemData; status: FitStatus; mock: boolean; hashMatches: boolean; expired: boolean;
-  reviewHash: string | null; reviewed: boolean;
-};
+type Computed = EstimateSnapshot & { head: Version; settings: ShopSettings; rev: BikeRevision | null };
 
 const button = "rounded-full border border-hairline px-4 py-1.5 text-[13px] disabled:opacity-50";
 
@@ -65,28 +67,19 @@ function UnknownCell({ children }: { children: ReactNode }) {
 const money = (cents: number | null, unknown = "Unknown") =>
   cents === null ? <UnknownCell>{unknown}</UnknownCell> : <span className="tabular">{formatEuroCents(cents)}</span>;
 
-/** Works out the fit rows (status, review hash) for the estimate. Pure of React state. */
-async function buildRows(items: readonly BuildItemData[], hash: string | null, now: number): Promise<FitRow[]> {
-  return Promise.all(items.map(async (item) => {
-    const status: FitStatus = hash === null ? (item.fit === null ? "not_checked" : "stale") : fitStatusOf(item, hash, now);
-    const mock = item.fit !== null && item.fit.reasons.some((r) => r.includes(MOCK_LABEL));
-    const hashMatches = hash !== null && item.fit !== null && item.fitInputHash === hash;
-    // A matching hash with status "stale" means the 24 h life of the check ran out.
-    const expired = hashMatches && status === "stale";
-    const reviewHash = await fitReviewHash(item, expired);
-    return { item, status, mock, hashMatches, expired, reviewHash, reviewed: reviewHash !== null && item.fitReviewedHash === reviewHash };
-  }));
-}
-
 /**
  * The estimate: a line table, the known subtotal, and either net / VAT / gross or an incomplete draft.
  * It only reads. Saves (fit review, fee lines, inspection review) go through onSave, one sheet version each.
  */
 export function EstimatePreview({
   head, readOnlyReason, blockedReason, saving, settings, settingsError, settingsId, bikeRevision, onSave, onOpenSettings, onClose,
+  db, project, rootImage, appMode,
 }: Props) {
   const titleRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => { titleRef.current?.focus(); }, []); // keyboard users land on the panel when it opens
+  // The workspace starts the PDF warm-up in idle time once a project is open. This joins the same memoized promise (and
+  // starts it if that has not happened). A failure shows next to the Export button, where it can be retried.
+  useEffect(() => { warmUpPdf().catch(() => {}); }, []);
 
   const [computed, setComputed] = useState<Computed | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -94,16 +87,10 @@ export function EstimatePreview({
   useEffect(() => {
     let alive = true;
     if (!head || !settings) return;
-    (async () => {
-      const items = activeItems(head);
-      const hash = bikeRevision?.confirmed ? await fitInputHash(bikeRevision, head.items, settings.shopRules, LEGAL_SEED.version) : null;
-      const now = Date.now();
-      const quote = await computeQuote({
-        items, fees: head.fees, inspectionReview: head.inspectionReview, settings, currentFitInputHash: hash, now, settingsId,
-      });
-      const rows = await buildRows(items, hash, now);
-      if (alive) { setComputed({ head, settings, rev: bikeRevision, hash, quote, rows }); setFailure(null); }
-    })().catch((e) => { if (alive) setFailure(e instanceof Error ? e.message : "The estimate could not be calculated."); });
+    // The same snapshot the PDF export makes, so the screen and the file cannot disagree.
+    estimateSnapshot({ head, settings, settingsId, bikeRevision, now: Date.now() })
+      .then((snap) => { if (alive) { setComputed({ head, settings, rev: bikeRevision, ...snap }); setFailure(null); } })
+      .catch((e) => { if (alive) setFailure(e instanceof Error ? e.message : "The estimate could not be calculated."); });
     return () => { alive = false; };
   }, [head, settings, settingsId, bikeRevision]);
   // Results for an older head, settings object or bike revision are ignored until the new ones arrive.
@@ -282,7 +269,17 @@ export function EstimatePreview({
               )}
             </dl>
           </section>
+        </>
+      )}
 
+      {/* Outside the block above, so it stays mounted (and keeps its outcome note) while a new version is calculated. */}
+      {head && (
+        <ExportButton db={db} project={project} head={head} rootImage={rootImage} settings={settings} settingsId={settingsId}
+          bikeRevision={bikeRevision} appMode={appMode} shownComplete={quote ? isCompleteEstimate(quote) : null} saving={saving || busy} />
+      )}
+
+      {head && now && quote && (
+        <>
           <section aria-label="Fit review" className="flex flex-col gap-2 rounded-card border border-hairline bg-surface-2 p-3">
             <h3 className="text-[15px] font-semibold">Fit review by the mechanic</h3>
             {now.rows.length === 0 && <p className="text-text-muted text-[13px]">No parts to review.</p>}

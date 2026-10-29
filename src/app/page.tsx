@@ -18,8 +18,8 @@ export default function Home() {
       <div className="shrink-0 px-6 py-3 text-[13px] min-[1280px]:hidden bg-warning-soft text-warning-soft-text">
         DreamBike is built for desktop screens at least 1280 px wide.
       </div>
-      {/* Only this one flag reaches the client; no other config does. */}
-      <Workspace referenceEnabled={config.features.reference} />
+      {/* Only these two values reach the client: the reference flag and the mode (already public through the banner). No other config does. */}
+      <Workspace referenceEnabled={config.features.reference} appMode={config.mode} />
     </div>
   );
 }

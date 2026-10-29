@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { toJpeg } from "@/lib/browser/jpeg";
 import { MOCK_LABEL } from "@/lib/mocks";
 
 type Img = { blob: Blob; width: number; height: number };
@@ -34,45 +35,6 @@ function downloadName(mock: boolean, now = new Date()): string {
   const day = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
   const time = `${pad(now.getHours())}${pad(now.getMinutes())}`;
   return `dreambike-preview${mock ? "-MOCK" : ""}-${day}-${time}.jpg`;
-}
-
-type Ctx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
-
-/** Demo results are visibly labeled (CLAUDE.md): a mock file carries the label in its pixels, not only its name. */
-function drawMockLabel(ctx: Ctx, width: number) {
-  const size = Math.max(16, Math.round(width / 60));
-  ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
-  ctx.fillRect(0, 0, width, size * 2);
-  ctx.fillStyle = "white";
-  ctx.font = `${size}px sans-serif`;
-  ctx.textBaseline = "middle";
-  ctx.fillText(`MOCK: ${MOCK_LABEL}`, size / 2, size);
-}
-
-/** Re-encode the blob as JPEG on this device. Nothing is uploaded. */
-async function toJpeg(blob: Blob, mock: boolean): Promise<Blob> {
-  const bitmap = await createImageBitmap(blob);
-  try {
-    if (typeof OffscreenCanvas !== "undefined") {
-      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-      const ctx = canvas.getContext("2d");
-      if (!ctx) throw new Error("no canvas");
-      ctx.drawImage(bitmap, 0, 0);
-      if (mock) drawMockLabel(ctx, bitmap.width);
-      return await canvas.convertToBlob({ type: "image/jpeg", quality: 0.92 });
-    }
-    const canvas = document.createElement("canvas");
-    canvas.width = bitmap.width;
-    canvas.height = bitmap.height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("no canvas");
-    ctx.drawImage(bitmap, 0, 0);
-    if (mock) drawMockLabel(ctx, bitmap.width);
-    return await new Promise<Blob>((resolve, reject) =>
-      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("encode failed"))), "image/jpeg", 0.92));
-  } finally {
-    bitmap.close();
-  }
 }
 
 /** One view of the pair: slider when aligned and same size, else side by side. */
