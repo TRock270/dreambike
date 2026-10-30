@@ -1,6 +1,6 @@
 # DreamBike build tickets
 
-Status: implementation under way; see each ticket's status line and the newest "Handoff" entry at the end of the progress log. Estimated hours are coding-agent work plus the stated owner checks, not runtime promises. Read SPEC.md and this file before every ticket. Follow CLAUDE.md. Record actual results and commit after each completed ticket. Never backdate work.
+Status: implementation under way; see each ticket's status line and the newest "Handoff" entry at the end of the progress log. Estimated hours are coding-agent work plus the stated owner checks, not runtime promises. Before every ticket read this file's ticket cards, the newest Handoff, and the SPEC sections the ticket needs (see CLAUDE.md). Follow CLAUDE.md. Record actual results and commit after each completed ticket. Never backdate work.
 
 There are 22 tickets, T0–T21. The scheduled baseline is T0–T18: 39 mandatory hours plus 2 conditional search hours. Two unallocated hours make the original 43-hour plan. T19–T21 are outside that commitment. No feature work consumes the protected recording/submission time without an owner scope decision.
 

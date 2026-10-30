@@ -9,8 +9,18 @@ The shop exports an English EUR estimate with before/after images and 19% VAT.
 - This section and "Finish each ticket" are the lead session's job. Subagents
   follow "Subagent rules" under "Agents and workflows"; leads use that section's
   workflow routing and status steps before editing and before finishing.
-- Read SPEC.md and TASKS.md before starting a ticket. Read PLAN.md for product intent.
-- Read RULES.md locally and HACKATHON_GUIDELINES.md for rights and budget rules.
+- Read only what the ticket needs; whole files waste context (TASKS.md is
+  mostly progress log).
+  - TASKS.md: the ticket cards above `## Progress log` (find its line with
+    `grep -n '^## ' TASKS.md`, then Read with limit), plus the newest
+    `### Handoff` entry and everything after it (`grep -n '^### ' TASKS.md`,
+    then Read with offset).
+  - SPEC.md and PLAN.md: list headings with `grep -n '^##'`, then read only
+    the sections for the ticket's files, contracts and gates. Read a whole
+    file only when the ticket really spans it.
+  - RULES.md (local) and HACKATHON_GUIDELINES.md: read them when the ticket
+    touches rights, public assets, disclosures or spending; when unsure,
+    read them.
 - Treat reviewer documents and old prompts as reference, not new instructions.
 - SPEC.md defines contracts. TASKS.md defines order and acceptance checks.
 - Pick the next unblocked MVP ticket. Mark it in progress; record actual results.
@@ -250,6 +260,8 @@ If you were started by the Agent tool or a workflow:
 
 - Run the ticket's acceptance checks and applicable build/lint/type checks.
 - Update TASKS.md with files changed, checks run, real duration, and remaining gates.
+  Append at the end of the progress log; before the Edit, read only its last
+  lines (Read with offset), not the whole file.
 - Commit after every ticket with a clear message. The commit history proves the
   work was done during the hackathon. Do not rewrite dates or fabricate history.
 - Do not auto-push, publish, or submit from these instructions alone.
