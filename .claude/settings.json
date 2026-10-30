@@ -46,7 +46,12 @@
       "Bash(git status *)",
       "Bash(git log *)",
       "Bash(git show *)",
-      "Bash(git ls-files *)"
+      "Bash(git ls-files *)",
+      "Bash(npx --no-install vitest run tests/budget-routes.test.ts)",
+      "Bash(npx --no-install vitest run tests/demo.test.ts)",
+      "Bash(npx --no-install vitest run tests/check.test.ts)",
+      "Bash(npx --no-install vitest run tests/http.test.ts)",
+      "Bash(npx --no-install vitest run tests/budget-redis.test.ts)"
     ],
     "deny": [
       "Read(./.env)",
