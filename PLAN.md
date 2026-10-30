@@ -4,7 +4,7 @@ Status: implementation handoff, October 27, 2026. This consolidates PLAN.md, the
 
 ## 1. Summary
 
-DreamBike is a desktop web app for the owner's father's custom motorcycle shop in Germany. The shop works mainly on Harley-Davidsons. A mechanic imports a bike photo, selects a part, and describes a change or supplies an owned reference photo. SAM finds the bike and its parts. Muse Image renders the change. Muse Spark identifies the bike and prepares the edit and fit check.
+DreamBike is a desktop web app for a custom motorcycle shop in Germany. The shop works mainly on Harley-Davidsons. A mechanic imports a bike photo, selects a part, and describes a change or supplies an owned reference photo. SAM finds the bike and its parts. Muse Image renders the change. Muse Spark identifies the bike and prepares the edit and fit check.
 
 Each accepted change updates a build sheet. It records the proposed part, source and EUR price when known, labor, fit concerns, and German approval and inspection needs. The mechanic exports an English estimate PDF with before/after images, 19% VAT, and a paperwork summary. The image is a visualization. The check is a pre-check that the shop must verify.
 

@@ -30,7 +30,7 @@ Status: draft v3 (technical risk review), Oct 27, 2026. Review chain: Qwen (prod
 
 ## 1. Summary
 
-DreamBike is a web app for a custom motorcycle shop in Germany that mostly works on Harley-Davidsons. It is built for the owner's father's shop. The shop takes a photo of a customer's bike and drops it into the app. The app cuts the bike out of the background and finds its parts: wheels, fork, tank, handlebar, exhaust, air cleaner, seat and so on. The user clicks a part and changes it in one of three ways: describe it, drop in a photo of a part, or search for real parts online. Muse Image renders the change on the actual bike.
+DreamBike is a web app for a custom motorcycle shop in Germany that mostly works on Harley-Davidsons. [One sentence about the shop's owner removed on 2026-10-30.] The shop takes a photo of a customer's bike and drops it into the app. The app cuts the bike out of the background and finds its parts: wheels, fork, tank, handlebar, exhaust, air cleaner, seat and so on. The user clicks a part and changes it in one of three ways: describe it, drop in a photo of a part, or search for real parts online. Muse Image renders the change on the actual bike.
 
 Every change becomes a line on a build sheet. Each line has the part (a real product with a euro price when possible), a fit check against this specific bike, the German paperwork the part needs (ABE, E-mark, Teilegutachten, TÜV inspection, Eintragung), and a labor estimate. At the end the shop exports a quote PDF with before and after images.
 

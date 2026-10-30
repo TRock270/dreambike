@@ -679,7 +679,7 @@ For each completed ticket append actual date/time ET, files changed, checks and 
   - Done 2026-10-28: expected.json `reference` (front, used by the spike) and `referenceRear` are filled. Description in the owner's words: "Gold multi-spoke wheel with chrome hub, about 20 inch" (the 20 inch is the owner's estimate). identifiersReviewed stays false until the owner checks both crops in Preview.
   - Done 2026-10-28: the owner checked both crops in Preview ("crops ok") and moved them to fixtures/. identifiersReviewed is now true for `reference` and `referenceRear`. `images_edits.py --mode compose --dry-run` builds the request (base first, reference second, search and shell off). The paid compose run still needs the owner's go and the consent addendum.
   - Checks: `python spike/local_images.py --fixture-set all` 40 passed, 0 failed, 0 skipped; the `images_edits.py --mode compose --dry-run` body puts the base first, the reference second, with search tools off.
-- Owner decision 2026-10-28, edit type: the father's wheels on the R nineT (T7 reference mode). A wheel replacement counts as geometry under the T4 rule, so it takes the full-image path without the blend.
+- Owner decision 2026-10-28, edit type: the studio photo's wheels on the R nineT (T7 reference mode). A wheel replacement counts as geometry under the T4 rule, so it takes the full-image path without the blend.
 - Settle with the owner before the first paid call that uses this photo:
   - Who took the photo, and when.
   - Whether the private consent record covers this photo, including contributor mode (Meta may train on submitted content). The owner updates the record; Claude doesn't write it.
@@ -1420,3 +1420,4 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Files: README.md, LICENSE, docs/demo-script.md (new); CREDITS.md, docs/submission.md, .gitignore, TASKS.md.
 - Spend: $0.00. No paid calls.
 - Duration: about 0.75 h (19:00–19:45 ET), including the 11-agent build workflow and the 3-agent quick review.
+- Owner follow-up 2026-10-30, about 19:50–20:05 ET: README names no free-chat reviewers (the review/ row says "including OpenAI Codex"; the disclosure says "including OpenAI Codex, NVIDIA Nemotron and Google Gemini"; "including" keeps it true, since review/planning still holds the Qwen and DeepSeek answers). History decision A (owner): no history rewrite; the family relation removed from current files (PLAN.md summary, TASKS.md T7 edit-type line, one sentence in each review/planning answer, marked as removed); docs/submission.md item 6 records the decision. `/review-changes` quick green (release, general; minors only on the owner's wording choice). npm run lint, npm test 908 passed / 24 skipped.
