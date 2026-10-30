@@ -6,7 +6,7 @@ import { AppError } from "@/lib/errors";
 import { dayET, nextMidnightET, readStatus, type BucketName, type LedgerStatus, type RedisRest } from "@/lib/server/budget";
 import { loadConfig, type ServerConfig } from "@/lib/server/config";
 import { ensureSession, errorResponse, jsonResponse, readSession, requestIdOf, visitorSecret } from "@/lib/server/http";
-import { identityFor, loadPrices } from "@/lib/server/paid";
+import { identityFor, loadPrices, mayUseOwnStatusBucket } from "@/lib/server/paid";
 
 export const runtime = "nodejs";
 export const maxDuration = 5;
@@ -106,9 +106,12 @@ export async function GET(req: Request): Promise<Response> {
     // A visitor whose cookie was just issued has zero spend by definition. One fixed bucket name keeps
     // cookie-less clients on one cached read per IP and day, so they cannot force a Redis read each.
     const cookieCameIn = session !== null && readSession(req) !== null;
+    // Quota protection only (see paid.ts): after a few distinct visitors per IP, further new ones share the placeholder.
+    const ownBucket = cookieCameIn && (identity.ticket !== "public" || identity.ip === "local"
+      || mayUseOwnStatusBucket(identity.ip, identity.visitor));
     const redis: RedisRest = { url: process.env.UPSTASH_REDIS_REST_URL!, token: process.env.UPSTASH_REDIS_REST_TOKEN! };
     const status = await readStatus(redis, {
-      buckets: { phase: config.phase, ticket: identity.ticket, day, visitor: cookieCameIn ? identity.visitor : NEW_VISITOR, ip: identity.ip },
+      buckets: { phase: config.phase, ticket: identity.ticket, day, visitor: ownBucket ? identity.visitor : NEW_VISITOR, ip: identity.ip },
       models: MODELS(config),
     });
     if (!status.ok || status.halted) {

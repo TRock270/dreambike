@@ -1,0 +1,2 @@
+# Local paid test scripts and their outputs never go to Vercel (T14). They are not part of the app.
+spike/

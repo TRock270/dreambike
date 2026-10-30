@@ -136,6 +136,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 
 ## T14 — Vercel deploy and end-to-end reliability
 
+- Status: IN PROGRESS since 2026-10-30 (owner: Vercel dashboard import, Hobby plan, demo-only first, then one controlled live edit test; second laptop available). See log.
 - Priority: MVP. Estimate: 2h, Nov 2. Depends on: T13 and actual repository/hosting access.
 - Files: Next/Vercel configuration as needed, docs/api-evidence.md/submission.md, README live URL placeholder, spike/deployment.py, targeted tests for fixes.
 - Work: verify actual plan/runtime/duration/body caps; production env and no MOCK; deploy the reviewed result with owner publishing authorization; record real URL; test second-laptop cached flow and one controlled live change if gates allow. Cache-only fallback is clearly labeled.
@@ -1360,4 +1361,20 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Duration: about 2 h 40 min (2026-10-29 19:31–21:47 ET, then 2026-10-30 02:13–02:35 ET), including the 39-agent build workflow, three lead repairs, three reviews, the owner's fit review and the browser checks.
 - Not done, recorded: the Codex gate for the paid routes and spend protection (optional, owner's choice).
 - Owner 2026-10-30: added the five allow lines (budget-routes, demo, check, http, budget-redis) to .claude/settings.json; go to push: 28e3855 pushed to origin/main.
+
+### T14 — 2026-10-30, started about 13:00 ET (build-ticket workflow, lead fixes, live deploy in progress)
+
+- Owner decisions 2026-10-30: Vercel dashboard import (no CLI); Hobby plan, team "n8n Grundlagen"; demo-only first, then one controlled live edit test, then the owner decides on live; second laptop available. The import screen proposed a multi-service project with spike/ as a Python service; the lead advised against it and the owner imported only the Next.js app. `.vercelignore` now excludes spike/ (Vercel docs: ignored files are neither uploaded nor served).
+- `/build-ticket T14` (15 agents, 2 units, both approved in round 2; status needs_lead only because the live done-when items need the deploy):
+  - A: spike/deployment.py rewritten for the current manifest (4 images, 52 masks, quote, 57 rights), per-route foreign-Origin 403 and limit+1 413 probes for all 7 POST routes (with a signed cookie, never a valid body), `--expect demo_only|live`, `--expect-composite on|off`, and a secret scan of '/', every same-origin /_next/static JS (lazy chunks followed) and the API responses; values are never printed.
+  - B (SEC-1): src/lib/server/paid.ts per-instance quota limiters, keyed by IP HMAC, bounded at 2000 entries: GET /api/budget lets 4 distinct visitors per IP per 10 min read their own bucket, later ones read the shared "new" bucket (degrade, never deny); paid POSTs 10 per minute and 300 per day per IP before reserve, 429 RATE_LIMITED. Quota protection only, NOT a spend cap: reserve.lua stays the only spend control (CLAUDE.md, SPEC 13); a cold instance starts empty, and many distinct IPs can evict entries (S2; Upstash exhaustion fails closed, demo still works). Shared NAT: 10 paid POSTs per minute are shared by everyone behind one IP (F4); check during the live test.
+  - Lead fixes after the gate: daily-limit message says "Try again later." instead of "in a minute" (F2); json_of catches invalid JSON; the scan labels say they compare local .env values only (F3/S1).
+- Lead decisions: gate F1 (live items open) accepted, T14 stays in progress. SEC1-Q3 (two weak route assertions): the direct mayUseOwnStatusBucket unit test covers the same cases; no change.
+- Consultant: PAL chat nim-nemotron35 (2 calls; first asked for more files). 8 points, none taken: (1) daily counter already counts every admitted attempt; (2) config.ts refuses live on a deployment unless BUDGET_PHASE=demo; (3, 7) full reservation on unknown outcome is SPEC 13; (4) origin and cookie are separate probes; (5) postAttemptDenied is synchronous, no interleaving; (6) Secure is set on https origins; (8) already reported as local-only coverage.
+- `/review-changes` quick on paid.ts, deployment.py, .vercelignore: green (security, models, general), minors S1/S2 above.
+- Checks 13:40 ET: npm run typecheck, npm run lint, npm test (904 passed, 24 skipped), npm run build, tests/paid.test.ts 20/20: all exit 0.
+- Local production server (`next start`, LIVE_API_ENABLED=false): `deployment.py --expect demo_only` 26/26 with all four local secret values scanned; with COMPOSITE_ENABLED=false `--expect-composite off` 26/26 and `on` fails as it should (negative control).
+- Live URL (assigned by Vercel): https://dreambike-pied.vercel.app. First run 2026-10-30 (demo-only env, no APP_ORIGIN, no VISITOR_HASH_SECRET, no key, no Upstash): 11 passed, 2 failed. The failures are the designed fail-closed state: without the visitor secret a deployment issues no session cookie (http.ts visitorSecret), so the route probes cannot run. Health demo_only and no-store, budget live off with spend null, all 58 demo files match, no secret values or names in 10 JS files (2.15 MB). Header x-vercel-id: iad1.
+- Vercel docs (Functions limits, updated 2026-08-24): Hobby with Fluid compute 300 s default and maximum duration, 4.5 MB request body, 2 GB memory, default region iad1. Largest route body 3.55 MB (composite), longest maxDuration 120 s (edit): both inside. Dashboard readings pending.
+- Next: owner sets APP_ORIGIN and a fresh VISITOR_HASH_SECRET and redeploys; rerun deployment.py; second-laptop check; then the live test steps (Billing reconciliation first).
 

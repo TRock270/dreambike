@@ -124,6 +124,83 @@ export function identityFor(req: Request, session: Session | null, model: string
   };
 }
 
+// QUOTA protection only, NOT a spend cap. These two small in-memory limiters keep one client from using
+// up the Upstash command quota (a flood of status reads or reserve EVALs); when the quota is gone live mode
+// fails closed. They are per instance: a cold or second instance starts empty. They never allow anything
+// reserve.lua would refuse (reserve.lua stays the only spend control) and never replace the shared ledger.
+// Keys are HMAC values only, never raw IPs, and nothing here is logged.
+const LIMITER_MAX_ENTRIES = 2000;
+
+/** Delete the oldest entries (Map keeps insertion order) until there is room for one more. */
+function makeRoom(map: Map<string, unknown>): void {
+  while (map.size >= LIMITER_MAX_ENTRIES) map.delete(map.keys().next().value as string);
+}
+
+export const VISITORS_PER_IP_WINDOW_MS = 10 * 60_000;
+export const VISITORS_PER_IP_LIMIT = 4;
+const visitorWindows = new Map<string, { start: number; visitors: Set<string> }>();
+
+/**
+ * True when this visitor may read their own status bucket. Per IP HMAC and fixed window, only the first
+ * few distinct visitors do; later new visitors from that IP must use the shared placeholder bucket (one
+ * cached read). That view can overstate the visitor's remaining allowance; reserve.lua still enforces the true caps.
+ */
+export function mayUseOwnStatusBucket(ip: string, visitor: string, now: number = Date.now()): boolean {
+  let entry = visitorWindows.get(ip);
+  if (!entry || now - entry.start >= VISITORS_PER_IP_WINDOW_MS || now < entry.start) {
+    visitorWindows.delete(ip);
+    makeRoom(visitorWindows);
+    entry = { start: now, visitors: new Set() };
+    visitorWindows.set(ip, entry);
+  }
+  if (entry.visitors.has(visitor)) return true;
+  if (entry.visitors.size >= VISITORS_PER_IP_LIMIT) return false;
+  entry.visitors.add(visitor);
+  return true;
+}
+
+export const POST_ATTEMPTS_WINDOW_MS = 60_000;
+export const POST_ATTEMPTS_LIMIT = 10;
+// Daily ceiling per IP HMAC and instance. The IP HMAC includes the ET day, so a new day uses a new key.
+// A denied reserve still costs about 19 Redis commands; 10 per minute alone would allow ~270k per day.
+export const POST_ATTEMPTS_DAILY_LIMIT = 300;
+const postAttempts = new Map<string, number[]>();
+const dailyAttempts = new Map<string, number>();
+
+/** Counts one paid-POST attempt for this IP HMAC; returns seconds to wait when over the limit, else null. */
+function postAttemptDenied(ip: string, now: number = Date.now()): number | null {
+  const recent = (postAttempts.get(ip) ?? []).filter((t) => t <= now && now - t < POST_ATTEMPTS_WINDOW_MS);
+  if (recent.length >= POST_ATTEMPTS_LIMIT) {
+    postAttempts.set(ip, recent);
+    return Math.max(1, Math.ceil((recent[0]! + POST_ATTEMPTS_WINDOW_MS - now) / 1000));
+  }
+  const today = dailyAttempts.get(ip) ?? 0;
+  if (today >= POST_ATTEMPTS_DAILY_LIMIT) {
+    postAttempts.set(ip, recent);
+    return 3600;
+  }
+  dailyAttempts.delete(ip);
+  makeRoom(dailyAttempts);
+  dailyAttempts.set(ip, today + 1);
+  recent.push(now);
+  postAttempts.delete(ip);
+  makeRoom(postAttempts);
+  postAttempts.set(ip, recent);
+  return null;
+}
+
+/** Test only: forget both limiters. */
+export function resetQuotaLimitersForTests(): void {
+  visitorWindows.clear();
+  postAttempts.clear();
+  dailyAttempts.clear();
+}
+
+/** Test only: current sizes of the two maps. */
+export function quotaLimiterSizesForTests(): { visitorWindows: number; postAttempts: number; dailyAttempts: number } {
+  return { visitorWindows: visitorWindows.size, postAttempts: postAttempts.size, dailyAttempts: dailyAttempts.size };
+}
+
 export async function withReservation<T>(call: PaidCall, dispatch: (signal: AbortSignal) => Promise<Dispatched<T>>): Promise<T> {
   const config = loadConfig();
   if (config.mode !== "live") throw new AppError("LIVE_DISABLED");
@@ -131,6 +208,15 @@ export async function withReservation<T>(call: PaidCall, dispatch: (signal: Abor
   if (!secret) throw new AppError("LIVE_DISABLED");
   const day = dayET();
   const who = identityFor(call.req, readSession(call.req), call.model, config, secret, day);
+  // Public identity only: local development uses the fixed bucket, which the ticket cap already covers.
+  // Thrown here, before reserve and outside the dispatch try block (where RATE_LIMITED means an upstream 429).
+  if (who.ticket === "public") {
+    const wait = postAttemptDenied(who.ip);
+    if (wait !== null) {
+      const when = wait > POST_ATTEMPTS_WINDOW_MS / 1000 ? "Try again later." : "Try again in a minute.";
+      throw new AppError("RATE_LIMITED", `Too many requests from your network. ${when}`, wait);
+    }
+  }
   const redis: RedisRest = { url: process.env.UPSTASH_REDIS_REST_URL!, token: process.env.UPSTASH_REDIS_REST_TOKEN! };
   // Duplicate detection: payload and visitor, never the content itself.
   const fingerprint = labeledHmac(secret, "fp", `${call.route}\n${call.payloadDigest}\n${who.visitor}`);

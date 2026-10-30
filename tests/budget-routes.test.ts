@@ -13,6 +13,7 @@ import { POST as segmentPOST } from "@/app/api/segment/route";
 import { BudgetResponse, ErrorResponse, HealthResponse } from "@/lib/contracts";
 import { SESSION_COOKIE, SESSION_MAX_AGE_S, issueSession, readSession } from "@/lib/server/http";
 import { clearStatusCache } from "@/lib/server/budget";
+import { mayUseOwnStatusBucket, quotaLimiterSizesForTests, resetQuotaLimitersForTests, VISITORS_PER_IP_LIMIT, VISITORS_PER_IP_WINDOW_MS } from "@/lib/server/paid";
 import { config as proxyConfig, proxy } from "@/proxy";
 import { sessionCookie } from "./support/session";
 
@@ -30,6 +31,7 @@ beforeEach(() => {
   vi.stubEnv("VERCEL_ENV", "");
   vi.stubEnv("MOCK", "0");
   clearStatusCache();
+  resetQuotaLimitersForTests();
   fetched = [];
   redisEvals = 0;
   redisReply = "down";
@@ -434,6 +436,60 @@ describe("Redis quota protection (10 s display cache)", () => {
     const own = await budgetGET(get("/api/budget", { ...ip, cookie: sessionCookie() }));
     expect(own.status).toBe(200);
     expect(redisEvals).toBe(3);
+  });
+
+  it("many cookies from one IP: at most limit + 1 EVALs; own buckets stay; the window expiring restores them", async () => {
+    fakeClock();
+    demoEnv();
+    redisReply = () => statusReply();
+    const ip = { "x-vercel-forwarded-for": "203.0.113.5" };
+    const first = sessionCookie();
+    for (let i = 0; i < 25; i++) {
+      const cookie = i === 0 ? first : sessionCookie();
+      expect((await budgetGET(get("/api/budget", { ...ip, cookie }))).status).toBe(200);
+    }
+    expect(redisEvals).toBeLessThanOrEqual(VISITORS_PER_IP_LIMIT + 1);
+    const before = redisEvals;
+    // After the window a new cookie reads its own bucket again.
+    vi.setSystemTime(Date.now() + VISITORS_PER_IP_WINDOW_MS + 1);
+    const cookies = Array.from({ length: 3 }, () => sessionCookie());
+    for (const cookie of cookies) await budgetGET(get("/api/budget", { ...ip, cookie }));
+    expect(redisEvals).toBe(before + 3);
+  });
+
+  it("mayUseOwnStatusBucket: counted visitors keep their bucket even when the IP is full; the window restores new ones", () => {
+    const t = 1_000_000;
+    const visitors = Array.from({ length: VISITORS_PER_IP_LIMIT }, (_, i) => `v${i}`);
+    for (const v of visitors) expect(mayUseOwnStatusBucket("ipA", v, t)).toBe(true);
+    expect(mayUseOwnStatusBucket("ipA", "extra", t + 1)).toBe(false);
+    expect(mayUseOwnStatusBucket("ipA", "v0", t + 2)).toBe(true);
+    expect(mayUseOwnStatusBucket("ipB", "extra", t + 2)).toBe(true);
+    expect(mayUseOwnStatusBucket("ipA", "extra", t + VISITORS_PER_IP_WINDOW_MS)).toBe(true);
+  });
+
+  it("a normal single visitor and a different IP keep their own buckets", async () => {
+    fakeClock();
+    demoEnv();
+    redisReply = () => statusReply();
+    for (let i = 0; i < VISITORS_PER_IP_LIMIT + 2; i++) {
+      await budgetGET(get("/api/budget", { "x-vercel-forwarded-for": "203.0.113.5", cookie: sessionCookie() }));
+    }
+    const before = redisEvals;
+    await budgetGET(get("/api/budget", { "x-vercel-forwarded-for": "203.0.113.9", cookie: sessionCookie() }));
+    expect(redisEvals).toBe(before + 1);
+  });
+
+  it("local development is never limited and the limiter maps stay bounded", async () => {
+    fakeClock();
+    liveEnv();
+    redisReply = () => statusReply();
+    for (let i = 0; i < 10; i++) await budgetGET(get("/api/budget", { cookie: sessionCookie() }));
+    expect(quotaLimiterSizesForTests().visitorWindows).toBe(0);
+    demoEnv();
+    for (let i = 0; i < 2100; i++) {
+      await budgetGET(get("/api/budget", { "x-vercel-forwarded-for": `10.${i >> 8}.${i & 255}.1`, cookie: sessionCookie() }));
+    }
+    expect(quotaLimiterSizesForTests().visitorWindows).toBeLessThanOrEqual(2000);
   });
 
   it("an outage is cached: no Redis retry per request", async () => {

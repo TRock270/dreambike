@@ -1,7 +1,7 @@
 // withReservation against a fake Upstash REST endpoint: no network, no Meta.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppError } from "@/lib/errors";
-import { countLimitFor, normalizeClientIp, withReservation, type PaidCall } from "@/lib/server/paid";
+import { countLimitFor, normalizeClientIp, POST_ATTEMPTS_DAILY_LIMIT, POST_ATTEMPTS_LIMIT, POST_ATTEMPTS_WINDOW_MS, quotaLimiterSizesForTests, resetQuotaLimitersForTests, withReservation, type PaidCall } from "@/lib/server/paid";
 import { loadConfig } from "@/lib/server/config";
 import { labeledHmac } from "@/lib/server/http";
 import { sessionCookie } from "./support/session";
@@ -19,6 +19,7 @@ let replies: { reserve: RedisReply; settle: RedisReply | "fail" };
 let commands: string[][];
 
 beforeEach(() => {
+  resetQuotaLimitersForTests();
   vi.stubEnv("NODE_ENV", "test");
   vi.stubEnv("VERCEL_ENV", "");
   for (const [k, v] of Object.entries({ LIVE_API_ENABLED: "true", MODEL_API_KEY: "k", UPSTASH_REDIS_REST_URL: REDIS,
@@ -249,5 +250,64 @@ describe("normalizeClientIp", () => {
     for (const bad of [null, "", "a, b", "1.2.3.4, 5.6.7.8", "1.2.3", "256.1.1.1", "fe80::1%eth0", "1.2.3.4 5.6.7.8", "::g"]) {
       expect(normalizeClientIp(bad), String(bad)).toBeNull();
     }
+  });
+});
+
+describe("per-IP attempt limiter (Redis quota protection, not a spend cap)", () => {
+  const IP = "203.0.113.7";
+  const demo = () => {
+    vi.stubEnv("VERCEL_ENV", "production");
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("BUDGET_PHASE", "demo");
+    vi.stubEnv("APP_ORIGIN", "https://dreambike.example");
+  };
+  afterEach(() => { vi.useRealTimers(); });
+  const ok = async (ip = IP) => withReservation(makeCall({ "x-vercel-forwarded-for": ip }), async () => ({ value: 1, chargedMicroUsd: 2500 }));
+
+  it("answers 429 RATE_LIMITED with its own text and retryAfterSeconds, and never reaches reserve or dispatch", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-30T15:00:00Z") });
+    demo();
+    for (let i = 0; i < POST_ATTEMPTS_LIMIT; i++) await ok();
+    commands = [];
+    const dispatch = vi.fn(async () => ({ value: 1, chargedMicroUsd: 1 }));
+    const error = (await withReservation(makeCall({ "x-vercel-forwarded-for": IP }), dispatch).catch((e: unknown) => e)) as AppError;
+    expect(error.code).toBe("RATE_LIMITED");
+    expect(error.message).toMatch(/Too many requests/);
+    expect(error.retryAfterSeconds).toBe(60);
+    expect(commands).toEqual([]);
+    expect(dispatch).not.toHaveBeenCalled();
+    // Another IP is unaffected; after the window the first IP works again.
+    await ok("203.0.113.8");
+    vi.setSystemTime(Date.now() + POST_ATTEMPTS_WINDOW_MS + 1);
+    await ok();
+  });
+
+  it("a sustained client hits the daily ceiling: further attempts make zero Redis commands", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-30T15:00:00Z") });
+    demo();
+    for (let i = 0; i < POST_ATTEMPTS_DAILY_LIMIT; i++) {
+      if (i > 0 && i % POST_ATTEMPTS_LIMIT === 0) vi.setSystemTime(Date.now() + POST_ATTEMPTS_WINDOW_MS + 1);
+      await ok();
+    }
+    vi.setSystemTime(Date.now() + POST_ATTEMPTS_WINDOW_MS + 1);
+    commands = [];
+    const dispatch = vi.fn(async () => ({ value: 1, chargedMicroUsd: 1 }));
+    const error = (await withReservation(makeCall({ "x-vercel-forwarded-for": IP }), dispatch).catch((e: unknown) => e)) as AppError;
+    expect(error.code).toBe("RATE_LIMITED");
+    expect(error.retryAfterSeconds).toBeGreaterThan(0);
+    expect(commands).toEqual([]);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("never limits the local identity", async () => {
+    for (let i = 0; i < POST_ATTEMPTS_LIMIT + 5; i++) await withReservation(makeCall(), async () => ({ value: 1, chargedMicroUsd: 2500 }));
+    expect(quotaLimiterSizesForTests().postAttempts).toBe(0);
+  });
+
+  it("stays bounded under many IPs", async () => {
+    demo();
+    for (let i = 0; i < 2100; i++) await ok(`10.${i >> 8}.${i & 255}.1`);
+    expect(quotaLimiterSizesForTests().postAttempts).toBeLessThanOrEqual(2000);
+    expect(quotaLimiterSizesForTests().dailyAttempts).toBeLessThanOrEqual(2000);
   });
 });
