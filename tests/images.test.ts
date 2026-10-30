@@ -12,6 +12,7 @@ import {
 import { assertSameOrigin } from "@/lib/server/http";
 import { CANVAS_RGB, normalize, webpChunks } from "@/lib/server/images";
 import { crc32 } from "node:zlib";
+import { withSession } from "./support/session";
 
 const HEIC = new Uint8Array([0, 0, 0, 0x18, ...Buffer.from("ftypheic"), 0, 0, 0, 0, ...Buffer.from("mif1heic"), ...new Array(64).fill(0)]);
 
@@ -159,7 +160,7 @@ describe("server normalize", () => {
 describe("origin check", () => {
   const config = { appOrigin: "https://dreambike.example" } as Parameters<typeof assertSameOrigin>[1];
   const req = (origin: string | null, host = "localhost:3100") => new Request(`http://${host}/api/normalize`,
-    { method: "POST", headers: origin ? { Origin: origin, Host: host } : { Host: host } });
+    { method: "POST", headers: withSession(origin ? { Origin: origin, Host: host } : { Host: host }) });
   const allowed = (r: Request, deployed: boolean) => { try { assertSameOrigin(r, config, deployed); return true; } catch { return false; } };
 
   it("accepts APP_ORIGIN and, only locally, localhost ports; never trusts Host", () => {
@@ -178,7 +179,7 @@ describe("POST /api/normalize", () => {
   afterEach(() => vi.restoreAllMocks());
 
   async function post(form: FormData | null, headers: Record<string, string> = { Origin: "http://localhost:3000" }) {
-    const res = await POST(new Request(url, { method: "POST", body: form ?? undefined, headers }));
+    const res = await POST(new Request(url, { method: "POST", body: form ?? undefined, headers: withSession(headers) }));
     return { status: res.status, body: await res.json(), cache: res.headers.get("cache-control") };
   }
   const photoForm = async (bytes: Uint8Array, type = "image/webp") => {
@@ -230,7 +231,7 @@ describe("POST /api/normalize", () => {
       pull(c) { if (sent >= 2_000_000) c.close(); else { sent += chunk.length; c.enqueue(chunk); } },
     });
     const res = await POST(new Request(url, { method: "POST", body: stream, duplex: "half",
-      headers: { Origin: "http://localhost:3000", "Content-Type": "multipart/form-data; boundary=x" } } as RequestInit));
+      headers: withSession({ Origin: "http://localhost:3000", "Content-Type": "multipart/form-data; boundary=x" }) } as RequestInit));
     expect(res.status).toBe(413);
     expect(sent).toBeLessThan(2_000_000); // reading stopped early
   });
@@ -240,7 +241,7 @@ describe("POST /api/normalize", () => {
     form.append("note", "hi");
     expect((await post(form)).status).toBe(400);
     const big = await POST(new Request(url, { method: "POST", body: "x",
-      headers: { Origin: "http://localhost:3000", "Content-Length": "4000000" } }));
+      headers: withSession({ Origin: "http://localhost:3000", "Content-Length": "4000000" }) }));
     expect(big.status).toBe(413);
   });
 });

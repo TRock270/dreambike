@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { Project } from "@/lib/types";
+import { DemoCard } from "./DemoView";
 
 export type ProjectListState =
   | { kind: "loading" }
@@ -24,12 +25,25 @@ type Props = {
   onOpenFolder?: () => void;
   openFolderBusy?: boolean;
   openFolderNote?: { tone: "info" | "danger"; text: string } | null;
+  /** Shows the demo card above the list. The card works even when local storage does not. */
+  onViewDemo?: () => void;
 };
 
 const button = "rounded-full border border-hairline px-3 py-1 text-[13px] disabled:opacity-50";
 
+/** The demo card, then the saved projects. The card sits outside the storage states so a storage failure never hides the demo. */
+export function ProjectList(props: Props) {
+  const { onViewDemo, deleteOnly = false } = props;
+  return (
+    <div className="flex flex-col gap-3">
+      {onViewDemo && !deleteOnly && <DemoCard onView={onViewDemo} />}
+      <SavedProjects {...props} />
+    </div>
+  );
+}
+
 /** Saved projects on this device, newest first. Delete asks first; nothing is deleted on a read error. */
-export function ProjectList({ state, busyId, error, onOpen, onDelete, deleteOnly = false, excludeId = null, emptyText, onOpenFolder, openFolderBusy = false, openFolderNote = null }: Props) {
+function SavedProjects({ state, busyId, error, onOpen, onDelete, deleteOnly = false, excludeId = null, emptyText, onOpenFolder, openFolderBusy = false, openFolderNote = null }: Props) {
   const [confirming, setConfirming] = useState<string | null>(null);
 
   if (state.kind === "loading") {

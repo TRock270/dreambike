@@ -15,8 +15,8 @@ const BUILDERS = [
   { builder: 'shop-builder', re: /^(src\/lib\/browser\/(projectSession|pdfExport)\.ts|src\/lib\/bikeForm\.ts|tests\/(projectsession|bikeform))/ },
   { builder: 'models-builder', re: /^(src\/lib\/server\/(meta|sse)\.ts|src\/lib\/editPolicy\.ts|prompts\/|src\/lib\/mocks\/|src\/app\/api\/(segment|identify|instruction|edit|check|search-parts|transcribe)\/|spike\/(responses_sam|responses_spark|images_edits|asr_transcribe|files|run_all)\.py|tests\/(meta|sam|spark|sse|instruction|identify|edit|check|search|transcribe))/ },
   { builder: 'imaging-builder', re: /^(src\/lib\/server\/images\.ts|src\/lib\/(coordinates|slots|parts)\.ts|src\/app\/api\/(normalize|composite)\/|spike\/(imaging|local_images)\.py|src\/lib\/browser\/|src\/lib\/imageFormat\.ts|tests\/(images|coordinates|masks|composite|slots|preflight|imageFormat|browser|partmap|renderflow))/ },
-  { builder: 'shop-builder', re: /^(src\/lib\/(db|project|cache|quote|pdf|estimate)\.ts|src\/lib\/server\/fit[^/]*\.ts|tests\/(db|project|cache|quote|pdf|fit))/ },
-  { builder: 'platform-builder', re: /^(budget\/|src\/lib\/server\/(budget|config|fetch-product|http|paid)\.ts|src\/app\/api\/(budget|health|product-image)\/|spike\/(ledger|common|deployment)\.py|next\.config\.ts|vercel\.json$|\.env\.example$|tests\/(budget|config|fetch-product|http|deployment|paid))/ },
+  { builder: 'shop-builder', re: /^(src\/lib\/(db|project|cache|quote|pdf|estimate|demo)\.ts|src\/lib\/server\/(fit[^/]*|demoPack)\.ts|tests\/(db|project|cache|quote|pdf|fit|demo))/ },
+  { builder: 'platform-builder', re: /^(budget\/|src\/lib\/server\/(budget|config|fetch-product|http|paid)\.ts|src\/app\/api\/(budget|health|product-image)\/|spike\/(ledger|common|deployment)\.py|next\.config\.ts|vercel\.json$|\.env\.example$|src\/proxy\.ts$|tests\/(budget|config|fetch-product|http|deployment|paid))/ },
   { builder: 'ui-builder', re: /^(src\/components\/|src\/styles\/|src\/app\/(layout|page)\.tsx|src\/app\/globals\.css)/ },
 ]
 const builderFor = (file) => (BUILDERS.find((b) => b.re.test(file)) || { builder: 'general-builder' }).builder
@@ -24,7 +24,7 @@ const builderFor = (file) => (BUILDERS.find((b) => b.re.test(file)) || { builder
 // secret and route paths of the security-reviewer RULES in review-changes.js;
 // keep both lists in step. Where a rule has no end anchor, this one has none
 // either, so it stays a superset. Fix reviews of other files run on Sonnet.
-const OPUS_REVIEW_RE = /^(budget\/|src\/lib\/server\/(budget|config|fetch-product|meta|http|paid)\.ts|src\/app\/api\/|spike\/(ledger|common|deployment|run_all|responses_sam|responses_spark|images_edits|asr_transcribe|files)\.py|spike\/requirements\.txt$|next\.config\.ts|vercel\.json$|\.env\.example$|\.gitignore$|\.claude\/|package(-lock)?\.json$|src\/(middleware|proxy)\.ts|src\/lib\/(contracts|errors)\.ts$|vitest\.config\.ts$|eslint\.config\.mjs$|src\/components\/(BudgetBanner|ErrorNotice|DemoBanner|ModeBanner)\.tsx$|tests\/(budget|config|fetch-product)|tests\/(http|deployment|paid|workflows)[^/]*\.test\.ts$|tests\/support\/workflowHarness\.ts$)/
+const OPUS_REVIEW_RE = /^(budget\/|src\/lib\/server\/(budget|config|fetch-product|meta|http|paid)\.ts|src\/app\/api\/|spike\/(ledger|common|deployment|run_all|responses_sam|responses_spark|images_edits|asr_transcribe|files)\.py|spike\/requirements\.txt$|next\.config\.ts|vercel\.json$|\.env\.example$|\.gitignore$|\.claude\/|package(-lock)?\.json$|src\/(middleware|proxy)\.ts|src\/lib\/(contracts|errors)\.ts$|vitest\.config\.ts$|eslint\.config\.mjs$|src\/components\/(BudgetBanner|ErrorNotice|DemoBanner|ModeBanner)\.tsx$|tests\/(budget|config|fetch-product)|tests\/(http|deployment|paid|workflows)[^/]*\.test\.ts$|tests\/support\/(workflowHarness|session)\.ts$)/
 
 // Args arrive as an object, a JSON string, or one plain check command like "npm test".
 function parseArgs(raw) {

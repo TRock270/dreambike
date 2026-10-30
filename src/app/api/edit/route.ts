@@ -72,7 +72,7 @@ export async function POST(req: Request): Promise<Response> {
       const imageUrls = [toDataUrl("image/webp", bytes), ...(reference ? [reference.dataUrl] : [])];
       const body = imageEditBody(prompt, imageUrls, p.width, p.height, p.quality);
       const raw = await withReservation({
-        route: "/api/edit", model: "muse-image-1.0", amountMicroUsd: prices.reservations["muse-image-1.0"]!,
+        req, route: "/api/edit", model: "muse-image-1.0", amountMicroUsd: prices.reservations["muse-image-1.0"]!,
         requestId, deadlineMs: Math.max(1_000, DEADLINE_MS - POST_PROCESS_MS - (Date.now() - startedAt)),
         payloadDigest: createHash("sha256").update(JSON.stringify(p)).update(bytes).update(reference?.bytes ?? "").digest("hex"),
       }, async (signal) => {

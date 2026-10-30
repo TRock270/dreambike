@@ -86,7 +86,7 @@ export async function POST(req: Request): Promise<Response> {
       const input = { width: p.width, height: p.height, dataUrl: toDataUrl("image/webp", bytes) };
       const prices = loadPrices();
       const result = await withReservation({
-        route: "/api/segment", model: "sam-3.1", amountMicroUsd: prices.reservations["sam-3.1"]!,
+        req, route: "/api/segment", model: "sam-3.1", amountMicroUsd: prices.reservations["sam-3.1"]!,
         // One total deadline for the route, counted from the request start.
         requestId, deadlineMs: Math.max(1_000, DEADLINE_MS - (Date.now() - startedAt)),
         payloadDigest: createHash("sha256").update(JSON.stringify(p)).update(bytes).digest("hex"),

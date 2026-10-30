@@ -72,7 +72,7 @@ export async function POST(req: Request): Promise<Response> {
     const body = sparkBody(config.museModel, "fit-check.v1.md", "fit_check_v1", buildFitTask(request), null, true, true);
     // One attempt only: withReservation keys on the request id, so a retry would be a duplicate.
     const raw = await withReservation({
-      route: "/api/check", model: config.museModel, amountMicroUsd: base + perQuery * queries,
+      req, route: "/api/check", model: config.museModel, amountMicroUsd: base + perQuery * queries,
       requestId, deadlineMs: Math.max(1_000, DEADLINE_MS - (Date.now() - startedAt)),
       payloadDigest: createHash("sha256").update(JSON.stringify(request)).digest("hex"),
     }, async (signal) => {

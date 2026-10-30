@@ -17,6 +17,7 @@ Paths below are relative to the DreamBike repo. Create files in the ticket that 
 | HACKATHON_GUIDELINES.md | Existing rights, spending, and submission reference |
 | RULES.md | Existing private local source, gitignored |
 | budget/reserve.lua, budget/settle.lua | Shared atomic Redis policy, loaded by Python and Node; bundle as server assets |
+| budget/status.lua | Read-only status read for /api/budget and /api/health (T13; 8 commands per read) |
 | docs/api-evidence.md | Sanitized smoke results, installed versions, timings, and U01–U10 decisions |
 | docs/submission.md, docs/demo-script.md | Actual live/repo/video URLs, checklist, 3-minute recording script |
 | src/app/layout.tsx, src/app/page.tsx | Font loading and desktop app shell |
@@ -36,12 +37,14 @@ Paths below are relative to the DreamBike repo. Create files in the ticket that 
 | src/lib/server/meta.ts | Bearer HTTP client and functions in section 6; server-only import |
 | src/lib/server/images.ts | sharp decode/normalize/mask/composite helpers |
 | src/lib/server/budget.ts | Atomic Redis reservations, limits, and content-free ledger |
+| src/proxy.ts | Next proxy that issues the signed session cookie on page navigation (T13) |
+| src/lib/demo.ts, src/lib/server/demoPack.ts | Demo loader and "Try editing" copy (client); Node-only pack of a saved project into public/demo (T13) |
 | src/lib/server/fetch-product.ts | Optional allowlisted URL and image retrieval |
 | src/lib/mocks/ | Labeled response JSON and pointers to cleared owned demo images |
 | src/styles/tokens.css | Every Nordlicht color, type, spacing, and radius value |
 | prompts/*.v1.md | Versioned prompt templates from section 8 |
 | public/fonts/ | Licensed IBM Plex TTF files used by PDF; include OFL text |
-| public/demo/ | Rights-cleared precomputed manifest, v0/v1/v2 WebP, masks, example PDF |
+| public/demo/ | Rights-cleared precomputed manifest, v0/v1/v2 WebP, masks, example PDF (T13 owner extension: v0–v3, masks as `<id>.png`) |
 | fixtures/ | Five private owned source photos and expected.json; gitignored |
 | spike/requirements.txt, spike/common.py | Python dependencies, env, HTTP, budget, and shared assertions |
 | spike/run_all.py | Modes spike/smoke, fixture selection, shared ticket cap |
@@ -288,6 +291,8 @@ type CacheEntry = { key: string; blobIds: string[]; value: unknown;
 type DemoManifest = { schemaVersion: 1; cachedAt: string; promptVersions: string[];
   project: Project; versions: Version[];
   assets: { id: string; path: string; hash: string; mime: string }[]; quotePath: string };
+// Implementation note (T13, 2026-10-29): DemoManifest is now the zod schema in src/lib/contracts.ts
+// (schemaVersion, cachedAt, provenance, rights, snapshot: ProjectSnapshot, masks, quote); types.ts infers it.
 type BudgetReservation = { requestId: string; visitorHash: string; dayET: string;
   route: string; model: string; reservedMicroUsd: number; chargedMicroUsd: number;
   state: "reserved" | "settled" | "unknown"; attempts: number };
@@ -375,9 +380,11 @@ const BudgetResponse = z.object({ dayET: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
   features: z.object({ composite: z.boolean(), reference: z.boolean(),
     search: z.boolean(), voice: z.boolean() }).strict(),
   reason: Short.nullable() }).strict();
+// Implementation note (T13, 2026-10-29): reason is z.enum(["visitor_cap", "global_cap", "project_cap",
+// "live_disabled", "accounting_unavailable"]).nullable(); the client switches on it, never on message text.
 ```
 
-Common successful status is 200. Missing body on the two GETs maps to EmptyRequest; query parameters are rejected. In unavailable accounting mode BudgetResponse reports liveEnabled=false, spent/reserved=null, and remaining allowance zero. Display unknown spend as unavailable, never as zero spent.
+Implementation note (T13): src/proxy.ts also issues the session cookie on page navigation; a POST without a valid cookie gets 403 "Reload the page to continue.". Both GETs cache their Redis read for 10 s per server instance (display only; reserve.lua enforces). Common successful status is 200. Missing body on the two GETs maps to EmptyRequest; query parameters are rejected. In unavailable accounting mode BudgetResponse reports liveEnabled=false, spent/reserved=null, and remaining allowance zero. Display unknown spend as unavailable, never as zero spent.
 
 | Method and path | Request / parts | Response | Meta function and endpoint | Total route deadline / Vercel maxDuration |
 | --- | --- | --- | --- | --- |

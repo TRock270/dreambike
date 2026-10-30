@@ -42,7 +42,7 @@ export async function POST(req: Request): Promise<Response> {
     const body = sparkBody(config.museModel, "identify.v1.md", "bike_identification_v1",
       { width: payload.data.width, height: payload.data.height }, toDataUrl("image/webp", bytes));
     const raw = await withReservation({
-      route: "/api/identify", model: config.museModel, amountMicroUsd: prices.reservations["spark-ungrounded"]!,
+      req, route: "/api/identify", model: config.museModel, amountMicroUsd: prices.reservations["spark-ungrounded"]!,
       requestId, deadlineMs: Math.max(1_000, DEADLINE_MS - (Date.now() - startedAt)),
       payloadDigest: createHash("sha256").update(JSON.stringify(payload.data)).update(bytes).digest("hex"),
     }, async (signal) => {

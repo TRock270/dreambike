@@ -4,15 +4,24 @@
 -- live in one Redis slot.
 --
 -- KEYS: 1 lifetime, 2 phase, 3 ticket, 4 global day, 5 visitor day, 6 ip day
---       (hashes with fields spent, reserved, count:<model>),
+--       (hashes with fields spent, reserved, count:<model>; the lifetime hash
+--       also stores capProjectMicroUsd and capDailyMicroUsd, set by
+--       `spike/ledger.py set-caps`),
 --       7 request marker (hash), 8 ledger (list), 9 halt flag (string)
 -- ARGV: 1 requestKey, 2 fingerprint, 3 amount, 4 model, 5 route, 6 ticket,
 --       7 dayET, 8 nowMs, 9 pendingUntilMs, 10 markerTtlSec, 11 aggregateTtlSec,
 --       12..17 caps for KEYS 1..6, 18 visitor count limit, 19 ip count limit
 --       (count limit -1 means no count limit for this bucket)
+-- Caps 12 (lifetime) and 15 (global day) are clamped to the stored values:
+-- the effective cap is the smaller one, so a wrong environment value can never
+-- raise the project or daily limit. Visitor and IP day keys expire after
+-- ARGV[10] (48 h); the other aggregates after ARGV[11].
 --
 -- Returns {"OK", amount} or {"DENIED", bucket} or {"DUPLICATE", state}
--- or {"UNAVAILABLE", reason}.
+-- or {"UNAVAILABLE", reason}
+-- (reason: invalid_amount, invalid_cap, lifetime_uninitialized, caps_uninitialized,
+-- halted). invalid_cap: any ARGV cap or count limit that is missing, NaN, infinite
+-- or not an integer (caps must be >= 0, count limits >= -1).
 
 local BUCKETS = { "lifetime", "phase", "ticket", "global_day", "visitor_day", "ip_day" }
 
@@ -25,9 +34,42 @@ if amount == nil or amount < 0 or amount ~= math.floor(amount) then
   return { "UNAVAILABLE", "invalid_amount" }
 end
 
+-- Every ARGV cap and count limit must be a finite integer, or nothing is reserved.
+local function wholeNumber(text, minimum)
+  local v = tonumber(text)
+  if v == nil or v ~= v or v == math.huge or v == -math.huge or v ~= math.floor(v) or v < minimum then
+    return nil
+  end
+  return v
+end
+for i = 12, 17 do
+  if wholeNumber(ARGV[i], 0) == nil then
+    return { "UNAVAILABLE", "invalid_cap" }
+  end
+end
+for i = 18, 19 do
+  if wholeNumber(ARGV[i], -1) == nil then
+    return { "UNAVAILABLE", "invalid_cap" }
+  end
+end
+
 -- A missing lifetime total is an accounting failure, never a free reset.
 if redis.call("EXISTS", KEYS[1]) == 0 then
   return { "UNAVAILABLE", "lifetime_uninitialized" }
+end
+-- The stored caps are the ceiling for lifetime and global day. Missing or
+-- malformed stored caps are an accounting failure too.
+local function storedCap(field)
+  local v = tonumber(redis.call("HGET", KEYS[1], field) or "")
+  if v == nil or v ~= v or v == math.huge or v < 0 or v ~= math.floor(v) then
+    return nil
+  end
+  return v
+end
+local storedProject = storedCap("capProjectMicroUsd")
+local storedDaily = storedCap("capDailyMicroUsd")
+if storedProject == nil or storedDaily == nil then
+  return { "UNAVAILABLE", "caps_uninitialized" }
 end
 if redis.call("EXISTS", KEYS[9]) == 1 then
   return { "UNAVAILABLE", "halted" }
@@ -44,6 +86,11 @@ end
 -- spent + outstanding reservations + this request must fit every cap.
 for i = 1, 6 do
   local cap = tonumber(ARGV[11 + i])
+  if cap ~= nil and i == 1 and storedProject < cap then
+    cap = storedProject
+  elseif cap ~= nil and i == 4 and storedDaily < cap then
+    cap = storedDaily
+  end
   local used = num(KEYS[i], "spent") + num(KEYS[i], "reserved")
   if cap == nil or used + amount > cap then
     return { "DENIED", BUCKETS[i] }
@@ -66,7 +113,12 @@ end
 -- Attempt counters only grow; a released 429 still counts as an attempt.
 for i = 4, 6 do
   redis.call("HINCRBY", KEYS[i], countField, 1)
-  redis.call("EXPIRE", KEYS[i], tonumber(ARGV[11]))
+  -- Visitor and IP identifiers expire after 48 h; the global day aggregate stays.
+  if i == 4 then
+    redis.call("EXPIRE", KEYS[i], tonumber(ARGV[11]))
+  else
+    redis.call("EXPIRE", KEYS[i], tonumber(ARGV[10]))
+  end
 end
 
 redis.call("HSET", KEYS[7],

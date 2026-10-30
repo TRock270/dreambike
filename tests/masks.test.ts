@@ -9,6 +9,7 @@ import { runLimited } from "@/lib/queue";
 import { VERIFIED_SAM_DOWNSCALED, VERIFIED_SAM_PLACEMENT, VERIFIED_SAM_POINTS, isDownscaled, maskToNormalized, maskToPng, placeSamRasters, pngToMask } from "@/lib/server/images";
 import { samPointsText, samRecords, segment } from "@/lib/server/meta";
 import { sseEvents } from "@/lib/server/sse";
+import { withSession } from "./support/session";
 
 // Documented record from the @meta-sam/parser 0.1.0 README (format evidence, not an
 // account response): box x1..x2 = 211..270, y1..y2 = 228..254 (inclusive), 320x334 frame.
@@ -269,7 +270,7 @@ describe("SAM request shape and the segment route", () => {
     form.append("payload", JSON.stringify(payload));
     form.append("image", new File([new Uint8Array(image)], "base.webp", { type: "image/webp" }));
     const res = await POST(new Request("http://localhost:3000/api/segment", { method: "POST", body: form,
-      headers: { Origin: "http://localhost:3000", "X-Request-Id": crypto.randomUUID(), ...headers } }));
+      headers: withSession({ Origin: "http://localhost:3000", "X-Request-Id": crypto.randomUUID(), ...headers }) }));
     return { status: res.status, body: await res.json() };
   }
   const webp = async (w: number, h: number) => new Uint8Array(await sharp({ create: { width: w, height: h,

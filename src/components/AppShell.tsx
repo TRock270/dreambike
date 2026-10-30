@@ -21,13 +21,15 @@ type Props = {
   panelLocked: boolean;
   onUndo: () => void;
   onRedo: () => void;
+  /** Budget state strip shown directly under the header row. */
+  banner?: ReactNode;
   children: ReactNode;
 };
 
 const button = "rounded-full border border-hairline px-4 py-1.5 text-[13px] disabled:opacity-50";
 
 /** Header (project name, Undo, Redo, Settings), the page content, and the Build sheet / Estimate tabs. */
-export function AppShell({ projectName, saveStatus, canUndo, canRedo, undoHint, redoHint, busy, panel, onPanel, panelLocked, onUndo, onRedo, children }: Props) {
+export function AppShell({ projectName, saveStatus, canUndo, canRedo, undoHint, redoHint, busy, panel, onPanel, panelLocked, onUndo, onRedo, banner, children }: Props) {
   return (
     <>
       <header className="flex shrink-0 items-center gap-4 border-b border-hairline bg-surface-1 px-6 py-3">
@@ -42,6 +44,7 @@ export function AppShell({ projectName, saveStatus, canUndo, canRedo, undoHint, 
             className={`${button} ${panel === "settings" ? "bg-primary text-on-fill" : "bg-surface-2"}`}>Settings</button>
         </div>
       </header>
+      {banner}
       {children}
       <nav aria-label="Sheet and estimate" className="flex shrink-0 gap-2 border-t border-hairline bg-surface-1 px-6 py-3">
         {(["sheet", "estimate"] as const).map((mode) => (

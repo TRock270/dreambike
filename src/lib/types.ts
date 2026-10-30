@@ -9,7 +9,7 @@ import type {
   ImageRef as ImageRefSchema, StoredImage as StoredImageSchema, StoredMask as StoredMaskSchema,
   Part as PartSchema, BikeRevision as BikeRevisionSchema, Version as VersionSchema,
   Project as ProjectSchema, CacheEntry as CacheEntrySchema, MetaRecord as MetaRecordSchema,
-  ProjectSnapshot as ProjectSnapshotSchema, SnapshotImage as SnapshotImageSchema, SnapshotMask as SnapshotMaskSchema,
+  ProjectSnapshot as ProjectSnapshotSchema, DemoManifest as DemoManifestSchema, DemoMask, DemoProvenance, SnapshotImage as SnapshotImageSchema, SnapshotMask as SnapshotMaskSchema,
 } from "./contracts";
 
 export type EditModeId = z.infer<typeof EditMode>;
@@ -62,11 +62,9 @@ export type Quote = {
   inputHash: string; generatedAt: number;
 };
 export type CacheEntry = z.infer<typeof CacheEntrySchema>;
-export type DemoManifest = {
-  schemaVersion: 1; cachedAt: string; promptVersions: string[]; project: Project;
-  versions: Version[]; assets: { id: string; path: string; hash: string; mime: string }[];
-  quotePath: string;
-};
+export type DemoManifest = z.infer<typeof DemoManifestSchema>;
+export type DemoMaskEntry = z.infer<typeof DemoMask>;
+export type DemoProvenanceData = z.infer<typeof DemoProvenance>;
 export type BudgetReservation = {
   requestId: string; visitorHash: string; dayET: string; route: string; model: string;
   reservedMicroUsd: number; chargedMicroUsd: number;

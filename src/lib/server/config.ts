@@ -4,8 +4,15 @@ import "server-only";
 
 export type AppMode = "mock" | "live" | "demo_only";
 
+/** SPEC 13 default caps are also the maximum: an environment value can only lower them. */
+export const MAX_CAPS_MICRO_USD = { project: 100_000_000, daily: 5_000_000, development: 50_000_000 } as const;
+
 export type ServerConfig = {
   mode: AppMode;
+  /** NODE_ENV=production or any Vercel deployment (preview included). */
+  deployed: boolean;
+  /** VISITOR_HASH_SECRET is set and at least 32 bytes. */
+  visitorSecretConfigured: boolean;
   /** Why live mode is off, as safe text; null when live. */
   liveBlockedReason: string | null;
   apiConfigured: boolean;
@@ -35,11 +42,28 @@ function flag(env: NodeJS.ProcessEnv, name: string, fallback: boolean): boolean 
   return v === "true" || v === "1";
 }
 
-function int(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
+/**
+ * Count limit from the environment. A malformed value never throws and never
+ * raises a limit: it becomes 0 (no live calls of that kind) and is reported.
+ */
+function int(env: NodeJS.ProcessEnv, name: string, fallback: number, problems: string[]): number {
   const v = env[name];
   if (v === undefined || v === "") return fallback;
-  if (!/^\d+$/.test(v)) throw new Error(`${name} must be a non-negative integer`);
+  if (!/^\d{1,9}$/.test(v)) {
+    problems.push(`${name} is not a valid limit`);
+    return 0;
+  }
   return Number(v);
+}
+
+/** USD cap, never above `max`. A malformed value becomes 0 and is reported, not thrown. */
+function capMicro(env: NodeJS.ProcessEnv, name: string, fallback: string, max: number, problems: string[]): number {
+  try {
+    return Math.min(usdToMicro(env[name] || fallback), max);
+  } catch {
+    problems.push(`${name} is not a valid amount`);
+    return 0;
+  }
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
@@ -57,6 +81,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const reserve = env.SEARCH_QUERY_RESERVE ?? "";
 
   const missing: string[] = [];
+  const problems: string[] = [];
+  const budgetPhase = env.BUDGET_PHASE || "development";
+  const phaseValid = budgetPhase === "development" || budgetPhase === "demo";
+  if (!phaseValid) missing.push("budget phase is invalid");
   if (!flag(env, "LIVE_API_ENABLED", false)) missing.push("live mode is switched off");
   if (!apiConfigured) missing.push("API key missing");
   if (!accountingConfigured) missing.push("budget ledger not configured");
@@ -64,10 +92,31 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   if (Buffer.byteLength(secret) < 32) missing.push("visitor secret missing");
   if (museModel !== "muse-spark-1.3-contributor") missing.push("unreviewed Spark model");
   if (deployed && !env.APP_ORIGIN) missing.push("APP_ORIGIN not set");
+  if (deployed) {
+    // Only the production deployment may spend, and only in the demo phase.
+    if (env.VERCEL_ENV !== "production") missing.push("live AI only runs on the production deployment");
+    if (budgetPhase !== "demo") missing.push("budget phase must be demo on a deployment");
+  }
+  const dailyMicroUsd = capMicro(env, "DAILY_CAP_USD", "5", MAX_CAPS_MICRO_USD.daily, problems);
+  const caps = {
+    dailyMicroUsd,
+    // Visitor and ticket caps can never exceed the global day cap.
+    visitorDailyMicroUsd: capMicro(env, "VISITOR_DAILY_CAP_USD", "0.50", dailyMicroUsd, problems),
+    projectMicroUsd: capMicro(env, "PROJECT_HARD_CAP_USD", "100", MAX_CAPS_MICRO_USD.project, problems),
+    developmentMicroUsd: capMicro(env, "DEVELOPMENT_STOP_USD", "50", MAX_CAPS_MICRO_USD.development, problems),
+    ticketMicroUsd: capMicro(env, "TICKET_CAP_USD", "5", dailyMicroUsd, problems),
+    visitorEdits: int(env, "VISITOR_DAILY_EDIT_LIMIT", 5, problems),
+    visitorSam: int(env, "VISITOR_DAILY_SAM_LIMIT", 80, problems),
+    visitorSpark: int(env, "VISITOR_DAILY_SPARK_LIMIT", 12, problems),
+    visitorAsr: int(env, "VISITOR_DAILY_ASR_LIMIT", 3, problems),
+  };
+  missing.push(...problems);
 
   const mode: AppMode = mockRequested ? "mock" : missing.length === 0 ? "live" : "demo_only";
   return {
     mode,
+    deployed,
+    visitorSecretConfigured: Buffer.byteLength(secret) >= 32,
     liveBlockedReason: mode === "live" ? null : mockRequested ? "mock mode" : missing.join("; "),
     apiConfigured,
     accountingConfigured,
@@ -79,18 +128,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       search: flag(env, "SEARCH_ENABLED", false) && /^\d+$/.test(reserve),
       voice: flag(env, "VOICE_ENABLED", false),
     },
-    caps: {
-      dailyMicroUsd: usdToMicro(env.DAILY_CAP_USD || "5"),
-      visitorDailyMicroUsd: usdToMicro(env.VISITOR_DAILY_CAP_USD || "0.50"),
-      projectMicroUsd: usdToMicro(env.PROJECT_HARD_CAP_USD || "100"),
-      developmentMicroUsd: usdToMicro(env.DEVELOPMENT_STOP_USD || "50"),
-      ticketMicroUsd: usdToMicro(env.TICKET_CAP_USD || "5"),
-      visitorEdits: int(env, "VISITOR_DAILY_EDIT_LIMIT", 5),
-      visitorSam: int(env, "VISITOR_DAILY_SAM_LIMIT", 80),
-      visitorSpark: int(env, "VISITOR_DAILY_SPARK_LIMIT", 12),
-      visitorAsr: int(env, "VISITOR_DAILY_ASR_LIMIT", 3),
-    },
-    phase: env.BUDGET_PHASE === "demo" ? "demo" : "development",
+    caps,
+    // An invalid phase keeps "development" here but blocks live mode above (demo_only).
+    phase: budgetPhase === "demo" ? "demo" : "development",
     searchQueryReserve: /^\d+$/.test(reserve) ? Number(reserve) : null,
   };
 }

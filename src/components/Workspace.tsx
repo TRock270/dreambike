@@ -35,6 +35,8 @@ import { slotInfo } from "@/lib/slots";
 import type { BinaryMask, InstructionData, NormalizedPhoto, Project, ShopSettings, SlotId, Version } from "@/lib/types";
 import { AppShell, type PanelMode } from "./AppShell";
 import { BikeConfirm } from "./BikeConfirm";
+import { BudgetBanner } from "./BudgetBanner";
+import { DemoView } from "./DemoView";
 import { BuildSheet, type FitSupport, type SheetChange, type SheetSaveResult } from "./BuildSheet";
 import { DescribeForm } from "./DescribeForm";
 import { EditReview, type RenderState } from "./EditReview";
@@ -112,6 +114,10 @@ export function Workspace({ referenceEnabled, appMode }: { referenceEnabled: boo
   const [boxMode, setBoxMode] = useState<BoxTarget | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pointBusy, setPointBusy] = useState(false);
+  // Counts every paid request that has ended (any outcome). It is part of the budget banner's refresh key,
+  // so background calls such as the bike recut after an accept refresh the banner too.
+  const [paidSettled, setPaidSettled] = useState(0);
+  const noteSettled = () => setPaidSettled((n) => n + 1);
   const pointAbort = useRef<AbortController | null>(null);
   const boxEndedAt = useRef(0); // time of the last finished box drag
   const view = useMemo(() => derive(map), [map]);
@@ -167,6 +173,8 @@ export function Workspace({ referenceEnabled, appMode }: { referenceEnabled: boo
   const [list, setList] = useState<ProjectListState>({ kind: "loading" });
   const [listBusy, setListBusy] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
+  // The cached demo replaces the editor area while it is open. It reads only /demo/ files, so storage trouble cannot hide it.
+  const [demoOpen, setDemoOpen] = useState(false);
   const [savingProject, setSavingProject] = useState(false);
   const [saveNote, setSaveNote] = useState<string | null>(null);
   // Why the photo on screen is NOT stored in this browser. Set when a save fails or storage cannot be
@@ -384,7 +392,7 @@ export function Workspace({ referenceEnabled, appMode }: { referenceEnabled: boo
     if (!photo || autoDetect.current !== photo.hash) return;
     const controller = new AbortController();
     runAbort.current = controller;
-    void buildPartMap(photo, setMap, controller.signal);
+    void buildPartMap(photo, setMap, controller.signal).finally(noteSettled);
     // Identification runs in parallel (cache first, so the same photo never pays twice);
     // its suggestion fills only untouched fields.
     const ready = readyStorage();
@@ -396,7 +404,7 @@ export function Workspace({ referenceEnabled, appMode }: { referenceEnabled: boo
         setIdentifyCachedAt(found.cachedAt);
       },
       (error) => { if (!controller.signal.aborted) setIdentify({ status: "error", message: error instanceof PreflightError ? error.message : null }); },
-    );
+    ).finally(noteSettled);
     return () => controller.abort();
   }, [photo]);
 
@@ -493,6 +501,7 @@ export function Workspace({ referenceEnabled, appMode }: { referenceEnabled: boo
   async function choosePhoto(next: NormalizedPhoto | null) {
     const token = ++importToken.current;
     resetWork();
+    setDemoOpen(false);
     setPanel("edit"); // closing the panel also drops its unsaved drafts (BuildSheet unmounts)
     setStaleNotice(null);
     setNavNote(null);
@@ -587,6 +596,7 @@ export function Workspace({ referenceEnabled, appMode }: { referenceEnabled: boo
       if (token !== importToken.current) return false; // another open or import started while this one was loading
       setLastSaveFailure(null); // this project is stored; an older "Not saved" warning belongs to a dropped photo
       setPanel("edit");
+      setDemoOpen(false); // the opened project replaces the demo view
       setStaleNotice(null);
       setNavNote(null);
       setSaveNote(null);
@@ -911,6 +921,7 @@ export function Workspace({ referenceEnabled, appMode }: { referenceEnabled: boo
       if (!controller.signal.aborted) setNotice(error instanceof PreflightError ? error.message : "Point selection failed.");
     } finally {
       setPointBusy(false);
+      noteSettled();
     }
   }
 
@@ -984,6 +995,7 @@ export function Workspace({ referenceEnabled, appMode }: { referenceEnabled: boo
     } finally {
       renderBusy.current = false;
       setRenderRunning(false);
+      noteSettled();
     }
   }
 
@@ -1073,6 +1085,7 @@ export function Workspace({ referenceEnabled, appMode }: { referenceEnabled: boo
     runAbort.current = controller;
     recutPending.current = true;
     void recutBike(next, setMap, controller.signal).finally(() => {
+      noteSettled();
       // Only the newest recut clears the flag; the no-op update re-runs the save effect.
       if (runAbort.current === controller) { recutPending.current = false; setMap((m) => ({ ...m })); }
     });
@@ -1086,7 +1099,7 @@ export function Workspace({ referenceEnabled, appMode }: { referenceEnabled: boo
     partsDirty.current = true;
     recutPending.current = false; // the fresh detection now owns the bike outline
     setMap((m) => ({ ...m, done: false, bikeCarried: false, bikeStatus: "pending", bikeCandidates: [], bikeChoice: null, raw: {}, errors: [], requests: Object.fromEntries(Object.keys(m.requests).map((p) => [p, "pending"])) }));
-    void buildPartMap(photo, setMap, controller.signal);
+    void buildPartMap(photo, setMap, controller.signal).finally(noteSettled);
   }
 
   /** Yes on the offer: find the parts again; the effects below select the other wheel and prepare. */
@@ -1126,6 +1139,8 @@ export function Workspace({ referenceEnabled, appMode }: { referenceEnabled: boo
       if (error instanceof PreflightError && error.code === "FEATURE_DISABLED") setReferenceOff(error.message);
       setPrepared((p) => (p?.key === key ? { key, state: "error",
         message: error instanceof PreflightError ? error.message : "Preparing the change failed." } : p));
+    } finally {
+      noteSettled();
     }
   }
 
@@ -1247,13 +1262,31 @@ export function Workspace({ referenceEnabled, appMode }: { referenceEnabled: boo
     </div>
   );
 
+  // The budget banner fetches again whenever one of these flips: a paid call (segment, identify, instruction,
+  // render, fit check) has started or ended. A GET costs nothing, so an extra fetch at the start is harmless.
+  const budgetKey = [renderRunning, fitBusy, pointBusy, map.done, identify.status, prepared?.state ?? "none", paidSettled].join("|");
+  const showDemo = demoOpen && !photo;
+  const demoDb = storage?.status === "ready" && !storage.readOnly ? storage.h : null;
+  const demoBlockedReason = storage === null ? "Local storage is still opening."
+    : storage.status === "unavailable" ? "Local storage is not available, so a copy cannot be made."
+    : storage.readOnly ? (storage.readOnlyReason ?? "Local storage is read-only, so a copy cannot be made.") : null;
+
   return (
-    <AppShell projectName={projectName} saveStatus={saveStatus} busy={busy}
+    <AppShell banner={<BudgetBanner refreshKey={budgetKey} onOpenDemo={photo ? undefined : () => setDemoOpen(true)} projectOpen={!!photo} />}
+      projectName={projectName} saveStatus={saveStatus} busy={busy}
       canUndo={!!head && head.parentId !== null && !readOnly} canRedo={redoKids.length > 0 && !readOnly}
       undoHint={readOnly ? "Local storage is read-only" : undefined} redoHint={readOnly ? "Local storage is read-only" : undefined}
       onUndo={() => void navigate((h, s) => undoHead(h, s))}
       onRedo={() => void navigate((h, s) => redoHead(h, s))}
-      panel={panel} onPanel={setPanel} panelLocked={fitBusy || sheetSaving}>
+      panel={panel} onPanel={setPanel} panelLocked={fitBusy || sheetSaving || showDemo}>
+      {showDemo ? (
+        <main className="flex min-h-0 flex-1 justify-center overflow-y-auto p-4">
+          <div className="w-full max-w-[960px]">
+            <DemoView db={demoDb} editBlockedReason={demoBlockedReason} onClose={() => setDemoOpen(false)}
+              onOpened={(id) => { void refreshList(); void openSaved(id); }} />
+          </div>
+        </main>
+      ) : (
       <main className="flex min-h-0 flex-1 gap-4 p-4">
         <div className="flex min-h-0 min-w-0 flex-[2] flex-col gap-4 overflow-y-auto">
           {/* The photo takes the height History leaves; without a photo the notice scrolls here instead of being cut off. */}
@@ -1297,7 +1330,7 @@ export function Workspace({ referenceEnabled, appMode }: { referenceEnabled: boo
           {panel === "sheet" && (
             <BuildSheet head={session && head ? head : null} readOnlyReason={sheetReason} blockedReason={sheetBlocked}
               saving={sheetSaving} onSave={saveSheetChange} onClose={() => setPanel("edit")}
-              fit={fitSupport} onFitRunning={setFitBusy} />
+              fit={fitSupport} onFitRunning={(running) => { setFitBusy(running); if (!running) noteSettled(); }} />
           )}
           {panel === "estimate" && (
             <EstimatePreview head={session && head ? head : null} readOnlyReason={sheetReason} blockedReason={sheetBlocked}
@@ -1320,6 +1353,7 @@ export function Workspace({ referenceEnabled, appMode }: { referenceEnabled: boo
               <p className="text-text-muted text-[13px]">Import a photo of your own bike to start, or open a saved project.</p>
               {savingProject && <p role="status" className="text-text-secondary text-[13px]">Saving the project…</p>}
               <ProjectList state={list} busyId={listBusy} error={listError} onOpen={(id) => void openSaved(id)} onDelete={(id) => void deleteSaved(id)}
+                onViewDemo={() => setDemoOpen(true)}
                 onOpenFolder={folderApi && storage?.status === "ready" && !storage.readOnly ? () => void openFromFolder() : undefined}
                 openFolderBusy={openingFolder} openFolderNote={openFolderNote} />
             </>
@@ -1464,6 +1498,7 @@ export function Workspace({ referenceEnabled, appMode }: { referenceEnabled: boo
           </div>
         </aside>
       </main>
+      )}
     </AppShell>
   );
 }

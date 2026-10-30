@@ -7,6 +7,7 @@ import * as images from "@/lib/server/images";
 const { maskToPng } = images;
 const renderTemplate = (images as Record<string, unknown>).renderTemplate;
 import { readJsonLimited, renderTemplate as rt } from "@/lib/server/meta";
+import { withSession } from "./support/session";
 
 const W = 1536, H = 1152;
 const solid = (w: number, h: number, c: { r: number; g: number; b: number }) => sharp({ create: { width: w, height: h, channels: 3, background: c } });
@@ -16,7 +17,7 @@ function rectMask(l: number, t: number, r: number, b: number) {
   for (let y = t; y < b; y++) for (let x = l; x < r; x++) pixels[y * W + x] = 1;
   return { width: W, height: H, pixels };
 }
-const headers = () => ({ Origin: "http://localhost:3000", "X-Request-Id": crypto.randomUUID() });
+const headers = () => withSession({ Origin: "http://localhost:3000", "X-Request-Id": crypto.randomUUID() });
 const errorOf = async (res: Response) => [res.status, ErrorResponse.parse(await res.json()).error.code];
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });

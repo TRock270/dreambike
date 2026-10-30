@@ -82,6 +82,11 @@ KNOWN_KEYS = {
 }
 
 
+MAX_PROJECT_CAP_MICRO = 100_000_000
+MAX_DAILY_CAP_MICRO = 5_000_000
+MAX_DEV_STOP_MICRO = 50_000_000
+
+
 def usd_to_micro(text: str) -> int:
     """Parse a decimal USD string to exact integer microdollars (no float rounding)."""
     if not re.fullmatch(r"\d+(\.\d{1,6})?", text.strip()):
@@ -108,6 +113,8 @@ class Config:
     def load(cls) -> "Config":
         env = load_env()
         reserve = env.get("SEARCH_QUERY_RESERVE", "").strip()
+        # Same clamps as src/lib/server/config.ts: environment values can only lower SPEC 13 defaults.
+        daily = min(usd_to_micro(env.get("DAILY_CAP_USD") or "5"), MAX_DAILY_CAP_MICRO)
         return cls(
             api_key=env.get("MODEL_API_KEY") or None,
             muse_model=env.get("MUSE_MODEL") or "muse-spark-1.3-contributor",
@@ -115,10 +122,10 @@ class Config:
             redis_token=env.get("UPSTASH_REDIS_REST_TOKEN") or None,
             pricing_verified_at=env.get("PRICING_VERIFIED_AT") or None,
             search_query_reserve=int(reserve) if reserve.isdigit() else None,
-            daily_cap=usd_to_micro(env.get("DAILY_CAP_USD") or "5"),
-            project_cap=usd_to_micro(env.get("PROJECT_HARD_CAP_USD") or "100"),
-            development_stop=usd_to_micro(env.get("DEVELOPMENT_STOP_USD") or "50"),
-            ticket_cap=usd_to_micro(env.get("TICKET_CAP_USD") or "5"),
+            daily_cap=daily,
+            project_cap=min(usd_to_micro(env.get("PROJECT_HARD_CAP_USD") or "100"), MAX_PROJECT_CAP_MICRO),
+            development_stop=min(usd_to_micro(env.get("DEVELOPMENT_STOP_USD") or "50"), MAX_DEV_STOP_MICRO),
+            ticket_cap=min(usd_to_micro(env.get("TICKET_CAP_USD") or "5"), daily),
             phase=env.get("BUDGET_PHASE") or "development",
         )
 

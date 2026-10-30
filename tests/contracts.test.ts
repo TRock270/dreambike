@@ -31,7 +31,13 @@ describe("representative responses validate", () => {
       liveEnabled: false, spentTodayMicroUsd: null, reservedTodayMicroUsd: null,
       dailyCapMicroUsd: 5_000_000, visitorRemainingMicroUsd: 0, remainingEdits: 0,
       features: { composite: true, reference: true, search: false, voice: false },
-      reason: "Live AI is off." }).success).toBe(true);
+      reason: "live_disabled" }).success).toBe(true);
+    // Free text is no longer a valid reason (decision 6): only the fixed codes.
+    expect(BudgetResponse.safeParse({ dayET: "2026-11-01", resetAt: "2026-11-02T05:00:00.000Z",
+      liveEnabled: false, spentTodayMicroUsd: null, reservedTodayMicroUsd: null,
+      dailyCapMicroUsd: 5_000_000, visitorRemainingMicroUsd: 0, remainingEdits: 0,
+      features: { composite: true, reference: true, search: false, voice: false },
+      reason: "Live AI is off." }).success).toBe(false);
   });
 });
 

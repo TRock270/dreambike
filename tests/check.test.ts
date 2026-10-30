@@ -5,6 +5,7 @@ import { POST } from "@/app/api/check/route";
 import { CheckResponse, ErrorResponse } from "@/lib/contracts";
 import { MOCK_LABEL } from "@/lib/mocks";
 import { LEGAL_SEED } from "@/lib/server/fitPolicy";
+import { withSession } from "./support/session";
 
 // Lets one test swap the price file; every other test gets the real one.
 const priceOverride: { fn: null | ((real: unknown) => unknown) } = { fn: null };
@@ -28,7 +29,7 @@ const body = (items = [item()], over: object = {}) => ({
 });
 const post = (b: unknown, headers: Record<string, string> = {}, raw?: string) =>
   POST(new Request(`${ORIGIN}/api/check`, { method: "POST", body: raw ?? JSON.stringify(b),
-    headers: { Origin: ORIGIN, "X-Request-Id": crypto.randomUUID(), ...headers } }));
+    headers: withSession({ Origin: ORIGIN, "X-Request-Id": crypto.randomUUID(), ...headers }) }));
 const errorOf = async (res: Response) => [res.status, ErrorResponse.parse(await res.json()).error.code];
 
 afterEach(() => { priceOverride.fn = null; vi.restoreAllMocks(); vi.unstubAllEnvs(); });
@@ -74,7 +75,7 @@ describe("request checks", () => {
   it("refuses a cross-origin request and a missing request id", async () => {
     vi.stubEnv("MOCK", "1");
     expect((await post(body(), { Origin: "https://evil.example" })).status).toBe(403);
-    const res = await POST(new Request(`${ORIGIN}/api/check`, { method: "POST", body: JSON.stringify(body()), headers: { Origin: ORIGIN } }));
+    const res = await POST(new Request(`${ORIGIN}/api/check`, { method: "POST", body: JSON.stringify(body()), headers: withSession({ Origin: ORIGIN }) }));
     expect(await errorOf(res)).toEqual([400, "INVALID_REQUEST"]);
   });
 });

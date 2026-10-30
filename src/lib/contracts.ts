@@ -221,6 +221,106 @@ export const ProjectSnapshot = z.object({
   masks: z.array(SnapshotMask).max(MAX_SNAPSHOT_MASKS),
 }).strict();
 
+// ------------------------------------------------------- cached demo (SPEC 9, 13)
+// public/demo/project.json. Everything is a plain file name that resolves under the
+// same-origin /demo/ path; the browser never follows a path from the manifest elsewhere.
+
+/** A plain file name that is also safe inside a URL path (no ? # % : or spaces). */
+export const DemoFileName = SnapshotFileName.regex(/^[A-Za-z0-9._-]+$/, "file must be a plain demo file name");
+
+/** Hash and size of a binary demo file the browser checks after download. */
+const DemoBinary = { sha256: Hash, bytes: z.number().int().min(1).max(50_000_000) };
+
+/** A 1-bit PNG mask file; the browser decodes it to 0/1 bytes only when the visitor tries editing. */
+export const DemoMask = z.object({
+  id: Id, file: DemoFileName, ...DemoBinary, width: Dimension, height: Dimension,
+}).strict().refine((m) => m.file === `${m.id}.png`, { message: "mask file must be '<id>.png'", path: ["file"] });
+
+export const DemoQuote = z.object({
+  path: z.literal("quote.pdf"), ...DemoBinary,
+}).strict();
+
+const UnknownOr = <T extends z.ZodType>(t: T) => z.union([t, z.literal("unknown")]);
+
+/** One model call behind a step or an asset. Unknown values stay "unknown"; nothing is invented. */
+export const DemoCall = z.object({
+  route: Short, model: UnknownOr(Short), at: UnknownOr(z.iso.datetime()),
+}).strict();
+
+/** One step of the history path; a step lists every model call the ledger shows for that version. */
+export const DemoProvenanceStep = z.object({
+  file: DemoFileName, kind: z.enum(["root", "visual", "sheet"]),
+  createdAt: z.iso.datetime(),
+  calls: z.array(DemoCall).max(10),
+}).strict();
+
+// Image-changing steps (root and visual) are capped; sheet saves (prices, reviews) have their own bound.
+export const MAX_DEMO_STEPS = 4;
+export const MAX_DEMO_SHEETS = 20;
+
+export const DemoProvenance = z.object({
+  steps: z.array(DemoProvenanceStep).min(1).max(MAX_DEMO_STEPS + MAX_DEMO_SHEETS),
+  /** Calls behind shared assets: masks (segmentation), cutouts and the fit check. */
+  assetCalls: z.array(DemoCall).max(20),
+  promptFiles: z.array(z.object({ file: Short, version: UnknownOr(Short) }).strict()).max(20),
+}).strict();
+
+/** Rights per shipped file. clearance names the private record; the record itself is never shipped. */
+export const DemoRights = z.object({
+  file: DemoFileName, kind: z.enum(["owner_photo", "generated_derivative"]), credit: Short, clearance: Short,
+}).strict();
+
+export const DemoManifest = z.object({
+  schemaVersion: z.literal(1),
+  cachedAt: z.iso.datetime(),
+  provenance: DemoProvenance,
+  rights: z.array(DemoRights).max(MAX_SNAPSHOT_IMAGES + MAX_SNAPSHOT_MASKS + 1),
+  snapshot: ProjectSnapshot,
+  masks: z.array(DemoMask).max(MAX_SNAPSHOT_MASKS),
+  quote: DemoQuote,
+}).strict().superRefine((m, ctx) => {
+  const bad = (path: string, message: string) => ctx.addIssue({ code: "custom", path: [path], message });
+  const visual = m.snapshot.versions.filter((v) => v.kind !== "sheet").length;
+  if (visual > MAX_DEMO_STEPS) bad("snapshot", `a demo has at most ${MAX_DEMO_STEPS} image versions`);
+  if (m.snapshot.versions.length - visual > MAX_DEMO_SHEETS) bad("snapshot", `a demo has at most ${MAX_DEMO_SHEETS} sheet versions`);
+  // Image files must be demo-safe names too (SnapshotFileName alone allows spaces and '%').
+  if (m.snapshot.images.some((i) => !DemoFileName.safeParse(i.file).success)) bad("snapshot", "image file is not a plain demo file name");
+  // Demo masks are PNGs; the snapshot's masks must match them one to one (ids and size).
+  const snapMasks = new Map(m.snapshot.masks.map((k) => [k.id, k]));
+  const demoMasks = new Map(m.masks.map((k) => [k.id, k]));
+  if (demoMasks.size !== m.masks.length || demoMasks.size !== snapMasks.size) bad("masks", "masks must list each snapshot mask exactly once");
+  for (const [id, k] of snapMasks) {
+    const d = demoMasks.get(id);
+    if (!d || d.width !== k.width || d.height !== k.height) bad("masks", `mask ${id} does not match the snapshot`);
+  }
+  // Every shipped file has exactly one rights line and the other way round.
+  const files = [...m.snapshot.images.map((i) => i.file), ...m.masks.map((k) => k.file), m.quote.path];
+  const rightsFiles = m.rights.map((r) => r.file);
+  if (new Set(files).size !== files.length) bad("snapshot", "two demo files share one name");
+  if (new Set(rightsFiles).size !== rightsFiles.length || rightsFiles.length !== files.length
+    || rightsFiles.some((f) => !files.includes(f))) bad("rights", "rights must cover every demo file exactly once");
+  if (m.provenance.steps.length !== m.snapshot.versions.length) bad("provenance", "provenance needs one step per version");
+  // Provenance step i describes version i: same image file and same kind.
+  const fileById = new Map(m.snapshot.images.map((i) => [i.id, i.file]));
+  m.snapshot.versions.forEach((v, n) => {
+    const step = m.provenance.steps[n];
+    if (step && (step.file !== fileById.get(v.image.id) || step.kind !== v.kind)) {
+      bad("provenance", `provenance step ${n} does not match its version (file and kind)`);
+    }
+  });
+  // Public rights (SPEC 13): only owner images, no reference-photo edits, no retailer product images.
+  if (m.snapshot.images.some((i) => i.rights !== "owner")) bad("snapshot", "a public demo may only ship images with owner rights");
+  if (m.snapshot.versions.some((v) => v.change?.mode === "reference")) bad("snapshot", "a public demo cannot hold a reference-photo edit");
+  if (m.snapshot.versions.some((v) => v.items.some((i) => i.product?.imageUrl != null))) bad("snapshot", "a public demo cannot hold a product image URL");
+  // The rights kind follows the image's role: the root image is the owner's photo, the rest is derived.
+  const rootImageId = m.snapshot.versions.find((v) => v.id === m.snapshot.project.rootVersionId)?.image.id;
+  const rootFile = rootImageId === undefined ? undefined : fileById.get(rootImageId);
+  for (const r of m.rights) {
+    const want = r.file === rootFile ? "owner_photo" : "generated_derivative";
+    if (r.kind !== want) bad("rights", `${r.file} must have rights kind ${want}`);
+  }
+});
+
 export const CacheEntry = z.object({
   key: z.string().min(1).max(500), blobIds: z.array(Id).max(20), value: z.unknown(),
   bytes: z.number().int().min(0), createdAt: z.number().int().min(0),
@@ -392,6 +492,9 @@ export const HealthResponse = z.object({
   ok: z.literal(true), mode: z.enum(["demo_only", "live", "mock"]),
   accountingReady: z.boolean(), apiConfigured: z.boolean(),
 }).strict();
+export const BUDGET_REASONS = [
+  "visitor_cap", "global_cap", "project_cap", "live_disabled", "accounting_unavailable",
+] as const;
 export const BudgetResponse = z.object({
   dayET: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), resetAt: z.iso.datetime(),
   liveEnabled: z.boolean(),
@@ -403,7 +506,7 @@ export const BudgetResponse = z.object({
   features: z.object({
     composite: z.boolean(), reference: z.boolean(), search: z.boolean(), voice: z.boolean(),
   }).strict(),
-  reason: Short.nullable(),
+  reason: z.enum(BUDGET_REASONS).nullable(),
 }).strict();
 
 /** Total encoded-byte cap for any route request or response (SPEC 4). */

@@ -30,6 +30,13 @@ export const ERRORS: Record<ErrorCodeId, ErrorInfo> = {
 export const HEIC_MESSAGE =
   "HEIC is not supported in this demo. On your Mac, open the photo in Preview and export it as JPEG, then upload that file.";
 
+/** Visitor-only (cookie or network) denial text from SPEC 13. */
+export const VISITOR_BUDGET_MESSAGE =
+  "Your live allowance for today is used up. You can keep exploring the cached demo.";
+
+/** Shown when the signed session cookie is missing or invalid (SPEC 13, T13). */
+export const SESSION_RELOAD_MESSAGE = "Reload the page to continue.";
+
 export class AppError extends Error {
   constructor(public code: ErrorCodeId, message?: string, public retryAfterSeconds: number | null = null) {
     super(message ?? ERRORS[code].message);

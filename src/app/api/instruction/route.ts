@@ -76,7 +76,7 @@ export async function POST(req: Request): Promise<Response> {
       const body = sparkBody(config.museModel, "instruction.v2.md", "edit_instruction_v1",
         { ...p, bike: { ...p.bike, limitations: [] } }, reference?.dataUrl ?? null, true);
       const raw = await withReservation({
-        route: "/api/instruction", model: config.museModel, amountMicroUsd: prices.reservations["spark-ungrounded"]!,
+        req, route: "/api/instruction", model: config.museModel, amountMicroUsd: prices.reservations["spark-ungrounded"]!,
         requestId, deadlineMs: Math.max(1_000, DEADLINE_MS - (Date.now() - startedAt)),
         payloadDigest: createHash("sha256").update(JSON.stringify(p)).update(reference?.bytes ?? "").digest("hex"),
       }, async (signal) => {

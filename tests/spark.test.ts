@@ -9,6 +9,7 @@ import { fetchSparkJson, promptBody, promptText, readSparkResponse, sparkBody, s
 import type { InstructionData } from "@/lib/types";
 import sharp from "sharp";
 import prices from "../budget/prices.json";
+import { withSession } from "./support/session";
 
 const ins = (intent: InstructionData["intent"]): InstructionData =>
   ({ title: "t", editPrompt: "p", spec: [], intent, warnings: [] });
@@ -140,7 +141,7 @@ describe("bike form", () => {
 
 describe("identify and instruction routes", () => {
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
-  const headers = () => ({ Origin: "http://localhost:3000", "X-Request-Id": crypto.randomUUID() });
+  const headers = () => withSession({ Origin: "http://localhost:3000", "X-Request-Id": crypto.randomUUID() });
   const webp = async () => new Uint8Array(await sharp({ create: { width: 400, height: 300, channels: 3, background: { r: 1, g: 2, b: 3 } } }).webp().toBuffer());
   async function identify(payload: unknown, image?: Uint8Array) {
     const form = new FormData();
@@ -241,7 +242,7 @@ describe("live route path (fake Upstash + fake Meta, no network)", () => {
     return f;
   };
   const req = (url: string, body: FormData) => new Request(url, { method: "POST", body,
-    headers: { Origin: "http://localhost:3000", "X-Request-Id": crypto.randomUUID() } });
+    headers: withSession({ Origin: "http://localhost:3000", "X-Request-Id": crypto.randomUUID() }) });
 
   it("identify: a model bike with reversed years is SCHEMA_INVALID after settling the real charge", async () => {
     const env = live();
@@ -319,7 +320,7 @@ describe("absent parts (instruction.v2)", () => {
       form.append("payload", JSON.stringify({ ...payload, absent: true, ...extra }));
       if (reference) form.append("reference", new File([new Uint8Array(reference)], "r.webp", { type: "image/webp" }));
       const res = await instructionPOST(new Request("http://localhost:3000/api/instruction", { method: "POST", body: form,
-        headers: { Origin: "http://localhost:3000", "X-Request-Id": crypto.randomUUID() } }));
+        headers: withSession({ Origin: "http://localhost:3000", "X-Request-Id": crypto.randomUUID() }) }));
       return { res, body: await res.json() };
     };
     expect([absentAllowed("text"), absentAllowed("paint"), absentAllowed("reference")]).toEqual([true, false, false]);
