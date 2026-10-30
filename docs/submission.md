@@ -9,7 +9,7 @@ Working file for the submission. T15 adds the repository, video and README field
 
 ## When live AI edits are available
 
-**Status: set up, not yet confirmed on the live site.** This section becomes final once the window and the $5 cap are deployed and checked (TASKS.md T14).
+**Status: deployed and checked on 2026-10-30.** Outside the window the live site reports demo-only with a $5 daily cap. The switch to live on November 5 follows from the same rule and is tested offline, including the US daylight-saving change; it will be checked on the live site that day.
 
 - Live edits on the public site run only from **Thursday, November 5 to Monday, November 9, 2026, US Eastern time**: the official judging days (November 5–8) and the live final round on November 9 ([official participant guide](https://cerebralvalley.ai/e/meta-ai-developer-hackathon/details)). The owner chose this window. Outside these days the site shows the cached demo only, and "Try editing" still copies the demo into your browser.
 - During that window the site spends at most $5 per day in total and $0.50 per visitor per day. When a limit is reached the site says so and the cached demo keeps working.

@@ -136,7 +136,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 
 ## T14 — Vercel deploy and end-to-end reliability
 
-- Status: IN PROGRESS since 2026-10-30 (owner: Vercel dashboard import, Hobby plan, demo-only first, then one controlled live edit test; second laptop available). See log.
+- Status: DONE 2026-10-30. Live at https://dreambike-pied.vercel.app (Vercel Hobby, iad1, Node 22): deployment.py 26/26 in demo-only and live mode, cached demo without login (Chrome macOS, Safari iPhone), one live edit under 30 s for 0.013068 USD, cap checked live, U08 PASS. Public live edits only 2026-11-05 to 2026-11-09 ET at $5/day (LIVE_FROM_ET/LIVE_UNTIL_ET); check on Nov 5 that /api/budget reports liveEnabled true. See log.
 - Priority: MVP. Estimate: 2h, Nov 2. Depends on: T13 and actual repository/hosting access.
 - Files: Next/Vercel configuration as needed, docs/api-evidence.md/submission.md, README live URL placeholder, spike/deployment.py, targeted tests for fixes.
 - Work: verify actual plan/runtime/duration/body caps; production env and no MOCK; deploy the reviewed result with owner publishing authorization; record real URL; test second-laptop cached flow and one controlled live change if gates allow. Cache-only fallback is clearly labeled.
@@ -1382,4 +1382,18 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Live test (owner go each step): Meta Billing $0.77 = ledger 770000 µ$, nothing reserved, so BUDGET_PHASE=demo. Owner added the key, Upstash URL/token, PRICING_VERIFIED_AT, LIVE_API_ENABLED=true, DAILY_CAP_USD=1 (Production only; plain flags also on Preview, harmless: previews have no key, no Redis, VERCEL_ENV is not production, and need a login). Two redeploys failed closed first (accountingReady false, then one live condition missing in the Production values); fixed by the owner, no spend. Then `deployment.py --expect live` 26/26. One edit in the copied demo by the owner: SAM + instruction + edit, under 30 s (owner's timing), 0.013068 USD settled, nothing reserved, image ok; the owner accepted it (local only). Cap on the live site: DAILY_CAP_USD=0.01 gave reason global_cap and the denial message, ledger unchanged.
 - Owner decision: live on the public site only on the judging days, $5 per day. New optional LIVE_FROM_ET/LIVE_UNTIL_ET (America/New_York days, inclusive) in src/lib/server/config.ts; malformed or half-set values turn live off; tests/config.test.ts 13/13 including the Nov 1 DST change and ET midnight edges (platform-builder; `/review-changes` quick green, no findings). Production values to set: DAILY_CAP_USD=5, LIVE_FROM_ET=2026-11-05, LIVE_UNTIL_ET=2026-11-09 (at most $25).
 - U08 PASS recorded in docs/api-evidence.md and SPEC 14 (owner dashboard: Hobby, Fluid compute on, iad1, production on Node 22.x; the project default showed 26.x and the owner is asked to set it to 22.x). SPEC 3 lists the window variables. docs/submission.md (new) records the live URL, the live days, limits and what was checked.
+- `/review-changes` quick on the docs (release, general): first needs_lead (F1: the window was stated as fact before deploy), fixed by marking it pending and citing the official participant page; rerun green with minors only. Commit 02914df pushed (owner go). The lead could not stage .env.example (a permission rule blocks commands naming .env files); the owner commits that one-file doc change.
+- Owner set DAILY_CAP_USD=5, LIVE_FROM_ET=2026-11-05, LIVE_UNTIL_ET=2026-11-09; the push deployed 02914df (owner: newest production deploy is 02914df). Live site 15:00 ET: health demo_only, accountingReady true; budget live_disabled, daily cap 5000000 µ$; `deployment.py --expect demo_only` 26/26; ledger unchanged at 783068 µ$. Owner readings: Deployment Protection Vercel Authentication on, Standard Protection (previews need a login, production public); Node project setting changed from 26.x to 22.x.
+- Done-when (T14):
+  - build, lint, types, tests pass: yes (13:40 ET and after the window change: npm test 908 passed, typecheck, lint; build 15:00 ET);
+  - `deployment.py --origin https://dreambike-pied.vercel.app` passes: 26/26 in demo-only (twice) and live mode;
+  - cached demo opens without login on a second device: Chrome macOS and Safari iPhone, private windows (owner);
+  - cap/disabled/composition-off: cap on the live site (global_cap at $0.01, denial message, no reservation), disabled on the live site (demo-only before the window), composite off on the local production build (the flag is reported per deployment);
+  - key absent from browser source/network: secret scan 0 hits for all four local values and the names in 10 JS files and the API responses; the production VISITOR_HASH_SECRET is not known locally, only its name was scanned;
+  - no input exceeds the bounded envelope: every route 413 at limit+1 from the app, all limits below the 4.5 MB platform cap;
+  - a real edit fits the platform deadline: under 30 s against 120 s route and 300 s platform limits;
+  - U08 recorded: PASS.
+- Open: on 2026-11-05 check that /api/budget reports liveEnabled true and on 2026-11-10 false (T17/T18 or the owner); Codex gate for the public paid routes remains optional (owner's choice). For T15: README with the live URL and the live days from docs/submission.md.
+- Spend: 0.013068 USD (one public live edit). Ledger lifetime 0.783068 USD.
+- Duration: about 2 h (2026-10-30 13:00–15:05 ET), including the 15-agent build workflow, three quick reviews, the window unit and the owner's Vercel setup.
 
