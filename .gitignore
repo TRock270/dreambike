@@ -45,3 +45,6 @@ my_bike/
 
 # Owner notes with shop links (ad-tracking parameters); never committed (owner, 2026-10-28)
 shop-links.txt
+
+# Spike and smoke-test output (explicit; also matched by the generic out/ pattern above)
+spike/out/

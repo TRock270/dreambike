@@ -144,6 +144,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 
 ## T15 — README, attribution, and submission package
 
+- Status: DONE 2026-10-30 for the agent part: README, LICENSE, CREDITS, submission notes and demo-script draft written and reviewed; history scan clean for secrets; README steps run in a clean export. Owner items open (rubric/fields check, video URL in T16, history identifiers decision, second-laptop check, Billing limit and final spend check, push). See log.
 - Priority: MVP. Estimate: 2h, Nov 3. Depends on: T14.
 - Files: README.md, LICENSE, CREDITS.md, docs/submission.md/demo-script.md, .gitignore, TASKS.md evidence entries.
 - Open credits noted in T11 (2026-10-29): CREDITS.md so far lists only the PDF fonts; add the SAM License for @meta-sam/parser (docs/api-evidence.md), the MIT notices of pdf-lib and @pdf-lib/fontkit, and the photo table with date and consent coverage.
@@ -669,11 +670,11 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 
 ### Handoff — 2026-10-28 (owner inputs for the next session; nothing run)
 
-- New owner input for T7: a photo of the father's bike, which the owner calls "Bike Rumble". The owner says they hold the rights and wants its golden wheels on the R nineT.
+- New owner input for T7: a studio photo of another bike, which the owner calls "Bike Rumble". The owner says they may use it and wants its golden wheels on the R nineT.
   - The photo is in my_bike/. The deny rule in .claude/settings.json keeps Claude out of that folder, and it stays.
   - Owner decision 2026-10-28: the owner copies a JPEG export to fixtures/reference-source.jpg. Claude then proposes the wheel crop and cover boxes on a scratchpad overlay, writes fixtures/reference-wheel.jpg with no metadata after the owner approves, and fills the `reference` entry in fixtures/expected.json (file, slot, box, description, identifiersReviewed).
   - Record the bike's identity only as the owner states it; don't guess the model.
-  - Done 2026-10-28: the copy is fixtures/Rumble.tiff (1920x1281, no EXIF, GPS or date; a studio shot with a MOTOR Visionen logo). The owner says MOTOR Visionen is the father's shop and the rights are fine. The owner named no photographer and no date; both are null.
+  - Done 2026-10-28: the copy is fixtures/Rumble.tiff (1920x1281, no EXIF, GPS or date; a studio shot with a shop logo). The owner says the rights holder gave permission. The owner named no photographer and no date; both are null.
   - Done 2026-10-28: Claude cut two crops without metadata (Pillow and mdls checked), front [1290,560,1905,1160] and rear [70,560,660,1160]. Claude couldn't write into fixtures/ (the image deny rule), so they wait in the session scratchpad for the owner to move them as fixtures/reference-wheel-front.jpg and reference-wheel-rear.jpg. Both are about 600 px, so normalization warns about low resolution.
   - Done 2026-10-28: expected.json `reference` (front, used by the spike) and `referenceRear` are filled. Description in the owner's words: "Gold multi-spoke wheel with chrome hub, about 20 inch" (the 20 inch is the owner's estimate). identifiersReviewed stays false until the owner checks both crops in Preview.
   - Done 2026-10-28: the owner checked both crops in Preview ("crops ok") and moved them to fixtures/. identifiersReviewed is now true for `reference` and `referenceRear`. `images_edits.py --mode compose --dry-run` builds the request (base first, reference second, search and shell off). The paid compose run still needs the owner's go and the consent addendum.
@@ -1397,3 +1398,25 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Spend: 0.013068 USD (one public live edit). Ledger lifetime 0.783068 USD.
 - Duration: about 2 h (2026-10-30 13:00–15:05 ET), including the 15-agent build workflow, three quick reviews, the window unit and the owner's Vercel setup.
 
+
+### T15 — 2026-10-30, about 19:00–19:45 ET (build-ticket workflow, lead scan and fixes)
+
+- Owner decisions 2026-10-30: public name "Tom (GitHub TRock270), solo"; the studio reference photo is described neutrally in CREDITS, and the family detail and the shop name are removed from the current TASKS.md (T7 handoff lines). Older commits still contain them (owner item 6 in docs/submission.md).
+- `/build-ticket T15` (11 agents, 1 unit "docs", release domain): approved in round 2 by release, security and general reviewers (round 1: 8 findings, all fixed with wording, e.g. point selection is offline/mock only (U01), the studio photo shows another motorcycle, the fit check found no citable source, the full ledger steps for live mode). Checks typecheck, lint, npm test 908 passed / 24 skipped. Gate needs_lead: F1 history identifiers and no recorded scan, F2 owner items incomplete, F3 the Oct 30 commit count in README.
+- Lead fixes: README Oct 30 row no longer gives a count that T15 would break (F3); README disclosure also names NVIDIA Nemotron and Google Gemini as reviewers; a missing blank line in the live-mode section; docs/submission.md records the scan and the clean-export run and adds owner items 6–8 (history identifiers, second laptop, Billing limit and final spend) (F1, F2); CREDITS: quote.pdf date 2026-10-29 (exported 21:09 ET), v1–v3 each made from the step before, SAM License wording limited to what the license text says.
+- History scan (scratchpad script, `.venv/bin/python`, prints names and counts only): working tree and all 661 blobs reachable from any local ref, plus commit messages. 0 hits for the values of MODEL_API_KEY, UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN and the local VISITOR_HASH_SECRET (MUSE_MODEL hits are the public model name); 0 Bearer/sk-/ghp_/AKIA/PEM/Upstash-URL shapes (one .env.example hit was the regex spanning an empty value and the next line); no RULES.md sentence in history; no EXIF/XMP in public/demo images and no Info/XMP metadata in quote.pdf. Private paths: one blob of the owner's shop-link note exists only under local Codex checkpoint refs (refs/codex/turn-diffs/…), never in a commit; `git ls-remote origin` shows only main, and the blob is not reachable from origin/main. Identifiers: the shop name in old TASKS/PLAN commits (e.g. 27638c4) and the commit author email (owner item 6; no history rewrite).
+- Clean-export run of the README steps: `git archive HEAD` into the scratchpad (git clone into the scratchpad was refused by the permission rules), no env files; `npm ci`, `npm run build` passed (that shell used Node 24.22; npm only warned about the engines range), `PORT=3155 npm start`: /api/health demo_only with accountingReady false, /api/budget live_disabled, / and /demo/project.json, v0, v3, quote.pdf 200, demo card rendered, POST /api/normalize 403. All public URLs in the T15 docs return 200.
+- Consultant: PAL chat nim-nemotron35 on README.md and CREDITS.md (one call, files embedded). 28 points; taken: say plainly that the cached demo needs no variables or key (14–17), and state that the live path was tested during the event, because the public live window follows the deadline (19). Not taken: most points ask for evidence "a judge cannot verify", but the repository, lockfile and history are public (1–4, 9–10, 12–13, 21, 24); the before-Oct-27 row is meant to be "not claimed" (22); a pre-check disclaimer and a no-endorsement line are required by HACKATHON_GUIDELINES 3 (20, 26); the libvips LGPL note is a credit, it does not change the MIT scope of our code (27); studio photo permission is recorded by the owner in the consent addendum (5–7).
+- `/review-changes` quick on the six T15 files after the lead fixes: green (security, release, general), two minors (studio photo photographer/date unknown; the $0.013 figure, which matches the 0.013068 USD in the T14 log).
+- Checks 19:41 ET: npm run typecheck, npm run lint (no errors), npm test 908 passed / 24 skipped, git diff --check clean.
+- Done-when (T15):
+  - another reader can run the cached demo using README: yes, clean export without env files (above); the owner's second-laptop run is owner item 7;
+  - no fake URL or unbuilt feature is claimed: yes (gate met; video marked pending T16; not-built list in README);
+  - source photos/consent/RULES.md remain private: yes (gate met; scan above);
+  - current files and full history checked for secrets and identifiers without printing values: yes (scan above); identifiers in history await the owner's decision (item 6);
+  - public asset credits have real photographer/date/rights: yes (CREDITS photo table; the studio photo is private, its photographer and date are unknown);
+  - owner checks official rubric and required fields: open, owner item 1;
+  - missing owner decisions listed precisely: docs/submission.md items 1–8.
+- Files: README.md, LICENSE, docs/demo-script.md (new); CREDITS.md, docs/submission.md, .gitignore, TASKS.md.
+- Spend: $0.00. No paid calls.
+- Duration: about 0.75 h (19:00–19:45 ET), including the 11-agent build workflow and the 3-agent quick review.
