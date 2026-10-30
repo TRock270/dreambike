@@ -132,6 +132,7 @@ The root .env.example is the authoritative listing. Copy it to .env.local. Exist
 | VISITOR_DAILY_*_LIMIT | Edit 5, SAM 80, Spark 12, ASR 3 |
 | PROJECT_HARD_CAP_USD, DEVELOPMENT_STOP_USD, TICKET_CAP_USD | Defaults 100, 50, 5; cannot be overridden by client settings |
 | BUDGET_PHASE | development or demo; owner reconciles ledger before demo phase |
+| LIVE_FROM_ET, LIVE_UNTIL_ET | Optional America/New_York days (YYYY-MM-DD, inclusive); both blank = no window; set or invalid = live only inside the window, otherwise demo-only. T14 note 2026-10-30: the judging deployment uses 2026-11-05 to 2026-11-09 (owner decision) |
 | PUBLIC_SHOP_DOMAINS | Exact lowercase HTTPS hosts for optional fetches; blank disables remote fetching |
 
 Production refuses live mode if a required secret, pricing gate, or Redis health check is missing. Health may still report the cached demo as healthy. Local paid scripts obey the same caps and use the same project ledger, not a separate uncounted budget.
@@ -743,7 +744,7 @@ Ten open items are marked UNVERIFIED below. A doc link verifies a format; it can
 | U05 UNVERIFIED | Browser EXIF preflight, encoded-byte envelopes, real HEIC rejection | T0/T2 local fixtures; compare browser/Pillow/sharp; maximum route envelope and output checks | JPEG export and lower-size upload; no Files API shortcut; T2/T14 |
 | U06 UNVERIFIED | Bound on billable search queries and usage, ledger reservations and project cost reconciliation | Before any grounded dispatch, verify current tool billing/count bounds with primary docs/account evidence; test atomic accounting; owner sets Billing limit | Unknown cost stops paid grounded calls; live URL demo-only if needed; T0/T9/T13 |
 | U07 UNVERIFIED | Real shops, product sources, fetch reachability, photo permissions | Owner supplies domains; T12 tests source-backed EUR price and safe redirects; no inferred image license | Manual product title/price/link; optional search/fetch off |
-| U08 UNVERIFIED | Actual Vercel project plan/runtime/durations and deployed payload handling | T14 deployment health + one explicitly budgeted edit under real timeout; verify Node 22 and limits in dashboard | Cached demo deployment; no unsupported timeout promise |
+| U08 PASS 2026-10-30 (T14; evidence in docs/api-evidence.md) | Actual Vercel project plan/runtime/durations and deployed payload handling | T14 deployment health + one explicitly budgeted edit under real timeout; verify Node 22 and limits in dashboard | Cached demo deployment; no unsupported timeout promise |
 | U09 UNVERIFIED | Five owned fixture files, true bike details, consent, identifier removal | Owner supplies/reviews files and private dated consent; T0 records availability and skips truthfully | Offline synthetic mask/math tests and scaffold; no invented public bike/photo |
 | U10 UNVERIFIED | Shop labor/rates/fees/rules, model-specific legal applicability, §19 retrieval, missing official submission details, Friday hours | Owner/mechanic review; retrieve current primary law and actual product papers; check official CV platform; approve >1MB dependency installs | Labeled demo rates, verify fit status, conservative scope, no real quote/submission claims |
 

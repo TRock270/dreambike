@@ -1,6 +1,7 @@
 // Server environment validation and feature flags (SPEC.md 3). Server only.
 // Read lazily per request (not at import), so `next build` never needs secrets.
 import "server-only";
+import { dayET } from "./budget"; // budget.ts does not import config, so no cycle
 
 export type AppMode = "mock" | "live" | "demo_only";
 
@@ -66,7 +67,30 @@ function capMicro(env: NodeJS.ProcessEnv, name: string, fallback: string, max: n
   }
 }
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
+/** Strict YYYY-MM-DD that is a real calendar day (rejects 2026-02-30 and 2026-13-01). */
+function isRealDate(text: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  if (!m) return false;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  return d.toISOString().slice(0, 10) === text;
+}
+
+/**
+ * Optional live window (LIVE_FROM_ET..LIVE_UNTIL_ET, America/New_York days, inclusive).
+ * Returns a reason when live must be off, or null. Never echoes the configured values.
+ */
+function liveWindowProblem(env: NodeJS.ProcessEnv, now: Date): string | null {
+  const from = env.LIVE_FROM_ET ?? "";
+  const until = env.LIVE_UNTIL_ET ?? "";
+  if (from === "" && until === "") return null;
+  if (!isRealDate(from) || !isRealDate(until) || from > until) return "live window is invalid";
+  // Zero-padded YYYY-MM-DD strings sort in calendar order, so plain < and > work
+  // (same as comparing dates in Python after isoformat()).
+  const today = dayET(now);
+  return today < from || today > until ? "outside the live window" : null;
+}
+
+export function loadConfig(env: NodeJS.ProcessEnv = process.env, now: Date = new Date()): ServerConfig {
   const mockRequested = env.MOCK === "1";
   // VERCEL_ENV is set on every Vercel deployment, including public previews.
   const deployed = env.NODE_ENV === "production" || Boolean(env.VERCEL_ENV);
@@ -97,6 +121,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     if (env.VERCEL_ENV !== "production") missing.push("live AI only runs on the production deployment");
     if (budgetPhase !== "demo") missing.push("budget phase must be demo on a deployment");
   }
+  const windowProblem = liveWindowProblem(env, now);
+  if (windowProblem) missing.push(windowProblem);
   const dailyMicroUsd = capMicro(env, "DAILY_CAP_USD", "5", MAX_CAPS_MICRO_USD.daily, problems);
   const caps = {
     dailyMicroUsd,

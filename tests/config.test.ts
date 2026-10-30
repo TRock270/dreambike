@@ -99,4 +99,42 @@ describe("server config", () => {
     expect(() => usdToMicro("1e3")).toThrow();
     expect(() => usdToMicro("-1")).toThrow();
   });
+
+  describe("live window", () => {
+    const win = { ...liveEnv, LIVE_FROM_ET: "2026-11-05", LIVE_UNTIL_ET: "2026-11-09" };
+    const modeAt = (e: Record<string, string>, iso: string) => loadConfig(env(e), new Date(iso)).mode;
+
+    it("leaves behaviour unchanged without a window", () => {
+      expect(modeAt(liveEnv, "2026-10-30T12:00:00Z")).toBe("live");
+      expect(modeAt({ ...liveEnv, LIVE_FROM_ET: "", LIVE_UNTIL_ET: "" }, "2030-01-01T12:00:00Z")).toBe("live");
+    });
+
+    it("is live on the first and last day and demo-only the day before and after", () => {
+      expect(modeAt(win, "2026-11-05T17:00:00Z")).toBe("live");
+      expect(modeAt(win, "2026-11-09T17:00:00Z")).toBe("live");
+      expect(modeAt(win, "2026-11-04T17:00:00Z")).toBe("demo_only");
+      expect(modeAt(win, "2026-11-10T17:00:00Z")).toBe("demo_only");
+      expect(loadConfig(env(win), new Date("2026-11-10T17:00:00Z")).liveBlockedReason).toContain("outside the live window");
+    });
+
+    it("uses the Eastern day boundary after the November 1 DST change (EST)", () => {
+      expect(modeAt(win, "2026-11-10T04:30:00Z")).toBe("live"); // Nov 9 23:30 ET
+      expect(modeAt(win, "2026-11-10T05:00:00Z")).toBe("demo_only"); // Nov 10 00:00 ET
+      expect(modeAt(win, "2026-11-05T03:59:00Z")).toBe("demo_only"); // Nov 4 23:59 ET
+      expect(modeAt(win, "2026-11-05T05:00:00Z")).toBe("live"); // Nov 5 00:00 ET
+    });
+
+    it("turns live off when only one date is set or a value is malformed, without echoing it", () => {
+      const at = "2026-11-06T17:00:00Z";
+      expect(modeAt({ ...liveEnv, LIVE_FROM_ET: "2026-11-05" }, at)).toBe("demo_only");
+      expect(modeAt({ ...liveEnv, LIVE_UNTIL_ET: "2026-11-09" }, at)).toBe("demo_only");
+      for (const bad of ["2026-13-01", "2026-02-30", "11/05/2026", "2026-1-5", " 2026-11-05"]) {
+        const c = loadConfig(env({ ...win, LIVE_FROM_ET: bad }), new Date(at));
+        expect(c.mode, bad).toBe("demo_only");
+        expect(c.liveBlockedReason).toContain("live window is invalid");
+        expect(c.liveBlockedReason).not.toContain(bad);
+      }
+      expect(modeAt({ ...win, LIVE_FROM_ET: "2026-11-09", LIVE_UNTIL_ET: "2026-11-05" }, at)).toBe("demo_only");
+    });
+  });
 });
