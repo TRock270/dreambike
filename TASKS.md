@@ -1635,3 +1635,9 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Done-when gate (general-reviewer): 11/11 met. Its one major, decided by the lead: a unique-part-id rule in the Version schema would stop older saved projects from opening (a reload used to restart the point-part counter, so two parts could share an id). The rule is dropped and documented in contracts.ts; duplicate fee ids stay refused (fee ids are random UUIDs); new code no longer makes duplicate part ids. Repair reviewed with `/review-changes` quick (5 reviewers): green.
 - Consultant: PAL chat nim-nemotron35, 1 call (images.ts, composite route; the first try was refused by PAL as too large before reaching the model). 9 points, none taken: each checked against the code (design choices, latent paths without a caller, or error mapping that already returns 400). Gemini not used.
 - Details stay in the local security-notes.md. Still open: deploy (push needs owner go).
+
+### Live check after the SEC1/SEC2 deploy — 2026-10-31, about 19:05 ET (lead, owner pushed)
+
+- Owner pushed 1a75216..b27c89a (SEC2 03ce306 and 90938af, composite timeout 9be1405, SEC1 b27c89a). Pre-push on that HEAD: lint pass, typecheck pass, `npm test` 1173 passed / 24 skipped, build pass.
+- Deploy identified without Vercel CLI or gh: a string that SEC1 added to the browser code is present in 1 of the 10 live JS chunks.
+- `.venv/bin/python spike/deployment.py --origin https://dreambike-pied.vercel.app`: 30 passed, 0 failed, 0 skipped (demo_only, 403/413 probes on all 10 POST routes, secret scan of 10 JS files: 0 value hits, 0 name hits).
