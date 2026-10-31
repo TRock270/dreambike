@@ -1624,3 +1624,10 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - SPEC.md 5: status cache 60 s with eviction after own paid call; RATE_LIMITED also for the server's per-instance quota limits and the firewall's plain 429.
 - Still open: deploy (push needs owner go) and rerun `spike/deployment.py --origin https://dreambike-pied.vercel.app`; R3 (shared $5 day can be used up by about 10 IPs) stays a known limit, README note proposed; R5–R7 minors unchanged; eslint.config.mjs should ignore `.claude/worktrees/**` (lead/owner decision).
 - Files: src/lib/server/paid.ts, src/lib/server/budget.ts, src/app/api/normalize/route.ts, src/app/api/composite/route.ts (rate-limit hunk only), src/lib/browser/{preflight,normalizeClient,renderClient,segmentClient,sparkClient}.ts, tests/{paid,budget,budget-routes,preflight}.test.ts, SPEC.md, docs/api-evidence.md, TASKS.md.
+
+### Rate-limit follow-up: lint ignore, README note, push — 2026-10-31, about 18:30 ET
+
+- Owner go 2026-10-31: push, add the eslint ignore, add the R3 README note, rerun the deployment check after the deploy.
+- eslint.config.mjs ignores `.claude/worktrees/**` (another session's worktree build output broke `npm run lint`); `npm run lint` now passes on the whole repo.
+- README Limitations: rate limits (firewall 60/min per IP, app 30/min per IP) protect free tiers and the server only, count per region or instance; the money caps are the only spending control; a few visitors from different networks can use up the $5 day early, and the cached demo keeps working.
+- /review-changes quick (release, security, general): green, one minor (firewall claim not checkable from the repo); settled by the live probe recorded in docs/api-evidence.md U08.

@@ -106,6 +106,7 @@ Live edits on the public site run only from 2026-11-05 to 2026-11-09, US Eastern
 - Live selection by point is off: the point answer returned the whole bike (U01). Pick a part from the list or draw a box.
 - HEIC photos are rejected; export a JPEG first.
 - Spending caps apply: $5 per day in total and $0.50 per visitor per day on the public site, and a $100 project hard cap.
+- Request rate limits (a firewall rule of 60 API requests per minute per IP, 30 photo or model requests per minute per IP in the app) only protect the free tiers and the server; they count per region or per server instance. The money caps above are the only spending control. A handful of visitors from different networks can use up the $5 daily budget early; the cached demo keeps working after that.
 - One image render per explicit click; renders can differ from the photo, which is why the drift check and your accept step exist.
 - Part lookup works only with the shops in the server's shop list (PUBLIC_SHOP_DOMAINS); without that list it is off. The list is not set on the public site yet, so part lookup is currently off there; the 2026-10-30 check ran on a local development server. Text search with web search runs only on a local development machine. Product photos are often served from another host than the shop's own, so they are left out unless that host is in the list. In the 2026-10-30 check one link lookup found the product with the price unknown, because that page shows no price, and one text search found no matching product.
 - Not built: voice input, German PDF, accounts.
