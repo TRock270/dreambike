@@ -48,3 +48,6 @@ shop-links.txt
 
 # Spike and smoke-test output (explicit; also matched by the generic out/ pattern above)
 spike/out/
+
+# Open security findings, kept local until fixed (owner, 2026-10-31)
+security-notes.md
