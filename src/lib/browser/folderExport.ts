@@ -24,12 +24,21 @@ interface HandleWithPermissions {
   requestPermission(descriptor: { mode: "readwrite" }): Promise<PermissionState3>;
 }
 
+// The directory iterator (entries()) is missing from TypeScript's lib here (tsconfig has dom and
+// dom.iterable but not dom.asynciterable), so the one member used is declared. It works like a
+// Python async generator: `for await (const [name, handle] of dir.entries())` yields pairs.
+interface DirectoryWithEntries {
+  entries(): AsyncIterable<[string, { kind: "file" | "directory" }]>;
+}
+
 export type FolderSaveResult = {
   written: number; skipped: number; missing: string[]; folderName: string;
   /** "written" only when project.json was written and every file it names is in the folder. */
   projectJson: "written" | "not_written";
   /** Why project.json was not written (shown to the owner); null when it was written. */
   projectJsonReason: string | null;
+  /** Unreferenced masks/<uuid>.bin files removed after project.json was written; 0 otherwise. */
+  removedMasks: number;
 };
 
 /** What the folder save needs besides the plan to also write project.json and masks/<id>.bin. */
@@ -136,12 +145,40 @@ async function removeIfPresent(dir: FileSystemDirectoryHandle, name: string): Pr
   }
 }
 
+const MASK_FILE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.bin$/;
+
+/**
+ * Best effort: removes masks/<uuid>.bin files that project.json no longer names. Only plain files
+ * with a lowercase UUID name qualify. Referenced names are compared in lower case, because macOS
+ * and Windows folders are case-insensitive and mask ids may be written in upper case. Returns the
+ * number of files actually removed; never throws.
+ */
+async function removeStaleMasks(dir: FileSystemDirectoryHandle, referenced: string[]): Promise<number> {
+  const keep = new Set(referenced.map((n) => n.toLowerCase()));
+  let masksDir: FileSystemDirectoryHandle;
+  try { masksDir = await dir.getDirectoryHandle("masks"); } catch { return 0; } // none: nothing to do
+  const stale: string[] = [];
+  try {
+    // Collect first and finish the listing; removing while iterating is undefined in the spec.
+    for await (const [name, handle] of (masksDir as unknown as DirectoryWithEntries).entries()) {
+      if (handle.kind === "file" && MASK_FILE_PATTERN.test(name) && !keep.has(name.toLowerCase())) stale.push(name);
+    }
+  } catch { return 0; }
+  let removed = 0;
+  for (const name of stale) {
+    try { await masksDir.removeEntry(name); removed++; } catch { /* leave it; harmless */ }
+  }
+  return removed;
+}
+
 /**
  * Writes the plan into root/<folderName>. Images first (same-size files are skipped), then the
  * masks (masks/<id>.bin), then history.json, history.md and project.json last, so a failed write
  * leaves the previous history in place. Image and mask files are immutable by id, so a same-size
  * file is skipped. project.json is written only when `snapshotInput` is complete and nothing is
  * missing; otherwise a stale project.json is removed so an import cannot restore an older state.
+ * Only after project.json was written are unreferenced masks/<uuid>.bin files removed (best
+ * effort, see removeStaleMasks), so an older project.json never points at a deleted mask.
  */
 export async function saveProjectToFolder(
   root: FileSystemDirectoryHandle,
@@ -201,10 +238,14 @@ export async function saveProjectToFolder(
 
   await writeFile(dir, "history.json", plan.historyJson);
   await writeFile(dir, "history.md", plan.historyMarkdown);
-  if (reason === null && snap?.complete) await writeFile(dir, "project.json", snap.json);
+  let removedMasks = 0;
+  if (reason === null && snap?.complete) {
+    await writeFile(dir, "project.json", snap.json);
+    removedMasks = await removeStaleMasks(dir, snap.maskFiles.map((m) => m.name));
+  }
   return {
     written, skipped, missing, folderName: plan.folderName,
-    projectJson: reason === null ? "written" : "not_written", projectJsonReason: reason,
+    projectJson: reason === null ? "written" : "not_written", projectJsonReason: reason, removedMasks,
   };
 }
 

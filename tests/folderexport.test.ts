@@ -22,6 +22,16 @@ class FakeDir {
   dirs = new Map<string, FakeDir>();
   aborts = 0;
   failWriteFor: string | null = null;
+  removeCalls: string[] = [];
+  failRemoveFor: string | null = null;
+  failListing = false;
+
+  /** Like FileSystemDirectoryHandle.entries(): files and subdirectories as [name, handle]. */
+  async *entries() {
+    if (this.failListing) throw new Error("listing failed");
+    for (const name of [...this.files.keys()]) yield [name, { kind: "file" as const }] as const;
+    for (const [name, d] of [...this.dirs]) yield [name, { kind: "directory" as const, d }] as const;
+  }
 
   async getDirectoryHandle(name: string, opts?: { create?: boolean }) {
     let d = this.dirs.get(name);
@@ -35,6 +45,9 @@ class FakeDir {
   }
   parent: FakeDir | null = null;
   async removeEntry(name: string) {
+    this.removeCalls.push(name);
+    if (this.failRemoveFor === name) throw new Error("remove failed");
+    if (this.dirs.delete(name)) return; // a directory goes too, so a missing kind check shows up
     if (!this.files.delete(name)) throw new DOMException("missing", "NotFoundError");
   }
   async getFileHandle(name: string, opts?: { create?: boolean }) {
@@ -301,6 +314,183 @@ describe("saveProjectToFolder with a snapshot", () => {
     expect(res.projectJson).toBe("not_written");
     expect(res.projectJsonReason).toBe("An image from the web is not saved.");
     expect(dir.files.has("project.json")).toBe(false);
+  });
+});
+
+const bin = (id: string) => `${id}.bin`;
+const STALE = "11111111-2222-3333-4444-555555555555.bin";
+const STALE_BYTES = new Uint8Array(W * H).fill(1);
+const plant = (dir: FakeDir, name = STALE) => {
+  const masks = dir.dirs.get("masks") ?? new FakeDir();
+  dir.dirs.set("masks", masks);
+  masks.files.set(name, new Blob([STALE_BYTES]));
+  return masks;
+};
+const saveInto = async (projectId: string, root: FakeDir) => saveFolder(projectId, root);
+async function folderWithPlanted(projectId: string) {
+  // Save once, then plant files that no version references, then save again.
+  const first = await saveFolder(projectId);
+  return { first, masks: first.dir.dirs.get("masks")! };
+}
+
+describe("stale mask cleanup", () => {
+  it("removes a stale uuid .bin and keeps every referenced mask byte-identical", async () => {
+    const r = await build();
+    const { first, masks } = await folderWithPlanted(r.projectId);
+    const before = new Map<string, Uint8Array>();
+    for (const [n, c] of masks.files) before.set(n, new Uint8Array(await (c as Blob).arrayBuffer()));
+    plant(first.dir);
+    const second = await saveInto(r.projectId, first.root);
+    expect(second.result.projectJson).toBe("written");
+    expect(second.result.removedMasks).toBe(1);
+    expect(masks.files.has(STALE)).toBe(false);
+    expect([...masks.files.keys()].sort()).toEqual([...before.keys()].sort());
+    for (const [n, bytes] of before) expect(new Uint8Array(await (masks.files.get(n) as Blob).arrayBuffer())).toEqual(bytes);
+  });
+
+  it("keeps other names, uppercase uuid files and subdirectories without touching them", async () => {
+    const r = await build();
+    const { first, masks } = await folderWithPlanted(r.projectId);
+    const upperBin = STALE.replace(/[a-f]/g, (c) => c.toUpperCase());
+    masks.files.set("notes.txt", "hi");
+    masks.files.set(upperBin, new Blob([STALE_BYTES]));
+    masks.dirs.set("plain", new FakeDir());
+    masks.dirs.set(STALE, new FakeDir());
+    masks.files.set("11111111-2222-3333-4444-555555555555.bin.txt", "x");
+    const res = (await saveInto(r.projectId, first.root)).result;
+    expect(res.removedMasks).toBe(0);
+    expect(masks.removeCalls).toEqual([]);
+    expect(masks.files.has("notes.txt")).toBe(true);
+    expect(masks.files.has(upperBin)).toBe(true);
+    expect(masks.dirs.has("plain")).toBe(true);
+    expect(masks.dirs.has(STALE)).toBe(true);
+  });
+
+  it("keeps a lowercase file that a referenced uppercase name resolves to", async () => {
+    // Case-insensitive folders: the snapshot names X.bin (upper), the disk file is lower case.
+    const r = await build();
+    const x = await inputsOf(r.projectId);
+    const refName = x.snapshot.complete ? x.snapshot.maskFiles[0]!.name : "";
+    const upperName = refName.toUpperCase().replace(".BIN", ".bin");
+    const root = new FakeDir();
+    const dir = await root.getDirectoryHandle(x.plan.folderName, { create: true }) as unknown as FakeDir;
+    plant(dir, refName.toLowerCase());
+    const snapshot = x.snapshot.complete
+      ? { ...x.snapshot, maskFiles: x.snapshot.maskFiles.map((m, i) => (i === 0 ? { ...m, name: upperName } : m)) }
+      : x.snapshot;
+    // readMask for the renamed entry returns pixels of the same length, so the job is "skipped".
+    const res = await saveProjectToFolder(asHandle(root), x.plan, x.readImage, undefined,
+      { snapshot, readMask: async () => new Uint8Array(W * H) });
+    expect(res.projectJson).toBe("written");
+    expect(dir.dirs.get("masks")!.removeCalls).not.toContain(refName.toLowerCase());
+    expect(dir.dirs.get("masks")!.files.has(refName.toLowerCase())).toBe(true);
+  });
+
+  it("removes nothing when project.json is not written", async () => {
+    const r = await build();
+    const { first, masks } = await folderWithPlanted(r.projectId);
+    plant(first.dir);
+    // (a) a version with external_runtime rights: projectSnapshot itself must refuse it
+    const x = await inputsOf(r.projectId);
+    const last = x.src.versions[x.src.versions.length - 1]!;
+    const versions = x.src.versions.map((v) => (v.id === last.id ? { ...v, image: { ...v.image, rights: "external_runtime" as const } } : v));
+    const webPlan = exportPlan({ project: x.src.project, versions, headId: x.src.project.headVersionId, exportedAt: "t" });
+    const webSnapshot = projectSnapshot({ ...x.src, versions, plan: webPlan });
+    expect(webSnapshot.complete).toBe(false);
+    const a = await saveProjectToFolder(asHandle(first.root), webPlan, x.readImage, undefined,
+      { snapshot: webSnapshot, readMask: x.input.readMask });
+    expect(a.projectJson).toBe("not_written");
+    expect(a.removedMasks).toBe(0);
+    // (b) a missing image
+    const lost = x.plan.files[1]!.imageId;
+    const b = await saveProjectToFolder(asHandle(first.root), x.plan, async (id) => (id === lost ? null : x.readImage(id)), undefined, x.input);
+    expect(b.projectJson).toBe("not_written");
+    expect(b.removedMasks).toBe(0);
+    expect(masks.removeCalls).toEqual([]);
+    expect(masks.files.has(STALE)).toBe(true);
+  });
+
+  it("does not remove anything without a snapshot", async () => {
+    const root = new FakeDir();
+    const dir = await root.getDirectoryHandle("Bike (abcd1234)", { create: true }) as unknown as FakeDir;
+    const masks = plant(dir);
+    const res = await saveProjectToFolder(asHandle(root), plan(), reader({ i0: webp(1), i1: webp(2) }));
+    expect(res.removedMasks).toBe(0);
+    expect(masks.files.has(STALE)).toBe(true);
+  });
+
+  it("a failing removeEntry leaves the save written and is not counted", async () => {
+    const r = await build();
+    const { first, masks } = await folderWithPlanted(r.projectId);
+    plant(first.dir);
+    plant(first.dir, "22222222-2222-3333-4444-555555555555.bin");
+    masks.failRemoveFor = STALE;
+    const res = (await saveInto(r.projectId, first.root)).result;
+    expect(res.projectJson).toBe("written");
+    expect(res.projectJsonReason).toBeNull();
+    expect(res.removedMasks).toBe(1);
+    expect(masks.files.has(STALE)).toBe(true);
+    expect(masks.files.has("22222222-2222-3333-4444-555555555555.bin")).toBe(false);
+  });
+
+  it("a failing listing leaves the save written with 0 removed", async () => {
+    const r = await build();
+    const { first, masks } = await folderWithPlanted(r.projectId);
+    plant(first.dir);
+    masks.failListing = true;
+    const res = (await saveInto(r.projectId, first.root)).result;
+    expect(res.projectJson).toBe("written");
+    expect(res.removedMasks).toBe(0);
+    expect(masks.files.has(STALE)).toBe(true);
+  });
+
+  it("rejects when project.json cannot be written and leaves the stale file alone", async () => {
+    const r = await build();
+    const { first, masks } = await folderWithPlanted(r.projectId);
+    plant(first.dir);
+    first.dir.failWriteFor = "project.json";
+    await expect(saveInto(r.projectId, first.root)).rejects.toThrow("disk error");
+    expect(masks.files.has(STALE)).toBe(true);
+    expect(masks.removeCalls).toEqual([]);
+  });
+
+  it("creates no masks directory for a project without masks", async () => {
+    const image = await realImage("a");
+    const projectId = uuid();
+    const rootId = uuid();
+    const rootVersion = newRootVersion({ id: rootId, projectId, createdAt: 5, image: refOf(image) });
+    const project = newProject({ id: projectId, rootVersionId: rootId, bikeRevision, now: new Date(2026, 9, 28, 9, 5) });
+    await createProject(h, { project, rootVersion, image });
+    const res = await saveFolder(projectId);
+    expect(res.result.projectJson).toBe("written");
+    expect(res.result.removedMasks).toBe(0);
+    expect(res.dir.dirs.has("masks")).toBe(false);
+  });
+
+  it("end to end: a replaced part mask is removed, the new one stays, and the folder imports", async () => {
+    const r = await build();
+    const first = await saveFolder(r.projectId);
+    const masks = first.dir.dirs.get("masks")!;
+    const sources = (await snapshotSources(h, r.projectId))!;
+    const head = sources.versions.find((v) => v.id === sources.project.headVersionId)!;
+    const oldPart = head.parts[0]!;
+    const fresh = realMask(head.image.hash);
+    fresh.pixels[1] = 1;
+    expect(masks.files.has(bin(oldPart.maskId))).toBe(true);
+    const att = await attachParts(h, {
+      versionId: head.id, imageHash: head.image.hash, masks: [fresh],
+      parts: head.parts.map((p, i) => (i === 0 ? { ...p, maskId: fresh.id } : p)),
+    });
+    expect(att.status).toBe("attached");
+    const second = await saveInto(r.projectId, first.root);
+    expect(second.result.projectJson).toBe("written");
+    expect(second.result.removedMasks).toBe(1);
+    expect(masks.files.has(bin(oldPart.maskId))).toBe(false);
+    expect(masks.files.has(bin(fresh.id))).toBe(true);
+    await deleteProject(h, r.projectId);
+    const imported = await readProjectFolder(asHandle(second.dir), deps());
+    expect(imported).toEqual({ ok: true, projectId: r.projectId });
+    expect((await getStoredMask(h, fresh.id))!.pixels).toEqual(fresh.pixels);
   });
 });
 

@@ -15,6 +15,8 @@ type Props = {
   onReference: (photo: NormalizedPhoto | null, source?: { web: boolean }) => void;
   /** Photo URL of the chosen product (server-offered only); null or missing hides the product photo action. */
   productImageUrl?: string | null;
+  /** Why the product photo action is missing (server-offered only); shown only when there is no product photo action. */
+  productPhotoHint?: string | null;
   /** The current reference is a shop product photo. */
   webReference?: boolean;
   /** The mechanic's description of what the reference shows (never empty). */
@@ -29,7 +31,7 @@ type Upload = { kind: "idle" } | { kind: "busy"; step: string } | { kind: "error
  * Reference mode input: one photo of a part, plus a description of what it shows.
  * The base photo's upload notice does not cover this second upload, so it is repeated here.
  */
-export function ReferenceDropzone({ partLabel, reference, busy, onReference, onPrepare, initialText, productImageUrl, webReference }: Props) {
+export function ReferenceDropzone({ partLabel, reference, busy, onReference, onPrepare, initialText, productImageUrl, productPhotoHint, webReference }: Props) {
   const [owned, setOwned] = useState(false);
   const [text, setText] = useState(initialText ?? "");
   const [upload, setUpload] = useState<Upload>({ kind: "idle" });
@@ -118,6 +120,12 @@ export function ReferenceDropzone({ partLabel, reference, busy, onReference, onP
               </button>
               {!webOk && <p className="text-text-muted text-[12px]">Tick the box above to use the product photo.</p>}
             </div>
+          )}
+          {!productImageUrl && productPhotoHint && (
+            <p className="text-text-muted text-[12px]">
+              <span aria-hidden="true" className="mr-1 font-semibold">ⓘ</span>
+              {productPhotoHint} A picture saved from a shop page is not your own photo, so do not add it with &quot;Choose reference photo&quot;.
+            </p>
           )}
           <input ref={input} type="file" className="sr-only" aria-label="Choose a reference photo" disabled={!owned}
             accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif"

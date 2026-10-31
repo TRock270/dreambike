@@ -948,6 +948,20 @@ export function Workspace({ referenceEnabled, appMode, partSearch }: { reference
   const shownHead = session ? headVersion(session) : null; // `head` is declared further down
   const productImageUrl = partSearch.photo && referenceOffered && shownHead && selected
     ? activeItems(shownHead).find((it) => it.slot === selected.slot)?.product?.imageUrl ?? null : null;
+  // Why the product photo box is missing, so the mechanic is not left guessing (and does not add a saved shop
+  // picture as an "own" photo). Null when the box shows, or when the server does not offer product photos.
+  let productPhotoHint: string | null = null;
+  if (partSearch.photo && referenceOffered && shownHead && selected && !productImageUrl) {
+    const item = activeItems(shownHead).find((it) => it.slot === selected.slot);
+    const part = selected.label.toLowerCase();
+    if (!item) {
+      productPhotoHint = `No shop product photo here: the ${part} has no line on the build sheet in the step shown yet. Accept a change to it first, then choose a product with "Use this" under "Find in your shops".`;
+    } else if (!item.product) {
+      productPhotoHint = `No shop product photo here: the ${part} in the step shown has no product chosen with "Use this". Choose one under "Find in your shops", or go to the step where you chose it (Undo, Redo or a step under "History").`;
+    } else {
+      productPhotoHint = `No shop product photo here: the product chosen for the ${part} has no shop photo link, for example because it was entered by hand.`;
+    }
+  }
   // The key includes the bike as sent, so editing the bike makes an older preview stale.
   // It also includes the shown version, so a preview never carries over to another head.
   // The reference hash is part of the key too: swapping the reference makes an instruction prepared for the
@@ -1438,7 +1452,7 @@ export function Workspace({ referenceEnabled, appMode, partSearch }: { reference
                   {mode === "reference" && (
                     <ReferenceDropzone key={`r-${selectionKey}`} partLabel={selected.label} reference={reference} initialText={prefillFor(selectionKey)}
                       busy={current?.state === "busy"} onPrepare={prepareByUser}
-                      productImageUrl={productImageUrl} webReference={referenceIsWeb}
+                      productImageUrl={productImageUrl} productPhotoHint={productPhotoHint} webReference={referenceIsWeb}
                       onReference={(p, source) => setRefState(p && selectionKey ? { key: selectionKey, photo: p, web: source?.web === true } : null)} />
                   )}
                   {current?.state === "busy" && <p role="status" className="text-text-secondary text-[13px]">Preparing the change…</p>}
