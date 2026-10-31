@@ -3,6 +3,7 @@
 import { createHash } from "node:crypto";
 import { CompositePayload, CompositeResponse, ImageFile, MaskFile } from "@/lib/contracts";
 import { AppError } from "@/lib/errors";
+import { MAX_EDGE } from "@/lib/imageFormat";
 import { loadConfig } from "@/lib/server/config";
 import {
   assertSameOrigin, errorResponse, jsonResponse, parseMultipart, payloadAndFiles, readBodyLimited, requestIdOf,
@@ -38,8 +39,15 @@ export async function POST(req: Request): Promise<Response> {
     const editedBytes = new Uint8Array(await edited.data.arrayBuffer());
     const baseBytes = new Uint8Array(await base.data.arrayBuffer());
     // Check the real format first (still WebP, not animated) before decoding pixels.
-    await webpSize(baseBytes);
-    await webpSize(editedBytes);
+    const baseSize = await webpSize(baseBytes);
+    const editedSize = await webpSize(editedBytes);
+    // Sizes are checked on the headers, before any pixel decode.
+    if (baseSize.width !== p.width || baseSize.height !== p.height) {
+      throw new AppError("INVALID_REQUEST", "Declared size does not match the base image.");
+    }
+    if (Math.max(editedSize.width, editedSize.height) > MAX_EDGE) {
+      throw new AppError("INVALID_IMAGE", "The edited image is larger than 2048 px.");
+    }
     const baseRgb = await decodeRgb(baseBytes);
     const editedRgb = await decodeRgb(editedBytes);
     if (baseRgb.width !== p.width || baseRgb.height !== p.height) {

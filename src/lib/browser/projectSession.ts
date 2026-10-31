@@ -80,8 +80,8 @@ export async function loadHeadView(h: DreamDb, session: ProjectSession): Promise
   let skipped = 0;
   let bike: BinaryMask | null = null;
   if (head.bikeMaskId) {
-    const stored = await getStoredMask(h, head.bikeMaskId);
     try {
+      const stored = await getStoredMask(h, head.bikeMaskId); // throws on a damaged record
       if (!stored) throw new Error("missing");
       bike = storedMaskToBinary(stored, photo.hash);
       restoredPartMap(photo, bike, [], facing); // size check only
@@ -92,9 +92,9 @@ export async function loadHeadView(h: DreamDb, session: ProjectSession): Promise
   }
   const restored: RestoredPart[] = [];
   for (const part of head.parts) {
-    const mask = await getStoredMask(h, part.maskId);
-    const candidate: RestoredPart | null = mask ? { part, mask } : null;
     try {
+      const mask = await getStoredMask(h, part.maskId);
+      const candidate: RestoredPart | null = mask ? { part, mask } : null;
       if (!candidate) throw new Error("missing");
       restoredPartMap(photo, null, [candidate], facing); // validates hash, size and 0/1 bytes
       restored.push(candidate);

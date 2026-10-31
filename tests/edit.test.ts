@@ -6,8 +6,14 @@ import { POST as compositePOST } from "@/app/api/composite/route";
 import { POST as editPOST } from "@/app/api/edit/route";
 import { CompositeResponse, EditResponse, ErrorResponse } from "@/lib/contracts";
 import * as images from "@/lib/server/images";
+
+// Pass-through spy on decodeRgb: the route imports it from this module, so only vi.mock sees the calls.
+const decodeCalls = vi.hoisted(() => ({ count: 0 }));
+vi.mock("@/lib/server/images", async (original) => {
+  const mod = await original<typeof import("@/lib/server/images")>();
+  return { ...mod, decodeRgb: (...args: Parameters<typeof mod.decodeRgb>) => { decodeCalls.count += 1; return mod.decodeRgb(...args); } };
+});
 const { maskToPng } = images;
-const renderTemplate = (images as Record<string, unknown>).renderTemplate;
 import { fetchImageEdit, readJsonLimited, renderTemplate as rt } from "@/lib/server/meta";
 import { withSession } from "./support/session";
 
@@ -71,6 +77,52 @@ describe("POST /api/composite", () => {
     const png = new Uint8Array(await solid(W, H, { r: 1, g: 1, b: 1 }).png().toBuffer());
     const base = await webp(solid(W, H, { r: 90, g: 90, b: 90 }));
     expect(await errorOf(await composite(payload, { base, edited: png }))).toEqual([400, "INVALID_IMAGE"]);
+  });
+
+  it("checks the declared size on the header before decoding", async () => {
+    const good = await webp(solid(W, H, { r: 90, g: 90, b: 90 }));
+    // Valid header (size intact) but corrupted bitstream: decode-first order would answer INVALID_IMAGE.
+    const corrupt = good.slice(); corrupt.fill(0xff, 40);
+    expect((await images.webpSize(corrupt).catch(() => null))).toEqual({ width: W, height: H });
+    const res = await composite({ ...payload, width: W - 1 }, { base: corrupt, edited: good });
+    expect(res.status).toBe(400);
+    const body = ErrorResponse.parse(await res.json());
+    expect([body.error.code, body.error.message]).toEqual(["INVALID_REQUEST", "Declared size does not match the base image."]);
+  });
+
+  it("refuses fake mask files with INVALID_IMAGE", async () => {
+    const base = await webp(solid(W, H, { r: 90, g: 90, b: 90 }));
+    const svg = new TextEncoder().encode(`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}"><rect width="9" height="9"/></svg>`);
+    const jpeg = new Uint8Array(await solid(W, H, { r: 5, g: 5, b: 5 }).jpeg().toBuffer());
+    const garbage = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    for (const bad of [svg, jpeg, garbage]) {
+      expect(await errorOf(await composite(payload, { base, edited: base, oldMask: bad, newMask: bad }))).toEqual([400, "INVALID_IMAGE"]);
+    }
+  });
+
+  it("refuses a base size mismatch and an edited image over 2048 px before any decode", async () => {
+    const base = await webp(solid(W, H, { r: 90, g: 90, b: 90 }));
+    decodeCalls.count = 0;
+    expect(await errorOf(await composite({ ...payload, width: W - 1 }, { base, edited: base }))).toEqual([400, "INVALID_REQUEST"]);
+    const big = await webp(solid(2100, 100, { r: 1, g: 1, b: 1 }));
+    expect(await errorOf(await composite({ ...payload, generatedWidth: 2100, generatedHeight: 100 }, { base, edited: big }))).toEqual([400, "INVALID_IMAGE"]);
+    expect(decodeCalls.count).toBe(0);
+    // Control: a valid request does reach decodeRgb.
+    await composite(payload, { base, edited: base });
+    expect(decodeCalls.count).toBe(2);
+  });
+
+  it("gives INVALID_IMAGE for an empty base or an empty edited image", async () => {
+    const base = await webp(solid(W, H, { r: 90, g: 90, b: 90 }));
+    const empty = new Uint8Array(0);
+    expect(await errorOf(await composite(payload, { base: empty, edited: base }))).toEqual([400, "INVALID_IMAGE"]);
+    expect(await errorOf(await composite(payload, { base, edited: empty }))).toEqual([400, "INVALID_IMAGE"]);
+  });
+
+  it("rejects an oversized mask with INVALID_IMAGE", async () => {
+    const base = await webp(solid(W, H, { r: 90, g: 90, b: 90 }));
+    const huge = new Uint8Array(await sharp({ create: { width: 4000, height: 4000, channels: 3, background: "#000" } }).greyscale().png().toBuffer());
+    expect(await errorOf(await composite(payload, { base, edited: base, oldMask: huge, newMask: huge }))).toEqual([400, "INVALID_IMAGE"]);
   });
 
   it("rejects a mask of the wrong size", async () => {
@@ -229,8 +281,9 @@ describe("POST /api/edit", () => {
   });
 });
 
-it("templates drop their header and insert the prompt", () => {
-  expect(renderTemplate).toBeUndefined(); // template expansion lives in meta.ts, not images.ts
+it("templates drop their header and insert the prompt", async () => {
+  const actual = await vi.importActual<Record<string, unknown>>("@/lib/server/images");
+  expect(actual.renderTemplate).toBeUndefined(); // template expansion lives in meta.ts, not images.ts
   const t = rt("paint.v1.md", "  Red tank  ");
   expect(t.startsWith("Edit this photo of a motorcycle.")).toBe(true);
   expect(t.endsWith("Red tank")).toBe(true);

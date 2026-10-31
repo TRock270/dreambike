@@ -567,7 +567,8 @@ describe("projectSnapshot", () => {
     const maskId = id();
     const cutId = id();
     const v: Version = {
-      ...root, parts: [part("tank", maskId)], cutoutImageId: withCutout ? cutId : null,
+      // The part box must lie inside the 8x4 image (Version schema).
+      ...root, parts: [{ ...part("tank", maskId), box: [0, 0, 8, 4] }], cutoutImageId: withCutout ? cutId : null,
     };
     const plan = exportPlan({ project: { id: projectId, name: "P" }, versions: [v], headId: v.id, exportedAt: "t" });
     const mask = { id: maskId, imageHash: image.hash, width: 8, height: 4, createdAt: 1 };

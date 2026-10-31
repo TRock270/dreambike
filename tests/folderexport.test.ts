@@ -539,6 +539,16 @@ describe("readProjectFolder", () => {
     expect(NO_PROJECT_JSON_MESSAGE).toBe(res.message);
   });
 
+  it("refuses a version with a part box outside its image before writing anything", async () => {
+    const res = await refused((dir) => {
+      const j = jsonOf(dir);
+      const v = j.versions.find((x: { parts: unknown[] }) => x.parts.length > 0);
+      v.parts[0].box = [0, 0, 1e9, 1e9];
+      putJson(dir, j);
+    });
+    expect(res.reason).toBe("bad_schema");
+  });
+
   it("refuses invalid JSON", async () => {
     const res = await refused((dir) => { dir.files.set("project.json", "{not json"); });
     expect(res.reason).toBe("bad_json");

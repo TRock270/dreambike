@@ -185,6 +185,13 @@ export const Version = z.object({
     else if (item.slot !== v.change.slot) bad("change", "change.slot must equal the item's slot");
   }
   if (v.fees.some((f) => f.itemIds.some((id) => !ids.has(id)))) bad("fees", "every fee itemId must be one of the version's items");
+
+  if (new Set(v.fees.map((f) => f.id)).size !== v.fees.length) bad("fees", "fee ids must be unique");
+  // Part ids are not checked for uniqueness: before 2026-10-31 a reload restarted the point counter, so
+  // saved projects can hold two "point:custom:0" parts. They stay harmless (selection takes the first).
+  // Stale parts are not exempt: a stale part is only inherited by a same-size composited edit, and
+  // restoring a part whose mask differs from the photo size is already refused, so every box fits.
+  if (v.parts.some((p) => !boxInside(p.box, v.image.width, v.image.height))) bad("parts", "every part box must lie inside the version image");
 });
 
 export const Project = z.object({

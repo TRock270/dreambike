@@ -206,8 +206,8 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 ## SEC1 — Input validation hardening (owner follow-up, 2026-10-31)
 
 - Priority: owner request ("Schließe sie", after the "Keine Eingabeprüfung" check, see log). Estimate: 1.5h. Depends on: T5, T6, OF1. No paid calls.
-- Status: IN PROGRESS 2026-10-31.
-- Files: src/lib/server/images.ts, src/app/api/composite/route.ts, src/lib/contracts.ts, src/lib/browser/partMap.ts, src/lib/browser/projectSession.ts, tests/masks.test.ts, tests/composite.test.ts, tests/contracts.test.ts, tests/folderexport.test.ts, tests/partmap.test.ts, tests/projectsession.test.ts.
+- Status: DONE 2026-10-31 (see log).
+- Files: src/lib/server/images.ts, src/app/api/composite/route.ts, src/lib/contracts.ts, src/lib/browser/partMap.ts, src/lib/browser/projectSession.ts, tests/masks.test.ts, tests/edit.test.ts, tests/contracts.test.ts, tests/folderexport.test.ts, tests/partmap.test.ts, tests/projectsession.test.ts, tests/project.test.ts.
 - Work and exact done-when items: in the local, gitignored security-notes.md (not part of the repo) until the fix is deployed (owner request 2026-10-31: no open findings in the public repo). The SEC1 gate takes its items from there.
 - Done when (summary): both major input validation gaps from the 2026-10-31 check are closed with tests that prove it; normal composite, folder round trip and project open still pass. Run build, lint, types, tests and the image checks.
 
@@ -1627,3 +1627,11 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 
 - tests/composite.test.ts: the full-size "outside the feather support" test gets a 15 s timeout (it hit the 5 s default under parallel load, 5.7 s in the post-merge run; alone it passes). Assertions unchanged. /review-changes quick (imaging, general): green, one minor (30 s was too loose) taken.
 - SEC2 reached main by fast-forward (03ce306, 90938af). SEC1's uncommitted tests/edit.test.ts change was set aside for the merge and restored; the one-line import conflict keeps both sides. SEC1's other uncommitted files were not touched. Worktree and branch sec2/frontend-keys removed.
+
+### SEC1 — 2026-10-31, about 14:00–14:25 and 18:30–19:00 ET (lead, build-ticket wf_0f9f6553-192, paused in between)
+
+- `/build-ticket SEC1`, 3 units (image decode checks, version schema, part restore), extra reviewers security, imaging and shop: all approved. Lead fix in tests/project.test.ts: a fixture's part box now fits its 8x4 image.
+- After the resume: `npm test` 1173 passed / 24 skipped; typecheck, lint and build pass; `.venv/bin/python spike/local_images.py --fixture-set plain` 67 passed. `/review-changes` quick on all 12 SEC1 files (imaging, shop, security, models, general): green, no findings.
+- Done-when gate (general-reviewer): 11/11 met. Its one major, decided by the lead: a unique-part-id rule in the Version schema would stop older saved projects from opening (a reload used to restart the point-part counter, so two parts could share an id). The rule is dropped and documented in contracts.ts; duplicate fee ids stay refused (fee ids are random UUIDs); new code no longer makes duplicate part ids. Repair reviewed with `/review-changes` quick (5 reviewers): green.
+- Consultant: PAL chat nim-nemotron35, 1 call (images.ts, composite route; the first try was refused by PAL as too large before reaching the model). 9 points, none taken: each checked against the code (design choices, latent paths without a caller, or error mapping that already returns 400). Gemini not used.
+- Details stay in the local security-notes.md. Still open: deploy (push needs owner go).

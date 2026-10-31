@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   Bike, BikeChecked, Box, BudgetResponse, CheckRequest, ErrorResponse, FitResult, HealthResponse,
-  Fee, Instruction, Project, InstructionPayload, MODEL_FORMATS, SegmentPayload, SegmentResponse, Settings,
+  Fee, Instruction, Project, Version, InstructionPayload, MODEL_FORMATS, SegmentPayload, SegmentResponse, Settings,
   modelJsonSchema,
 } from "@/lib/contracts";
 import { MOCKS } from "@/lib/mocks";
@@ -170,5 +170,44 @@ describe("Project.settingsId", () => {
     expect(ok("shop2")).toBe(false);
     expect(ok("default")).toBe(true);
     expect(ok("example")).toBe(true);
+  });
+});
+
+describe("Version part boxes and ids", () => {
+  const image = { id: uuid, hash, width: 100, height: 50, bytes: 10, rights: "owner" as const };
+  const part = (id: string, box: number[], stale = false) => ({
+    id, slot: "tank", label: "Tank", box, maskId: uuid, area: 10, source: "concept",
+    confidence: 0.9, stale,
+  });
+  const fee = (id: string) => ({ id, label: "Fee", kind: "other", netCents: 100, itemIds: [], confirmed: true });
+  const version = (over: Record<string, unknown> = {}) => ({
+    id: uuid, projectId: uuid, parentId: null, kind: "root", image, cutoutImageId: null, bikeMaskId: null,
+    parts: [], items: [], fees: [], inspectionReview: null, change: null,
+    composed: false, aligned: false, drift: null, fallbackReason: null, createdAt: 0, ...over,
+  });
+  const ok = (over: Record<string, unknown>) => Version.safeParse(version(over)).success;
+  const id2 = "4f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e";
+
+  it("accepts a box exactly at the edge and refuses one pixel past right or bottom", () => {
+    expect(ok({ parts: [part("a", [0, 0, 100, 50])] })).toBe(true);
+    expect(ok({ parts: [part("a", [0, 0, 101, 50])] })).toBe(false);
+    expect(ok({ parts: [part("a", [0, 0, 100, 51])] })).toBe(false);
+  });
+
+  it("refuses a box outside the image and a huge box", () => {
+    expect(ok({ parts: [part("a", [200, 200, 300, 300])] })).toBe(false);
+    expect(ok({ parts: [part("a", [0, 0, 1e9, 1e9])] })).toBe(false);
+  });
+
+  it("checks stale parts too, and accepts valid stale parts", () => {
+    expect(ok({ parts: [part("a", [0, 0, 10, 10], true), part("b", [5, 5, 60, 40], true)] })).toBe(true);
+    expect(ok({ parts: [part("a", [0, 0, 101, 10], true)] })).toBe(false);
+  });
+
+  it("refuses duplicate fee ids but keeps opening saved duplicate part ids", () => {
+    // Older saves can repeat a point part id; refusing them would stop those projects from opening.
+    expect(ok({ parts: [part("a", [0, 0, 10, 10]), part("a", [1, 1, 5, 5])] })).toBe(true);
+    expect(ok({ fees: [fee(uuid), fee(id2)] })).toBe(true);
+    expect(ok({ fees: [fee(uuid), fee(uuid)] })).toBe(false);
   });
 });

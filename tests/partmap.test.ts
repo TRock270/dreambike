@@ -1,10 +1,13 @@
 // Pure part-map derivation: facing and bike choices survive late detection results.
-import { describe, expect, it } from "vitest";
-import { binaryToStoredMask, derive, emptyPartMap, followUpPart, otherWheelSlot, partMapAfterEdit, partsForPhrase, partsToPersisted, restoredPartMap, boxPart, boxAcceptable, withPointPart, storedMaskToBinary, type PartMapState } from "@/lib/browser/partMap";
+import { describe, expect, it, vi } from "vitest";
+import { binaryToStoredMask, derive, emptyPartMap, followUpPart, otherWheelSlot, partMapAfterEdit, partsForPhrase, partsToPersisted, restoredPartMap, boxPart, boxAcceptable, withPointPart, selectByPoint, storedMaskToBinary, type PartMapState } from "@/lib/browser/partMap";
 import { hitTest } from "@/lib/coordinates";
 import { maskArea, maskBox } from "@/lib/parts";
 import { CORE_PHRASES } from "@/lib/slots";
 import type { BinaryMask, MapPart, Part, SegmentedObject, SlotId } from "@/lib/types";
+
+vi.mock("@/lib/browser/segmentClient", () => ({ requestSegment: vi.fn() }));
+import { requestSegment } from "@/lib/browser/segmentClient";
 
 const W = 100, H = 50;
 function rect(l: number, t: number, r: number, b: number): BinaryMask {
@@ -295,5 +298,61 @@ describe("box parts (drawn rectangles)", () => {
     const back = derive(restoredPartMap(PHOTO, bikeMask, restoredIn, "unknown")).parts;
     expect(back.map((p) => [p.id, p.source, p.absent])).toEqual([[present.id, "box", false], [absent.id, "box", true], ["old", "box", undefined]]);
     expect(back[1]!.mask.pixels).toEqual(absent.mask.pixels);
+  });
+});
+
+describe("restored parts take box and area from the mask (SEC1 E2)", () => {
+  const stored = (m: BinaryMask, id = "mk") => binaryToStoredMask(m, "h2", id, 1);
+  const part = (over: Partial<Part>): Part => ({ id: "point:tank:1", slot: "tank", label: "Tank", box: [40, 12, 60, 20],
+    maskId: "mk", area: 160, source: "point", confidence: null, stale: false, ...over });
+
+  it("replaces a stored box and area that disagree with the mask", () => {
+    const m = rect(40, 12, 60, 20);
+    const lying = part({ box: [0, 0, 100, 50], area: 5000 });
+    const [p] = restoredPartMap(PHOTO, null, [{ part: lying, mask: stored(m) }], "unknown").pointParts;
+    expect(p!.box).toEqual(maskBox(m));
+    expect(p!.box).toEqual([40, 12, 60, 20]);
+    expect(p!.area).toBe(maskArea(m));
+  });
+
+  it("an out-of-image stored box never reaches the map", () => {
+    const m = rect(2, 3, 7, 9);
+    const [p] = restoredPartMap(PHOTO, null, [{ part: part({ box: [-50, -5, 4000, 900], area: 1 }), mask: stored(m) }], "unknown").pointParts;
+    const [l, t, r, b] = p!.box;
+    expect(l).toBeGreaterThanOrEqual(0); expect(t).toBeGreaterThanOrEqual(0);
+    expect(r).toBeLessThanOrEqual(W); expect(b).toBeLessThanOrEqual(H);
+    expect(p!.box).toEqual([2, 3, 7, 9]);
+  });
+
+  it("refuses a mask with no set pixel", () => {
+    expect(() => restoredPartMap(PHOTO, null, [{ part: part({}), mask: stored(rect(0, 0, 0, 0)) }], "unknown")).toThrow(/no set pixel/);
+  });
+});
+
+describe("point and box part ids stay unique (SEC1 E2)", () => {
+  const photo = { blob: new Blob(["x"]), width: W, height: H, hash: "h2" };
+  const pointResult = () => ({ objects: [{ mask: rect(40, 12, 60, 20), box: [40, 12, 60, 20] as [number, number, number, number], confidence: 0.9 }], warnings: [] });
+  const target = { kind: "part" as const, slot: "custom" as SlotId, label: "Thing" };
+
+  it("two point selections give different ids even when a restored part holds point:custom:0", async () => {
+    vi.mocked(requestSegment).mockResolvedValue(pointResult() as never);
+    const a = await selectByPoint(photo, { x: 50, y: 15 }, target, null);
+    const b = await selectByPoint(photo, { x: 50, y: 15 }, target, null);
+    if (!("part" in a) || !("part" in b)) throw new Error("no part");
+    expect(a.part.id).not.toBe(b.part.id);
+    expect(a.part.id).not.toBe("point:custom:0");
+    expect(a.part.id.length).toBeLessThanOrEqual(200);
+    const restoredOld = { ...a.part, id: "point:custom:0" };
+    const ids = withPointPart(withPointPart([restoredOld], a.part), b.part).map((p) => p.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("a redrawn identical custom box replaces the old part instead of duplicating its id", () => {
+    const first = boxPart("custom", "A", [5, 5, 20, 20], "h2", W, H, true)!;
+    const again = boxPart("custom", "A", [5, 5, 20, 20], "h2", W, H, true)!;
+    expect(again.id).toBe(first.id);
+    const out = withPointPart(withPointPart([], first), again);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toBe(again);
   });
 });

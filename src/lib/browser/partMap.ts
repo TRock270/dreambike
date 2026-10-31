@@ -192,7 +192,8 @@ export function boxAcceptable(part: MapPart, bike: BinaryMask | null): boolean {
 
 /** Add a point or box part: the same non-custom slot replaces; custom parts are kept side by side. */
 export function withPointPart(pointParts: MapPart[], part: MapPart): MapPart[] {
-  return [...pointParts.filter((p) => p.slot === "custom" || p.slot !== part.slot), part];
+  // An existing part with the same id goes too, so ids stay unique (a redrawn identical box).
+  return [...pointParts.filter((p) => p.id !== part.id && (p.slot === "custom" || p.slot !== part.slot)), part];
 }
 
 type Update = (fn: (s: PartMapState) => PartMapState) => void;
@@ -232,8 +233,6 @@ export async function buildPartMap(photo: PhotoRef, update: Update, signal?: Abo
   update((s) => (!same(s) ? s : { ...s, done: true }));
 }
 
-let pointCounter = 0;
-
 /**
  * Point selection. target "bike" recovers the bike outline (no 60% rule);
  * any other target is a part: clipped to the bike, must contain the clicked
@@ -259,7 +258,7 @@ export async function selectByPoint(photo: PhotoRef, point: { x: number; y: numb
   }
   const best = candidates.find((o) => acceptableAsPart(o.mask, bike));
   if (!best) throw new PreflightError("NO_RESULT", "That selection covers most of the bike. Click on the part itself.");
-  const part = makePart(`point:${target.slot}:${pointCounter++}`, target.slot, target.label, best.mask, "point",
+  const part = makePart(`point:${target.slot}:${crypto.randomUUID()}`, target.slot, target.label, best.mask, "point",
     best.confidence, photo.hash);
   if (!part) throw new PreflightError("NO_RESULT", "Nothing was found at that point.");
   return { part };
@@ -351,7 +350,11 @@ export function restoredPartMap(photo: { hash: string; width: number; height: nu
   const mapParts: MapPart[] = parts.map(({ part, mask }) => {
     const binary = storedMaskToBinary(mask, part.stale ? undefined : imageHash);
     if (!fits(binary)) throw new Error(`Mask ${mask.id} does not match the photo size.`);
-    return { id: part.id, slot: part.slot, label: part.label, mask: binary, area: part.area, box: part.box, source: part.source,
+    // Box and area come from the validated mask, never from the stored values (a prepared file
+    // could claim a box outside the image). A mask with no set pixel is as bad as a damaged one.
+    const box = maskBox(binary);
+    if (!box) throw new Error(`Mask ${mask.id} has no set pixel.`);
+    return { id: part.id, slot: part.slot, label: part.label, mask: binary, area: maskArea(binary), box, source: part.source,
       confidence: part.confidence, stale: part.stale, imageHash: part.stale ? mask.imageHash : imageHash,
       ...(part.absent !== undefined ? { absent: part.absent } : {}) };
   });

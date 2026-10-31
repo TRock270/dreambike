@@ -258,14 +258,34 @@ export async function maskToPng(mask: BinaryMask): Promise<Uint8Array> {
 
 /** Decode a mask PNG back to 0/1 pixels; dimensions must match the image. */
 export async function pngToMask(png: Uint8Array, width: number, height: number): Promise<BinaryMask> {
-  const { data, info } = await sharp(png).extractChannel(0).raw().toBuffer({ resolveWithObject: true });
-  if (info.width !== width || info.height !== height) throw new AppError("INVALID_IMAGE", "Mask size does not match the image.");
-  return { width, height, pixels: Uint8Array.from(data, (v) => (v > 127 ? 1 : 0)) };
+  const bad = (message: string) => new AppError("INVALID_IMAGE", message);
+  // Real format and header size first: an SVG, a JPEG or a huge PNG never reaches the decoder.
+  if (sniffFormat(png) !== "png") throw bad("A mask must be a PNG file.");
+  const header = headerSize(png);
+  if (!header || header.width !== width || header.height !== height) throw bad("Mask size does not match the image.");
+  let decoded: { data: Buffer; info: OutputInfo };
+  try {
+    decoded = await sharp(png, { limitInputPixels: Math.max(1, width * height), failOn: "error" })
+      .timeout({ seconds: SHARP_TIMEOUT_S }).extractChannel(0).raw().toBuffer({ resolveWithObject: true });
+  } catch {
+    throw bad("A mask could not be decoded.");
+  }
+  if (decoded.info.width !== width || decoded.info.height !== height) throw bad("Mask size does not match the image.");
+  return { width, height, pixels: Uint8Array.from(decoded.data, (v) => (v > 127 ? 1 : 0)) };
+}
+
+/** Header metadata, or null: sharp(Buffer) throws synchronously on empty input, before .catch can see it. */
+async function safeMetadata(bytes: Uint8Array): Promise<Metadata | null> {
+  try {
+    return await sharp(bytes, { limitInputPixels: MAX_INPUT_PIXELS }).metadata();
+  } catch {
+    return null;
+  }
 }
 
 /** A normalized WebP upload must decode to exactly the declared size (one coordinate space). */
 export async function assertWebpSize(bytes: Uint8Array, width: number, height: number): Promise<void> {
-  const meta = await sharp(bytes).metadata().catch(() => null);
+  const meta = await safeMetadata(bytes);
   if (!meta || meta.format !== "webp" || (meta.pages ?? 1) > 1) throw new AppError("INVALID_IMAGE");
   if (meta.width !== width || meta.height !== height) {
     throw new AppError("INVALID_REQUEST", "Declared size does not match the image.");
@@ -456,7 +476,7 @@ export async function encodeRgbBounded(raw: RawRgb): Promise<NormalizedImage> {
 
 /** A WebP upload's real size; refuses other formats and animation whatever the declared MIME. */
 export async function webpSize(bytes: Uint8Array): Promise<{ width: number; height: number }> {
-  const meta = await sharp(bytes).metadata().catch(() => null);
+  const meta = await safeMetadata(bytes);
   if (!meta || meta.format !== "webp" || (meta.pages ?? 1) > 1 || !meta.width || !meta.height) throw new AppError("INVALID_IMAGE");
   return { width: meta.width, height: meta.height };
 }

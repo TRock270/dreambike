@@ -325,6 +325,39 @@ describe("parts", () => {
     expect(headVersion(s).bikeMaskId).toBeNull();
   });
 
+  it("a damaged part mask record skips only that outline and the project still opens", async () => {
+    let s = await start();
+    const rootHash = headVersion(s).image.hash;
+    const seat = refreshedPart("seat", "Seat", mask(), rootHash)!;
+    const tank = refreshedPart("tank", "Tank", mask(), rootHash)!;
+    s = (await persistParts(h, s, rootHash, derive({ ...emptyPartMap(rootHash), done: true, pointParts: [seat, tank] })))!;
+    const [first, second] = headVersion(s).parts;
+    const rec = await h.db.get("masks", first!.maskId);
+    await h.db.put("masks", { ...rec!, pixels: new Uint8Array(5) }); // wrong length: CorruptRecordError
+    const view = await loadHeadView(h, s);
+    expect(derive(view.map).parts.map((p) => p.id)).toEqual([second!.id]);
+    expect(view.map.warnings).toEqual(["1 saved outline could not be restored. Use “Detect parts again”."]);
+  });
+
+  it("a damaged bike mask record skips the outline, keeps the parts and counts one warning", async () => {
+    let s = await start();
+    const rootHash = headVersion(s).image.hash;
+    const seat = refreshedPart("seat", "Seat", mask(), rootHash)!;
+    const bikePixels = new Uint8Array(W * H).fill(1);
+    const withBike = derive({ ...emptyPartMap(rootHash), done: true, pointParts: [seat],
+      bikeCandidates: [{ mask: { width: W, height: H, pixels: bikePixels }, box: [0, 0, W, H], confidence: null }], bikeChoice: 0 });
+    s = (await persistParts(h, s, rootHash, withBike))!;
+    const bikeId = headVersion(s).bikeMaskId!;
+    const rec = await h.db.get("masks", bikeId);
+    const bad = rec!.pixels.slice(); bad[2] = 7; // not 0 or 1
+    await h.db.put("masks", { ...rec!, pixels: bad });
+    const view = await loadHeadView(h, s);
+    expect(view.map.bikeCandidates).toEqual([]);
+    expect(view.map.bikeStatus).toBe("pending");
+    expect(derive(view.map).parts).toHaveLength(1);
+    expect(view.map.warnings).toEqual(["1 saved outline could not be restored. Use “Detect parts again”."]);
+  });
+
   it("parts detected for another image are not saved on the shown version", async () => {
     const s = await start();
     expect(await persistParts(h, s, hash("q"), derive(emptyPartMap(hash("q"))))).toBeNull();

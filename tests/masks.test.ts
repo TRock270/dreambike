@@ -11,6 +11,14 @@ import { samPointsText, samRecords, segment } from "@/lib/server/meta";
 import { sseEvents } from "@/lib/server/sse";
 import { withSession } from "./support/session";
 
+// Pass-through spy on sharp so a test can prove the decoder was never reached.
+const sharpCalls = vi.hoisted(() => ({ count: 0 }));
+vi.mock("sharp", async (original) => {
+  const mod = await original<{ default: (...args: unknown[]) => unknown }>();
+  const wrapped = Object.assign((...args: unknown[]) => { sharpCalls.count += 1; return mod.default(...args); }, mod.default);
+  return { ...mod, default: wrapped };
+});
+
 // Documented record from the @meta-sam/parser 0.1.0 README (format evidence, not an
 // account response): box x1..x2 = 211..270, y1..y2 = 228..254 (inclusive), 320x334 frame.
 const DOC = "<0f>0<|box;x1=211;y1=228;x2=270;y2=254;w=320;h=334;c=0.87|>"
@@ -104,6 +112,41 @@ describe("mask placement (U01: box-relative verified 2026-10-28)", () => {
     expect((await pngToMask(png, 37, 23)).pixels).toEqual(pixels);
     await expect(pngToMask(png, 23, 37)).rejects.toThrow();
     expect((await sharp(png).metadata()).format).toBe("png");
+  });
+
+  it("rejects hostile or mismatched mask files before decoding pixels", async () => {
+    const huge = new Uint8Array(await sharp({ create: { width: 4000, height: 4000, channels: 3, background: "#000" } }).greyscale().png().toBuffer());
+    await expect(pngToMask(huge, 100, 100)).rejects.toMatchObject({ code: "INVALID_IMAGE" });
+    const svg = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100"/></svg>');
+    await expect(pngToMask(svg, 100, 100)).rejects.toMatchObject({ code: "INVALID_IMAGE" });
+    await expect(pngToMask(new Uint8Array([1, 2, 3, 4, 5]), 100, 100)).rejects.toMatchObject({ code: "INVALID_IMAGE" });
+    const small = await maskToPng({ width: 50, height: 50, pixels: new Uint8Array(2500) });
+    await expect(pngToMask(small, 100, 100)).rejects.toMatchObject({ code: "INVALID_IMAGE" });
+    const wide = await maskToPng({ width: 200, height: 50, pixels: new Uint8Array(10_000) });
+    await expect(pngToMask(wide, 100, 100)).rejects.toMatchObject({ code: "INVALID_IMAGE" });
+    await expect(pngToMask(wide, 50, 200)).rejects.toMatchObject({ code: "INVALID_IMAGE" });
+    const jpeg = new Uint8Array(await sharp({ create: { width: 100, height: 100, channels: 3, background: "#888" } }).jpeg().toBuffer());
+    await expect(pngToMask(jpeg, 100, 100)).rejects.toMatchObject({ code: "INVALID_IMAGE" });
+    await expect(pngToMask(new Uint8Array(0), 100, 100)).rejects.toMatchObject({ code: "INVALID_IMAGE" });
+  });
+
+  it("refuses a wrong header size or format without calling sharp at all", async () => {
+    const wide = await maskToPng({ width: 200, height: 50, pixels: new Uint8Array(10_000) });
+    const svg = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"/>');
+    sharpCalls.count = 0;
+    await expect(pngToMask(wide, 100, 100)).rejects.toMatchObject({ code: "INVALID_IMAGE" });
+    await expect(pngToMask(svg, 100, 100)).rejects.toMatchObject({ code: "INVALID_IMAGE" });
+    expect(sharpCalls.count).toBe(0);
+    // A matching header does decode (control for the spy).
+    const ok = await maskToPng({ width: 20, height: 5, pixels: new Uint8Array(100) });
+    sharpCalls.count = 0;
+    await pngToMask(ok, 20, 5);
+    expect(sharpCalls.count).toBe(1);
+  });
+
+  it("turns a truncated PNG body into INVALID_IMAGE", async () => {
+    const full = await maskToPng({ width: 100, height: 100, pixels: new Uint8Array(10_000).fill(1) });
+    await expect(pngToMask(full.slice(0, 60), 100, 100)).rejects.toMatchObject({ code: "INVALID_IMAGE" });
   });
 });
 
