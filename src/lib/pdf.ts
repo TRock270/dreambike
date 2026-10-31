@@ -149,6 +149,11 @@ export type EstimatePdfInput = {
   /** The head version's picture. */
   after?: PdfImage | null;
   logo?: PdfImage | null;
+  /**
+   * True for a photo slot that was left out because its stored picture comes from an outside web source. The flag
+   * wins: such a slot never draws an image, even if one is supplied. No bytes cross with it.
+   */
+  outsideWeb?: { before: boolean; after: boolean };
   /** Already formatted for the reader, for example "29 Oct 2026". */
   estimateDate: string;
   /** Written as CreationDate and ModDate, so the same input gives the same file. */
@@ -792,7 +797,8 @@ type ImageUse = { slot: ImageSlot; image: PdfImage };
 type ImagePlan = { use: ImageUse | null; note: string | null };
 
 /** Only supplied pictures with owned or visitor rights are drawn. Nothing else ever takes their place. */
-function planImage(slot: ImageSlot, image: PdfImage | null | undefined, name: string): ImagePlan {
+function planImage(slot: ImageSlot, image: PdfImage | null | undefined, name: string, outsideWeb = false): ImagePlan {
+  if (outsideWeb) return { use: null, note: `${name}: outside web source, left out.` };
   if (!image) return { use: null, note: `${name}: not supplied, left out.` };
   if (image.rights === "external_runtime") return { use: null, note: `${name}: outside web source, left out.` };
   return { use: { slot, image }, note: null };
@@ -893,8 +899,8 @@ function fallbackPhrase(code: string): string {
 }
 
 function imageBlocks(c: Ctx, input: EstimatePdfInput, info: Info, used: Set<ImageSlot>): Block[] {
-  const before = planImage("before", input.before, "Before photo");
-  const after = planImage("after", input.after, "After image");
+  const before = planImage("before", input.before, "Before photo", input.outsideWeb?.before === true);
+  const after = planImage("after", input.after, "After image", input.outsideWeb?.after === true);
   const slotW = (CONTENT_W - IMAGE_GAP) / 2;
   const sameImage = before.use !== null && after.use !== null && before.use.image.hash === after.use.image.hash;
   const style = sans("--nl-text-muted");
@@ -919,7 +925,8 @@ function imageBlocks(c: Ctx, input: EstimatePdfInput, info: Info, used: Set<Imag
   }
   lines.push(...rowLines(c, slots.map((s) => ({ x: s.x, width: slotW, lines: textLines(c, s.caption, style, slotW) })), "caption"));
 
-  if (!input.head.composed && input.head.fallbackReason) {
+  // The sentence is about the drawn after image, so it is omitted when that image is left out.
+  if (after.use && !input.head.composed && input.head.fallbackReason) {
     lines.push(...para(c, `Not blended into the original photo${fallbackPhrase(input.head.fallbackReason)}. The after image replaces the whole picture.`,
       sans("--nl-warning-soft-text"), M, CONTENT_W, "caption", undefined, { icon: "warning" }));
   }

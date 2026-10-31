@@ -9,7 +9,7 @@ import sharp from "sharp";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   FONT_FILES, REVOKE_DELAY_MS, WARMUP_FALLBACK_DELAY_MS, WARMUP_IDLE_TIMEOUT_MS, WARMUP_TIMEOUT_MS, createPdfWarmup,
-  downloadPdf, fileSlug, formatEstimateDate, hasTrueTypeSignature, isCompleteEstimate, loadPdfImages, pdfFileName,
+  downloadPdf, fileSlug, formatEstimateDate, hasTrueTypeSignature, isCompleteEstimate, loadPdfImages, pdfFileName, pdfInputFrom,
   planPdfImage, readFontResponse, scheduleWarmup, selectImageIds, type ImageDeps,
 } from "@/lib/browser/pdfExport";
 import { mismatchText } from "@/components/ExportButton";
@@ -2075,6 +2075,92 @@ describe("pictures for the export", () => {
     expect(out.after).toBe(out.before);
     const input = await completeScenario({ before: out.before!, after: out.after!, logo: undefined });
     expect(textOf(layoutOf(input))).toContain("Original photo — no visual change yet.");
+  });
+
+  /** Runs the real chain: stored records -> loadPdfImages -> pdfInputFrom, on a head that is not composed. */
+  async function exportInput(records: Record<string, StoredImage | Error | null>, logo: string | null = null) {
+    const base = await completeScenario();
+    const f = fakes(records);
+    const images = await loadPdfImages({ before: rootId, after: headId, logo }, false, f.deps);
+    const head = { composed: false, fallbackReason: COMPOSITE_REASONS.find((c) => c !== "composited")!, fees: base.fees, inspectionReview: base.inspectionReview };
+    const mapped = pdfInputFrom({
+      project: { name: base.projectName }, head, rootImage: { id: rootId }, settings: { ...base.settings, logoImageId: logo },
+      settingsId: base.settingsId, bikeRevision: base.bikeRevision, appMode: "demo_only", now: NOW,
+      snapshot: { rows: base.rows, quote: base.quote, hash: base.currentFitInputHash },
+    } as unknown as Parameters<typeof pdfInputFrom>[0], images);
+    return { images, input: mapped };
+  }
+  const NOT_BLENDED = "Not blended into the original photo";
+
+  it("prints the outside-web reason in the PDF text for a web-derived after image, through the real mapping", async () => {
+    const { input, images } = await exportInput({ [rootId]: stored(photos.before.bytes), [headId]: stored(photos.after.bytes, "external_runtime") });
+    const text = textOf(layoutOf(input));
+    expect(text).toContain("After image: outside web source, left out.");
+    expect(text).not.toContain("not supplied");
+    expect(input.after).toBeNull();
+    expect(images.leftOut).toEqual(["After image: left out (it comes from an outside web source)."]);
+  });
+
+  it("keeps 'not supplied' for a missing or unreadable after image", async () => {
+    for (const after of [null, new Error("damaged record")]) {
+      const { input, images } = await exportInput({ [rootId]: stored(photos.before.bytes), [headId]: after });
+      expect(images.outsideWeb).toEqual({ before: false, after: false });
+      expect(textOf(layoutOf(input))).toContain("After image: not supplied, left out.");
+      expect(textOf(layoutOf(input))).not.toContain("outside web source");
+    }
+  });
+
+  it("flags a bad format or a failed conversion as not outside web", async () => {
+    const gif = stored(new Uint8Array([71, 73, 70, 56, 57, 97, 1, 0]), "owner");
+    const { images } = await exportInput({ [rootId]: stored(photos.before.bytes), [headId]: gif });
+    expect(images.outsideWeb.after).toBe(false);
+    // An owner WebP whose JPEG conversion throws is left out for that reason, not as an outside web source.
+    const f = fakes({ [rootId]: stored(photos.before.bytes), [headId]: stored(await webp(40, 30), "owner") });
+    const failing = { ...f.deps, toJpeg: async () => { throw new Error("canvas failed"); } };
+    const out = await loadPdfImages({ before: rootId, after: headId, logo: null }, false, failing);
+    expect(out.after).toBeNull();
+    expect(out.outsideWeb).toEqual({ before: false, after: false });
+    expect(out.leftOut).toEqual(["After image: left out (it could not be prepared: canvas failed)."]);
+  });
+
+  it("flags the before photo too, and the head being the root gives equal flags", async () => {
+    const web = stored(photos.before.bytes, "external_runtime");
+    const f = fakes({ [rootId]: web });
+    const same = await loadPdfImages({ before: rootId, after: rootId, logo: null }, false, f.deps);
+    expect(same.outsideWeb).toEqual({ before: true, after: true });
+    const { input } = await exportInput({ [rootId]: web, [headId]: stored(photos.after.bytes) });
+    expect(textOf(layoutOf(input))).toContain("Before photo: outside web source, left out.");
+  });
+
+  it("keeps the header logo output for visitor and external_runtime logos", async () => {
+    for (const rights of ["visitor", "external_runtime"] as const) {
+      const { input } = await exportInput(
+        { [rootId]: stored(photos.before.bytes), [headId]: stored(photos.after.bytes), [logoId]: stored(photos.logo.bytes, rights) }, logoId);
+      const layout = layoutOf(input);
+      expect(textOf(layout)).toContain("The shop logo is not included.");
+      expect(textOf(layout)).not.toContain("Shop logo:");
+      expect(layout.pages.flatMap((p) => p.boxes).filter((b) => b.kind === "image" && b.slot === "logo")).toHaveLength(0);
+    }
+  });
+
+  it("prints the not-blended sentence only when the after image is drawn", async () => {
+    const drawn = await exportInput({ [rootId]: stored(photos.before.bytes), [headId]: stored(photos.after.bytes) });
+    expect(textOf(layoutOf(drawn.input))).toContain(NOT_BLENDED);
+    for (const after of [stored(photos.after.bytes, "external_runtime"), null]) {
+      const { input } = await exportInput({ [rootId]: stored(photos.before.bytes), [headId]: after });
+      expect(textOf(layoutOf(input))).not.toContain(NOT_BLENDED);
+    }
+  });
+
+  it("never draws an image in a flagged slot, even when a picture is supplied", async () => {
+    const { input } = await exportInput({ [rootId]: stored(photos.before.bytes), [headId]: stored(photos.after.bytes) });
+    const flagged = { ...input, after: photos.after, outsideWeb: { before: false, after: true } };
+    const layout = layoutOf(flagged);
+    const slots = layout.pages.flatMap((p) => p.boxes).filter((b) => b.kind === "image").map((b) => (b as { slot: string }).slot);
+    expect(slots).toContain("before");
+    expect(slots).not.toContain("after");
+    expect(textOf(layout)).toContain("After image: outside web source, left out.");
+    expect(textOf(layout)).not.toContain(NOT_BLENDED);
   });
 
   it("downloads from a blob URL and revokes it only after the delay", () => {

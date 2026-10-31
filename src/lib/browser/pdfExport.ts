@@ -307,7 +307,11 @@ export type ImageDeps = {
   toPng: (blob: Blob) => Promise<Blob>;
 };
 
-export type PdfImages = { before: PdfImage | null; after: PdfImage | null; logo: PdfImage | null; leftOut: string[] };
+/** outsideWeb: the slot was refused only because its stored rights are "external_runtime" (never for a read or format failure). */
+export type PdfImages = {
+  before: PdfImage | null; after: PdfImage | null; logo: PdfImage | null; leftOut: string[];
+  outsideWeb: { before: boolean; after: boolean };
+};
 
 const SLOT_NAME: Record<PdfSlot, string> = { before: "Before photo", after: "After image", logo: "Shop logo" };
 
@@ -317,7 +321,7 @@ async function sha256Hex(blob: Blob): Promise<string> {
 }
 
 /** A prepared picture, or the reason it is left out. */
-type Prepared = { image: PdfImage } | { why: string };
+type Prepared = { image: PdfImage } | { why: string; outsideWeb?: true };
 
 /** Turns one stored picture into the bytes pdf.ts embeds. Every failure becomes a "left out" reason, never another image. */
 async function prepareImage(slot: PdfSlot, stored: StoredImage | null, readError: string | null, mock: boolean, deps: ImageDeps): Promise<Prepared> {
@@ -326,7 +330,7 @@ async function prepareImage(slot: PdfSlot, stored: StoredImage | null, readError
   try {
     const source = new Uint8Array(await stored.blob.arrayBuffer());
     const plan = planPdfImage({ slot, rights: stored.rights, format: sniffFormat(source), mock });
-    if (plan.action === "refuse") return { why: plan.reason };
+    if (plan.action === "refuse") return stored.rights === "external_runtime" && slot !== "logo" ? { why: plan.reason, outsideWeb: true } : { why: plan.reason };
     let bytes = source;
     let hash = stored.hash;
     if (plan.action === "convert") {
@@ -378,7 +382,8 @@ export async function loadPdfImages(ids: ImageIds, mock: boolean, deps: ImageDep
   const logo = ids.logo === null ? null : await prepare("logo", ids.logo);
   // Settled in page order, so the notes read before, after, logo.
   const settled = { before: settle("before", before), after: settle("after", after), logo: logo && settle("logo", logo) };
-  return { ...settled, leftOut };
+  const flag = (p: Prepared) => "outsideWeb" in p && p.outsideWeb === true;
+  return { ...settled, leftOut, outsideWeb: { before: flag(before), after: flag(after) } };
 }
 
 // ------------------------------------------------------------------------------- the file
@@ -400,6 +405,22 @@ export type BuildPdfArgs = {
   now: number;
 };
 
+/** The pure mapping from the saved project and the prepared pictures to what pdf.ts prints. */
+export function pdfInputFrom(args: Omit<BuildPdfArgs, "h">, images: PdfImages): EstimatePdfInput {
+  const { project, head, snapshot } = args;
+  const date = new Date(args.now);
+  return {
+    settings: args.settings, settingsId: args.settingsId, appMode: args.appMode, projectName: project.name,
+    bikeRevision: args.bikeRevision,
+    // The rows hold exactly the items the quote was made from, so the pieces cannot be mixed.
+    items: snapshot.rows.map((r) => r.item), fees: head.fees, inspectionReview: head.inspectionReview,
+    quote: snapshot.quote, rows: snapshot.rows, currentFitInputHash: snapshot.hash,
+    head: { composed: head.composed, fallbackReason: head.fallbackReason },
+    before: images.before, after: images.after, logo: images.logo, outsideWeb: images.outsideWeb,
+    estimateDate: formatEstimateDate(date), createdAt: date,
+  };
+}
+
 export type BuiltPdf = { bytes: Uint8Array; fileName: string; draft: boolean; leftOut: string[] };
 
 /**
@@ -411,18 +432,8 @@ export async function buildPdf(args: BuildPdfArgs): Promise<BuiltPdf> {
   const { h, project, head, snapshot } = args;
   const ids = selectImageIds(args.rootImage, head, args.settings);
   const images = await loadPdfImages(ids, args.appMode === "mock", { read: (id) => getStoredImage(h, id), toJpeg, toPng });
-  const date = new Date(args.now);
-  const input: EstimatePdfInput = {
-    settings: args.settings, settingsId: args.settingsId, appMode: args.appMode, projectName: project.name,
-    bikeRevision: args.bikeRevision,
-    // The rows hold exactly the items the quote was made from, so the pieces cannot be mixed.
-    items: snapshot.rows.map((r) => r.item), fees: head.fees, inspectionReview: head.inspectionReview,
-    quote: snapshot.quote, rows: snapshot.rows, currentFitInputHash: snapshot.hash,
-    head: { composed: head.composed, fallbackReason: head.fallbackReason },
-    before: images.before, after: images.after, logo: images.logo,
-    estimateDate: formatEstimateDate(date), createdAt: date,
-  };
+  const input = pdfInputFrom(args, images);
   const bytes = await kit.pdf.buildEstimatePdf(input, kit.fonts, (name) => kit.tokens.get(name));
   const draft = !isCompleteEstimate(snapshot.quote);
-  return { bytes, fileName: pdfFileName(project.name, draft, date), draft, leftOut: images.leftOut };
+  return { bytes, fileName: pdfFileName(project.name, draft, new Date(args.now)), draft, leftOut: images.leftOut };
 }
