@@ -8,7 +8,7 @@ import { ERRORS } from "@/lib/errors";
 import { MOCK_LABEL } from "@/lib/mocks";
 import {
   activeItems, editItem, FIT_PRECHECK_NOTE, fitBatches, fitInputCanonical, fitInputHash, fitStatusOf, laborDisplay,
-  LEGAL_SEED, priceDisplay, removeItem, runFitBatches, type ActiveBuildEntryData, type ItemPatch,
+  LEGAL_SEED, localDay, priceDisplay, removeItem, runFitBatches, type ActiveBuildEntryData, type ItemPatch,
 } from "@/lib/project";
 import prices from "../../budget/prices.json";
 import { slotInfo } from "@/lib/slots";
@@ -487,7 +487,7 @@ export function BuildSheet({ head, readOnlyReason, blockedReason, saving, onSave
                 <dd className="flex flex-wrap items-center gap-2">
                   <FitBadge status={status} />
                   {status === "stale" && <span className="text-text-muted">Result is old or the build changed. Check fit again.</span>}
-                  {current && item.fitCheckedAt && <span className="text-text-muted">checked <span className="tabular">{item.fitCheckedAt.slice(0, 10)}</span></span>}
+                  {current && item.fitCheckedAt && <span className="text-text-muted">checked <span className="tabular">{localDay(item.fitCheckedAt)}</span></span>}
                   {current && item.fit?.reasons.some((t) => t.includes(MOCK_LABEL)) && (
                     <span className="rounded-chip bg-warning-soft px-2 py-0.5 text-warning-soft-text text-[12px]"><span aria-hidden="true">⚠ </span>Mock result</span>
                   )}

@@ -1,10 +1,8 @@
 import type { z } from "zod";
 import type { Source } from "@/lib/contracts";
+import { localDay as day } from "@/lib/project";
 
 type SourceData = z.infer<typeof Source>;
-
-/** Date part of an ISO time ("2026-10-29T10:00:00Z" becomes "2026-10-29"). */
-const day = (iso: string) => iso.slice(0, 10);
 
 /** The sources behind a fit result. Links open in a new tab; the accessed date shows next to each. */
 export function EvidenceLinks({ sources }: { sources: readonly SourceData[] }) {

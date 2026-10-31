@@ -18,6 +18,17 @@ export function defaultProjectName(now: Date): string {
     `${p(now.getHours())}:${p(now.getMinutes())}`;
 }
 
+/**
+ * Local calendar day of an ISO time, "YYYY-MM-DD". At 22:35 in New York on 30 Oct,
+ * "2026-10-31T02:35:00Z" gives "2026-10-30", the same day as the clock and the PDF header.
+ * Slicing the string would give the UTC day instead.
+ */
+export function localDay(iso: string): string {
+  const d = new Date(iso);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 export function newRootVersion(input: {
   id: string; projectId: string; image: ImageRef; createdAt: number;
 }): Version {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useState } from "react";
-import { formatEuroCents, parseEuroInput } from "@/lib/project";
+import { formatEuroCents, localDay, parseEuroInput } from "@/lib/project";
 import { suggestFees } from "@/lib/quote";
 import { slotInfo } from "@/lib/slots";
 import type { BuildItemData, FeeData, InspectionReviewData, ShopSettings } from "@/lib/types";
@@ -137,7 +137,7 @@ function ReviewForm({ review, currentHash, disabled, disabledReason, onSave }: {
   const [decision, setDecision] = useState<InspectionReviewData["decision"]>(review?.decision ?? "unresolved");
   const [notes, setNotes] = useState(review?.notes ?? "");
   const state = review === null ? "No review saved yet."
-    : currentHash !== null && review.fitInputHash === currentHash ? `Review saved on ${review.reviewedAt.slice(0, 10)} for this build.`
+    : currentHash !== null && review.fitInputHash === currentHash ? `Review saved on ${localDay(review.reviewedAt)} for this build.`
     : "The saved review belongs to an older build and no longer counts. Review again.";
   const cannot = disabled || currentHash === null;
   return (

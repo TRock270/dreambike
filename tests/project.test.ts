@@ -4,7 +4,7 @@ import {
   BikeRevision, ImageRef, Project as ProjectSchema, StoredImage, StoredMask, Version as VersionSchema,
 } from "@/lib/contracts";
 import {
-  activeItems, canAcceptPending, children, defaultProjectName, laterSteps, newProject, newRootVersion,
+  activeItems, canAcceptPending, children, defaultProjectName, laterSteps, localDay, newProject, newRootVersion,
   exportPlan, projectSnapshot, editItem, formatEuroCents, laborDisplay, manualProduct, parseEuroInput, priceDisplay,
   pickedProductFields, productToSave, priceCentsText,
   removeItem, acknowledgeFit, unacknowledgeFit, fitReviewHash, sheetChangeLabel, sheetChild, pathFromRoot, redoTargets, undoTarget, visualChild, type VisualChildInput,
@@ -145,6 +145,19 @@ describe("roots, projects, pending", () => {
     expect(p).toMatchObject({ settingsId: "default", headVersionId: root.id, rootVersionId: root.id });
     expect(ProjectSchema.safeParse(p).success).toBe(true);
     expect(VersionSchema.safeParse(root).success).toBe(true);
+  });
+  // Stored times are UTC ("...Z"); the screen and PDF show the visitor's calendar day. The cases are built
+  // from local clock times, so they hold in any time zone. Outside UTC at least one hour of the day lands on
+  // another UTC date, which the old iso.slice(0, 10) got wrong (22:35 in New York is 02:35Z the next day).
+  it("localDay gives the local calendar day of a UTC time stamp", () => {
+    expect(localDay(new Date(2026, 9, 30, 22, 35).toISOString())).toBe("2026-10-30");
+    expect(localDay(new Date(2026, 9, 31, 0, 30).toISOString())).toBe("2026-10-31");
+    for (let hour = 0; hour < 24; hour++) {
+      expect(localDay(new Date(2026, 9, 30, hour, 30).toISOString())).toBe("2026-10-30");
+    }
+    expect(localDay(new Date(2026, 9, 30, 23, 59, 59).toISOString())).toBe("2026-10-30");
+    expect(localDay(new Date(2026, 0, 5, 0, 0).toISOString())).toBe("2026-01-05");
+    expect(localDay(new Date(2026, 9, 30, 12, 0).toISOString())).toBe(defaultProjectName(new Date(2026, 9, 30, 12, 0)).slice(11, 21));
   });
 
   it("canAcceptPending checks project and head", () => {

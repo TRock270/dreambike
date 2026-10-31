@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { isCompleteEstimate, warmUpPdf } from "@/lib/browser/pdfExport";
 import type { DreamDb } from "@/lib/db";
 import { estimateSnapshot, type EstimateSnapshot, type FitRow } from "@/lib/estimate";
-import { acknowledgeFit, FIT_PRECHECK_NOTE, formatEuroCents } from "@/lib/project";
+import { acknowledgeFit, FIT_PRECHECK_NOTE, formatEuroCents, localDay } from "@/lib/project";
 import { EXAMPLE_LABEL } from "@/lib/quote";
 import type { AppMode } from "@/lib/server/config";
 import { slotInfo } from "@/lib/slots";
@@ -297,7 +297,7 @@ export function EstimatePreview({
                       <span className="font-medium">{label}</span>
                       <FitBadge status={row.status} />
                       {row.mock && <span className="rounded-chip bg-warning-soft px-2 py-0.5 text-warning-soft-text text-[12px]"><span aria-hidden="true">⚠ </span>Mock result</span>}
-                      {row.item.fitCheckedAt && <span className="text-text-muted text-[12px]">checked <span className="tabular">{row.item.fitCheckedAt.slice(0, 10)}</span></span>}
+                      {row.item.fitCheckedAt && <span className="text-text-muted text-[12px]">checked <span className="tabular">{localDay(row.item.fitCheckedAt)}</span></span>}
                       {row.reviewed && (
                         <span className="rounded-chip bg-success-soft px-2 py-0.5 text-success-soft-text text-[12px]"><span aria-hidden="true">✓ </span>Reviewed by the mechanic</span>
                       )}

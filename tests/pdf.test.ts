@@ -607,19 +607,28 @@ describe("written PDF", () => {
     expect(pdf.getProducer()).toBe("DreamBike");
   });
 
-  it("does not depend on the time zone of the machine", async () => {
+  it("the machine's time zone changes only the printed local days, never the metadata", async () => {
     const input = await completeScenario(photos);
     const zone = process.env.TZ;
     try {
-      process.env.TZ = "Pacific/Kiritimati";
+      process.env.TZ = "Pacific/Kiritimati"; // UTC+14: 15:00Z on 29 Oct is 05:00 on 30 Oct
       const hoursEast = CREATED.getHours();
       const east = await build(input);
-      process.env.TZ = "America/Los_Angeles";
+      const eastText = textOf(layoutOf(input));
+      process.env.TZ = "America/Los_Angeles"; // UTC-7: the same time is 08:00 on 29 Oct
       const hoursWest = CREATED.getHours();
       const west = await build(input);
+      const westText = textOf(layoutOf(input));
       expect(hoursEast).not.toBe(hoursWest); // the zone switch really took effect
-      expect(Buffer.from(east).equals(Buffer.from(west))).toBe(true);
       expect((await load(east)).getCreationDate()?.toISOString()).toBe(CREATED.toISOString());
+      expect((await load(west)).getCreationDate()?.toISOString()).toBe(CREATED.toISOString());
+      // Check and source dates follow the reader's calendar, like the header date the browser formats.
+      expect(eastText).toContain("checked 2026-10-30");
+      expect(eastText).toContain("accessed 2026-10-30");
+      expect(westText).toContain("checked 2026-10-29");
+      expect(westText).toContain("accessed 2026-10-29");
+      const undated = (t: string) => t.replace(/\d{4}-\d{2}-\d{2}/g, "<day>");
+      expect(undated(eastText)).toBe(undated(westText));
     } finally {
       if (zone === undefined) delete process.env.TZ; else process.env.TZ = zone;
     }

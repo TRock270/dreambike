@@ -19,7 +19,7 @@ import type { AppMode } from "@/lib/server/config";
 import type { FitRow } from "./estimate";
 import { sniffFormat } from "./imageFormat";
 import { MOCK_LABEL } from "./mocks";
-import { FIT_PRECHECK_NOTE, formatEuroCents, type FitStatus } from "./project";
+import { FIT_PRECHECK_NOTE, formatEuroCents, localDay, type FitStatus } from "./project";
 import { EXAMPLE_LABEL } from "./quote";
 import { slotInfo } from "./slots";
 import type {
@@ -654,9 +654,10 @@ const DECISION: Record<InspectionReviewData["decision"], string> = {
   none: "No inspection fee is needed", fees_added: "Inspection fees were added", unresolved: "Not decided yet",
 };
 
-const day = (iso: string) => iso.slice(0, 10);
+/** Local calendar day, like the header date and the screen. */
+const day = localDay;
 
-/** "checked 2026-10-29", the same date the screen shows. A fit without a time stamp says so. */
+/** "checked 2026-10-29", the same local date the screen shows. A fit without a time stamp says so. */
 const checkedOn = (item: BuildItemData): string => (item.fitCheckedAt ? `checked ${day(item.fitCheckedAt)}` : "check date unknown");
 
 /** True when the mechanic reviewed the fit that is current for this bike and build. */
