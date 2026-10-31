@@ -13,8 +13,7 @@ import type { EstimateSnapshot } from "@/lib/estimate";
 import { headerSize, sniffFormat, type SniffedFormat } from "@/lib/imageFormat";
 import type * as PdfModule from "@/lib/pdf";
 import type { EstimatePdfInput, PdfFontBytes, PdfImage, PdfTokenName } from "@/lib/pdf";
-import type { AppMode } from "@/lib/server/config";
-import type { BikeRevision, ImageRef, Project, Quote, ShopSettings, StoredImage, Version } from "@/lib/types";
+import type { AppMode, BikeRevision, ImageRef, Project, Quote, ShopSettings, StoredImage, Version } from "@/lib/types";
 import { toJpeg, toPng } from "./jpeg";
 
 // ------------------------------------------------------------------------ small helpers

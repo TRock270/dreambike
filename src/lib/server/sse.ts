@@ -2,6 +2,8 @@
 // (multi-byte UTF-8 characters, CRLF/CR/LF line ends, and frames may be cut
 // anywhere). Pure; tested offline. Yields each frame's JSON data payload.
 
+import "server-only";
+
 export async function* sseEvents(body: ReadableStream<Uint8Array>, maxBytes = 40_000_000): AsyncGenerator<unknown> {
   const decoder = new TextDecoder("utf-8");
   const reader = body.getReader();

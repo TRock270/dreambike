@@ -15,7 +15,7 @@ import {
   PDFDocument, PDFName, degrees, drawEllipse, drawImage, drawLine, drawRectangle, drawText, rgb,
   type PDFFont, type PDFImage, type PDFOperator, type PDFPage, type PDFRef,
 } from "pdf-lib";
-import type { AppMode } from "@/lib/server/config";
+import type { AppMode } from "@/lib/types";
 import type { FitRow } from "./estimate";
 import { sniffFormat } from "./imageFormat";
 import { MOCK_LABEL } from "./mocks";

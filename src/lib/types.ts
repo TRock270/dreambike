@@ -4,7 +4,7 @@
 // generated dataclass for a pydantic model.
 import type { z } from "zod";
 import type {
-  Bike, BuildItem, ErrorCode, Fee, FitResult, InspectionReview, Instruction, Point, Product,
+  HealthResponse, Bike, BuildItem, ErrorCode, Fee, FitResult, InspectionReview, Instruction, Point, Product,
   Settings, Slot, CompositeResponse, EditMode, SearchRequest as SearchRequestSchema, SearchResponse as SearchResponseSchema,
   ImageRef as ImageRefSchema, StoredImage as StoredImageSchema, StoredMask as StoredMaskSchema,
   Part as PartSchema, BikeRevision as BikeRevisionSchema, Version as VersionSchema,
@@ -12,6 +12,8 @@ import type {
   ProjectSnapshot as ProjectSnapshotSchema, DemoManifest as DemoManifestSchema, DemoMask, DemoProvenance, SnapshotImage as SnapshotImageSchema, SnapshotMask as SnapshotMaskSchema,
 } from "./contracts";
 
+/** Run mode of the app, decided on the server and passed to the browser as a plain string. */
+export type AppMode = z.infer<typeof HealthResponse>["mode"];
 export type EditModeId = z.infer<typeof EditMode>;
 export type SlotId = z.infer<typeof Slot>;
 export type SearchRequestData = z.infer<typeof SearchRequestSchema>;

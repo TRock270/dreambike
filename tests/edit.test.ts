@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import sharp from "sharp";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { POST as compositePOST } from "@/app/api/composite/route";
@@ -6,7 +8,7 @@ import { CompositeResponse, EditResponse, ErrorResponse } from "@/lib/contracts"
 import * as images from "@/lib/server/images";
 const { maskToPng } = images;
 const renderTemplate = (images as Record<string, unknown>).renderTemplate;
-import { readJsonLimited, renderTemplate as rt } from "@/lib/server/meta";
+import { fetchImageEdit, readJsonLimited, renderTemplate as rt } from "@/lib/server/meta";
 import { withSession } from "./support/session";
 
 const W = 1536, H = 1152;
@@ -245,6 +247,26 @@ describe("upstream and upload guards", () => {
     await expect(readJsonLimited(big, 1000)).rejects.toMatchObject({ code: "UPSTREAM_UNAVAILABLE" });
     expect(await readJsonLimited(new Response("{\"a\":1}"))).toEqual({ a: 1 });
   });
+  // A body that sends one chunk and then breaks, like a dropped connection.
+  const brokenBody = () => new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("{\"a\":"));
+      controller.error(new TypeError("terminated"));
+    },
+  }));
+  it("maps a connection drop mid-body to UPSTREAM_UNAVAILABLE", async () => {
+    await expect(readJsonLimited(brokenBody())).rejects.toMatchObject({ code: "UPSTREAM_UNAVAILABLE" });
+  });
+  it("fetchImageEdit maps a mid-body drop to 502, or to a timeout when the signal was aborted", async () => {
+    vi.stubEnv("MODEL_API_KEY", "test-key-not-real");
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => brokenBody());
+    await expect(fetchImageEdit({}, new AbortController().signal)).rejects.toMatchObject({ code: "UPSTREAM_UNAVAILABLE" });
+    const controller = new AbortController();
+    spy.mockImplementation(async () => new Response(new ReadableStream<Uint8Array>({
+      pull(c) { controller.abort(); c.error(new TypeError("terminated")); },
+    })));
+    await expect(fetchImageEdit({}, controller.signal)).rejects.toMatchObject({ code: "UPSTREAM_TIMEOUT" });
+  });
   it("refuses an animated WebP in composite", async () => {
     const frame = (r: number) => sharp({ create: { width: W, height: H, channels: 3, background: { r, g: 0, b: 0 } } }).png().toBuffer();
     const anim = new Uint8Array(await sharp([await frame(0), await frame(255)], { join: { animated: true } }).webp().toBuffer());
@@ -252,4 +274,14 @@ describe("upstream and upload guards", () => {
     expect(await errorOf(await composite({ width: W, height: H, bikeBox: [100, 100, 1100, 1000], intent: "paint",
       generatedWidth: W, generatedHeight: H }, { base, edited: anim }))).toEqual([400, "INVALID_IMAGE"]);
   });
+});
+
+it("every file in src/lib/server starts with the server-only import", () => {
+  const dir = path.join(process.cwd(), "src/lib/server");
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith(".ts"));
+  expect(files.length).toBeGreaterThan(0);
+  for (const f of files) {
+    const code = fs.readFileSync(path.join(dir, f), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "").trim();
+    expect(code.startsWith('import "server-only";'), f).toBe(true);
+  }
 });

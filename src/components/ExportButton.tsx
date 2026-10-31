@@ -4,8 +4,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { buildPdf, downloadPdf, isCompleteEstimate, warmUpPdf } from "@/lib/browser/pdfExport";
 import type { DreamDb } from "@/lib/db";
 import { estimateSnapshot } from "@/lib/estimate";
-import type { AppMode } from "@/lib/server/config";
-import type { BikeRevision, ImageRef, Project, ShopSettings, Version } from "@/lib/types";
+import type { AppMode, BikeRevision, ImageRef, Project, ShopSettings, Version } from "@/lib/types";
 
 type Props = {
   /** The open database, or null when storage is not ready. */

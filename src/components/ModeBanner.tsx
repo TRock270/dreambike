@@ -1,4 +1,4 @@
-import type { AppMode } from "@/lib/server/config";
+import type { AppMode } from "@/lib/types";
 
 /** Always-visible statement of where results come from. Word plus icon, never color alone. */
 export function ModeBanner({ mode }: { mode: AppMode }) {

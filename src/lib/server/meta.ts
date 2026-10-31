@@ -348,7 +348,15 @@ export async function readJsonLimited(res: Response, maxBytes = MAX_UPSTREAM_BYT
   const chunks: Uint8Array[] = [];
   let total = 0;
   for (;;) {
-    const { done, value } = await reader.read();
+    let chunk: ReadableStreamReadResult<Uint8Array>;
+    try {
+      chunk = await reader.read();
+    } catch {
+      // Connection dropped mid-body: a safe 502, not the raw TypeError (which would map to 400).
+      reader.cancel().catch(() => {});
+      throw new AppError("UPSTREAM_UNAVAILABLE");
+    }
+    const { done, value } = chunk;
     if (done) break;
     total += value.byteLength;
     if (total > maxBytes) { await reader.cancel().catch(() => {}); throw new AppError("UPSTREAM_UNAVAILABLE"); }

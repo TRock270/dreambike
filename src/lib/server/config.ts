@@ -1,9 +1,8 @@
 // Server environment validation and feature flags (SPEC.md 3). Server only.
 // Read lazily per request (not at import), so `next build` never needs secrets.
 import "server-only";
+import type { AppMode } from "../types";
 import { dayET } from "./budget"; // budget.ts does not import config, so no cycle
-
-export type AppMode = "mock" | "live" | "demo_only";
 
 /** SPEC 13 default caps are also the maximum: an environment value can only lower them. */
 export const MAX_CAPS_MICRO_USD = { project: 100_000_000, daily: 5_000_000, development: 50_000_000 } as const;

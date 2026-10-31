@@ -389,7 +389,7 @@ describe("theme tokens", () => {
   // so a new import has to be added here on purpose.
   const PDF_IMPORT_ALLOWLIST = [
     "@pdf-lib/fontkit", "pdf-lib",
-    "@/lib/server/config", // type only
+    "@/lib/types", // type only (AppMode)
     "./estimate", "./imageFormat", "./mocks", "./project", "./quote", "./slots", "./types",
   ];
   /** Every module specifier of an import, side-effect import, re-export, dynamic import or require in the code. */
@@ -413,9 +413,9 @@ describe("theme tokens", () => {
     // Every `from` clause was seen by the scan: nothing hides in a form the scan does not read.
     expect(modules).toHaveLength([...source.matchAll(/\bfrom\s*["']/g)].length);
     expect(source).not.toMatch(/\brequire\s*\(|\bimport\s*\(/);
-    // The server config is a type here: a value import would pull server code into the browser bundle.
-    expect(source).toMatch(/import type \{ AppMode \} from "@\/lib\/server\/config"/);
-    expect(source).not.toMatch(/^import \{[^}]*\} from "@\/lib\/server\/config"/m);
+    // AppMode comes from the shared types module; nothing from a server directory may be imported.
+    expect(source).toMatch(/import type \{ AppMode \} from "@\/lib\/types"/);
+    expect(modules.filter((m) => m.includes("lib/server") || /(^|\/)server(\/|$)/.test(m))).toEqual([]);
   });
 
   it("the import scan sees every form, so a forbidden module cannot slip past the allowlist", () => {
