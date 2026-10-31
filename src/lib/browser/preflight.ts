@@ -230,3 +230,12 @@ export async function normalizeLogo(file: File): Promise<LogoResult> {
     decoded.release();
   }
 }
+
+/**
+ * Error for a non-JSON HTTP failure. A bare 429 comes from the platform
+ * firewall, not the app, so it has no ErrorResponse body.
+ */
+export function httpFailure(status: number, fallback: string): PreflightError {
+  if (status === 429) return new PreflightError("RATE_LIMITED", "Too many requests from your network. Try again in a minute.");
+  return new PreflightError(status >= 500 ? "UPSTREAM_UNAVAILABLE" : "INVALID_REQUEST", fallback);
+}

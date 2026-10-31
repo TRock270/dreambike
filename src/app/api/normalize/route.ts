@@ -6,6 +6,7 @@ import { loadConfig } from "@/lib/server/config";
 import {
   assertSameOrigin, errorResponse, jsonResponse, parseMultipart, readBodyLimited, requestIdOf,
 } from "@/lib/server/http";
+import { imageWorkDenied } from "@/lib/server/paid";
 import { normalize, toDataUrl } from "@/lib/server/images";
 
 export const runtime = "nodejs";
@@ -21,6 +22,10 @@ export async function POST(req: Request): Promise<Response> {
     const config = loadConfig();
     assertSameOrigin(req, config, process.env.NODE_ENV === "production" || Boolean(process.env.VERCEL_ENV));
     const form = await parseMultipart(req, await readBodyLimited(req, BODY_LIMIT));
+    const wait = imageWorkDenied(req, config);
+    if (wait !== null) {
+      throw new AppError("RATE_LIMITED", `Too many photo requests from your network. ${wait > 60 ? "Try again later." : "Try again in a minute."}`, wait);
+    }
     // Duplicate "photo" parts would collapse in fromEntries; reject them explicitly.
     if (form.getAll("photo").length !== 1) throw new AppError("INVALID_REQUEST");
     const parsed = NormalizeRequest.safeParse(Object.fromEntries(form.entries()));

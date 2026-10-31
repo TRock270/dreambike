@@ -1,7 +1,7 @@
 // Calls POST /api/segment and decodes each WireMask PNG to 0/1 pixels at once.
 import { ErrorResponse, SegmentResponse } from "../contracts";
 import type { BinaryMask, PhotoRef, PointData, SegmentedObject } from "../types";
-import { PreflightError } from "./preflight";
+import { PreflightError, httpFailure } from "./preflight";
 
 export type SegmentResult = { objects: SegmentedObject[]; complete: boolean; warnings: string[] };
 
@@ -24,7 +24,7 @@ export async function requestSegment(photo: Pick<PhotoRef, "blob" | "width" | "h
   if (!res.ok) {
     const err = ErrorResponse.safeParse(body);
     if (err.success) throw new PreflightError(err.data.error.code, err.data.error.message);
-    throw new PreflightError(res.status >= 500 ? "UPSTREAM_UNAVAILABLE" : "INVALID_REQUEST", "Part detection failed.");
+    throw httpFailure(res.status, "Part detection failed.");
   }
   const parsed = SegmentResponse.safeParse(body);
   if (!parsed.success || parsed.data.width !== photo.width || parsed.data.height !== photo.height) {

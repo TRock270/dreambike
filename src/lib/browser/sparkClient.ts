@@ -2,7 +2,7 @@
 import type { z } from "zod";
 import { CheckResponse, ErrorResponse, IdentifyResponse, InstructionResponse, SearchResponse, type CheckRequest } from "../contracts";
 import type { BikeData, InstructionData, PhotoRef, SearchRequestData, SearchResponseData, SlotId } from "../types";
-import { PreflightError } from "./preflight";
+import { PreflightError, httpFailure } from "./preflight";
 
 async function post(url: string, form: FormData, signal?: AbortSignal): Promise<unknown> {
   let res: Response;
@@ -15,7 +15,7 @@ async function post(url: string, form: FormData, signal?: AbortSignal): Promise<
   if (!res.ok) {
     const err = ErrorResponse.safeParse(body);
     if (err.success) throw new PreflightError(err.data.error.code, err.data.error.message);
-    throw new PreflightError(res.status >= 500 ? "UPSTREAM_UNAVAILABLE" : "INVALID_REQUEST", "The request failed.");
+    throw httpFailure(res.status, "The request failed.");
   }
   return body;
 }
@@ -74,7 +74,7 @@ export async function requestCheck(request: CheckRequestData, signal?: AbortSign
   if (!res.ok) {
     const err = ErrorResponse.safeParse(body);
     if (err.success) throw new PreflightError(err.data.error.code, err.data.error.message);
-    throw new PreflightError(res.status >= 500 ? "UPSTREAM_UNAVAILABLE" : "INVALID_REQUEST", "The request failed.");
+    throw httpFailure(res.status, "The request failed.");
   }
   const parsed = CheckResponse.safeParse(body);
   if (!parsed.success) throw new PreflightError("SCHEMA_INVALID", "The fit check answer had an unexpected shape.");
@@ -99,7 +99,7 @@ export async function requestPartSearch(request: SearchRequestData, signal?: Abo
   if (!res.ok) {
     const err = ErrorResponse.safeParse(body);
     if (err.success) throw new PreflightError(err.data.error.code, err.data.error.message);
-    throw new PreflightError(res.status >= 500 ? "UPSTREAM_UNAVAILABLE" : "INVALID_REQUEST", "The request failed.");
+    throw httpFailure(res.status, "The request failed.");
   }
   const parsed = SearchResponse.safeParse(body);
   if (!parsed.success) throw new PreflightError("SCHEMA_INVALID", "The part search answer had an unexpected shape.");

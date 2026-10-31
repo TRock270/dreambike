@@ -7,6 +7,7 @@ import { loadConfig } from "@/lib/server/config";
 import {
   assertSameOrigin, errorResponse, jsonResponse, parseMultipart, payloadAndFiles, readBodyLimited, requestIdOf,
 } from "@/lib/server/http";
+import { imageWorkDenied } from "@/lib/server/paid";
 import { compositeRgb, compositeSkipReason, decodeRgb, encodeRgbBounded, pngToMask, toDataUrl, webpSize } from "@/lib/server/images";
 
 export const runtime = "nodejs";
@@ -19,8 +20,12 @@ export async function POST(req: Request): Promise<Response> {
   try {
     const config = loadConfig();
     assertSameOrigin(req, config, process.env.NODE_ENV === "production" || Boolean(process.env.VERCEL_ENV));
-    const { payload: rawPayload, files } = payloadAndFiles(await parseMultipart(req, await readBodyLimited(req, BODY_LIMIT)),
-      ["base", "edited"], ["oldMask", "newMask"]);
+    const form = await parseMultipart(req, await readBodyLimited(req, BODY_LIMIT));
+    const wait = imageWorkDenied(req, config);
+    if (wait !== null) {
+      throw new AppError("RATE_LIMITED", `Too many photo requests from your network. ${wait > 60 ? "Try again later." : "Try again in a minute."}`, wait);
+    }
+    const { payload: rawPayload, files } = payloadAndFiles(form, ["base", "edited"], ["oldMask", "newMask"]);
     const parsed = CompositePayload.safeParse(rawPayload);
     const base = ImageFile.safeParse(files.base);
     const edited = ImageFile.safeParse(files.edited);

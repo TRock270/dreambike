@@ -225,14 +225,25 @@ function integerText(text: string | undefined): number {
 // Display cache for readStatus. It exists to protect the Redis command quota (Upstash bills
 // every command inside a script) from polling and looping clients. It is display-only and
 // is NOT an in-memory counter: reserve() and settle() never touch it, and every spend check
-// still happens atomically in Redis. Per server instance; a stale view is at most 10 s old.
-export const STATUS_CACHE_TTL_MS = 10_000;
+// still happens atomically in Redis. Per server instance; a stale view is at most 60 s old,
+// except that the visitor's own entries are dropped after their paid call settles (forgetStatusFor).
+export const STATUS_CACHE_TTL_MS = 60_000;
 export const STATUS_CACHE_MAX = 500;
-const statusCache = new Map<string, { at: number; value: Promise<LedgerStatus> }>();
+// `keys` is the Redis key list the entry was read for, so forgetStatusFor can match exactly.
+const statusCache = new Map<string, { at: number; keys: string[]; value: Promise<LedgerStatus> }>();
 
 /** Drop all cached displays (tests, or a caller that needs the next read fresh). */
 export function clearStatusCache(): void {
   statusCache.clear();
+}
+/**
+ * Drop cached displays whose key list contains exactly this bucket key (a visitor's day key),
+ * so their next status read is fresh. Synchronous and never throws; other entries stay.
+ */
+export function forgetStatusFor(bucketKey: string): void {
+  try {
+    for (const [k, v] of statusCache) if (v.keys.includes(bucketKey)) statusCache.delete(k);
+  } catch { /* display cache only */ }
 }
 export function statusCacheSize(): number {
   return statusCache.size;
@@ -241,7 +252,7 @@ export function statusCacheSize(): number {
 /**
  * Read-only ledger totals. Never throws: an outage, a missing lifetime key, missing
  * stored caps, or a malformed reply give {ok: false}; callers show unknown spend as null.
- * Results, failures included, are shared for 10 s per namespace, key list and model list;
+ * Results, failures included, are shared for 60 s per namespace, key list and model list;
  * pass cache: false for a fresh read. `now` is only for tests.
  */
 export async function readStatus(redis: RedisRest, opts: {
@@ -261,7 +272,7 @@ export async function readStatus(redis: RedisRest, opts: {
   while (statusCache.size >= STATUS_CACHE_MAX) statusCache.delete(statusCache.keys().next().value as string);
   // The promise is stored at once, so concurrent requests share one Redis call.
   const value = fetchStatus(redis, all, models);
-  statusCache.set(key, { at: now, value });
+  statusCache.set(key, { at: now, keys: all, value });
   return value;
 }
 

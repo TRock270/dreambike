@@ -2,7 +2,7 @@
 // raster helpers the render flow needs (resize to the base size, mask PNG).
 import { CompositeResponse, EditResponse, ErrorResponse } from "../contracts";
 import type { BinaryMask, CompositeReason, PhotoRef, SlotId } from "../types";
-import { PreflightError } from "./preflight";
+import { PreflightError, httpFailure } from "./preflight";
 
 async function post(url: string, form: FormData, signal?: AbortSignal, requestId?: string): Promise<unknown> {
   let res: Response;
@@ -15,7 +15,7 @@ async function post(url: string, form: FormData, signal?: AbortSignal, requestId
   if (!res.ok) {
     const err = ErrorResponse.safeParse(body);
     if (err.success) throw new PreflightError(err.data.error.code, err.data.error.message);
-    throw new PreflightError(res.status >= 500 ? "UPSTREAM_UNAVAILABLE" : "INVALID_REQUEST", "The request failed.");
+    throw httpFailure(res.status, "The request failed.");
   }
   return body;
 }

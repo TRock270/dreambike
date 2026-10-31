@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import path from "node:path";
 import { AppError, SESSION_RELOAD_MESSAGE } from "../errors";
-import { dayET, reserve, settleSafely, type Buckets, type Caps, type RedisRest } from "./budget";
+import { bucketKeys, dayET, forgetStatusFor, reserve, settleSafely, type Buckets, type Caps, type RedisRest } from "./budget";
 import { loadConfig, type ServerConfig } from "./config";
 import { labeledHmac, readSession, visitorSecret, type Session } from "./http";
 
@@ -160,9 +160,10 @@ export function mayUseOwnStatusBucket(ip: string, visitor: string, now: number =
 }
 
 export const POST_ATTEMPTS_WINDOW_MS = 60_000;
-export const POST_ATTEMPTS_LIMIT = 10;
+// 30, not 10: a part map sends 14 /api/segment calls at once.
+export const POST_ATTEMPTS_LIMIT = 30;
 // Daily ceiling per IP HMAC and instance. The IP HMAC includes the ET day, so a new day uses a new key.
-// A denied reserve still costs about 19 Redis commands; 10 per minute alone would allow ~270k per day.
+// A denied reserve still costs about 19 Redis commands; 30 per minute alone would allow ~810k per day.
 export const POST_ATTEMPTS_DAILY_LIMIT = 300;
 const postAttempts = new Map<string, number[]>();
 const dailyAttempts = new Map<string, number>();
@@ -232,6 +233,44 @@ export function freeFetchDenied(req: Request, config: ServerConfig, now: number 
   return null;
 }
 
+// Image work (/api/normalize, /api/composite) costs CPU and function time, no model money. Quota and CPU
+// protection only, NOT a spend cap (reserve.lua stays the only spend control). Per instance, bounded maps,
+// HMAC keys only, nothing logged. It never refuses for a missing header or secret: those requests share one
+// fixed bucket per ET day, which is stricter, never looser, and keeps local MOCK work running.
+export const IMAGE_WORK_PER_MINUTE = 30;
+export const IMAGE_WORK_PER_DAY = 600;
+const imageWorkRecent = new Map<string, number[]>();
+const imageWorkDaily = new Map<string, number>();
+
+/** Counts one image-work request; returns seconds to wait when over the limit, else null. */
+export function imageWorkDenied(req: Request, config: ServerConfig, now: number = Date.now()): number | null {
+  const day = dayET(new Date(now));
+  let key = config.deployed ? `noip\n${day}` : `local\n${day}`;
+  if (config.deployed) {
+    const secret = visitorSecret();
+    const address = normalizeClientIp(req.headers.get("x-vercel-forwarded-for"));
+    if (secret && address) key = labeledHmac(secret, "ip", `${address}\n${day}`);
+  }
+  const recent = (imageWorkRecent.get(key) ?? []).filter((t) => t <= now && now - t < POST_ATTEMPTS_WINDOW_MS);
+  if (recent.length >= IMAGE_WORK_PER_MINUTE) {
+    imageWorkRecent.set(key, recent);
+    return Math.max(1, Math.ceil((recent[0]! + POST_ATTEMPTS_WINDOW_MS - now) / 1000));
+  }
+  const today = imageWorkDaily.get(key) ?? 0;
+  if (today >= IMAGE_WORK_PER_DAY) {
+    imageWorkRecent.set(key, recent);
+    return 3600;
+  }
+  imageWorkDaily.delete(key);
+  makeRoom(imageWorkDaily);
+  imageWorkDaily.set(key, today + 1);
+  recent.push(now);
+  imageWorkRecent.delete(key);
+  makeRoom(imageWorkRecent);
+  imageWorkRecent.set(key, recent);
+  return null;
+}
+
 /** Test only: forget both limiters. */
 export function resetQuotaLimitersForTests(): void {
   visitorWindows.clear();
@@ -239,15 +278,19 @@ export function resetQuotaLimitersForTests(): void {
   dailyAttempts.clear();
   freeFetchRecent.clear();
   freeFetchDaily.clear();
+  imageWorkRecent.clear();
+  imageWorkDaily.clear();
 }
 
 /** Test only: current sizes of the limiter maps. */
 export function quotaLimiterSizesForTests(): {
   visitorWindows: number; postAttempts: number; dailyAttempts: number; freeFetchRecent: number; freeFetchDaily: number;
+  imageWorkRecent: number; imageWorkDaily: number;
 } {
   return {
     visitorWindows: visitorWindows.size, postAttempts: postAttempts.size, dailyAttempts: dailyAttempts.size,
     freeFetchRecent: freeFetchRecent.size, freeFetchDaily: freeFetchDaily.size,
+    imageWorkRecent: imageWorkRecent.size, imageWorkDaily: imageWorkDaily.size,
   };
 }
 
@@ -271,10 +314,20 @@ export async function withReservation<T>(call: PaidCall, dispatch: (signal: Abor
   // Duplicate detection: payload and visitor, never the content itself.
   const fingerprint = labeledHmac(secret, "fp", `${call.route}\n${call.payloadDigest}\n${who.visitor}`);
   const buckets: Buckets = { phase: config.phase, ticket: who.ticket, day, visitor: who.visitor, ip: who.ip };
-  const reservation = await reserve(redis, {
-    requestKey: call.requestId, fingerprint, amount: call.amountMicroUsd, model: call.model, route: call.route,
-    buckets, caps: who.caps, deadlineMs: call.deadlineMs,
-  });
+  // Never throws; the next status read for this visitor must see the new totals, not a 60 s old view.
+  const forgetVisitorStatus = () => {
+    try { forgetStatusFor(bucketKeys(buckets).find((k) => k.includes(":visitor:"))!); } catch { /* display only */ }
+  };
+  let reservation: Awaited<ReturnType<typeof reserve>>;
+  try {
+    reservation = await reserve(redis, {
+      requestKey: call.requestId, fingerprint, amount: call.amountMicroUsd, model: call.model, route: call.route,
+      buckets, caps: who.caps, deadlineMs: call.deadlineMs,
+    });
+  } catch (error) {
+    forgetVisitorStatus(); // a denied visitor must not keep a stale "live" banner
+    throw error;
+  }
   let result: Dispatched<T>;
   try {
     result = await dispatch(AbortSignal.timeout(call.deadlineMs));
@@ -283,10 +336,12 @@ export async function withReservation<T>(call: PaidCall, dispatch: (signal: Abor
     // settleSafely never throws, so an accounting failure cannot replace the upstream error.
     const definite429 = error instanceof AppError && error.code === "RATE_LIMITED";
     await settleSafely(redis, reservation, definite429 ? "released" : "unknown");
+    forgetVisitorStatus();
     throw error;
   }
   // A failed settle leaves the reservation counted in full (fail closed); keep the paid-for result.
   if (result.chargedMicroUsd === null) await settleSafely(redis, reservation, "unknown");
   else await settleSafely(redis, reservation, "settled", result.chargedMicroUsd);
+  forgetVisitorStatus();
   return result.value;
 }

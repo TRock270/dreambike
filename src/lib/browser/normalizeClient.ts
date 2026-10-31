@@ -2,7 +2,7 @@
 // away, so large base64 strings do not linger in app state (SPEC.md 5).
 import { ErrorResponse, NormalizeResponse, ProductImageResponse } from "../contracts";
 import type { NormalizedPhoto } from "../types";
-import { PreflightError } from "./preflight";
+import { PreflightError, httpFailure } from "./preflight";
 
 export async function uploadForNormalize(photo: Blob): Promise<NormalizedPhoto> {
   const form = new FormData();
@@ -20,8 +20,7 @@ export async function uploadForNormalize(photo: Blob): Promise<NormalizedPhoto> 
     const err = ErrorResponse.safeParse(body);
     if (err.success) throw new PreflightError(err.data.error.code, err.data.error.message);
     // A non-JSON 5xx (for example a gateway timeout) is worth retrying with the same file.
-    throw new PreflightError(res.status >= 500 ? "UPSTREAM_UNAVAILABLE" : "INVALID_REQUEST",
-      "The photo could not be prepared.");
+    throw httpFailure(res.status, "The photo could not be prepared.");
   }
   const parsed = NormalizeResponse.safeParse(body);
   if (!parsed.success) throw new PreflightError("SCHEMA_INVALID", "The server answer had an unexpected shape.");
@@ -48,8 +47,7 @@ export async function requestProductImage(url: string, signal?: AbortSignal): Pr
   if (!res.ok) {
     const err = ErrorResponse.safeParse(body);
     if (err.success) throw new PreflightError(err.data.error.code, err.data.error.message);
-    throw new PreflightError(res.status >= 500 ? "UPSTREAM_UNAVAILABLE" : "INVALID_REQUEST",
-      "The product photo could not be fetched.");
+    throw httpFailure(res.status, "The product photo could not be fetched.");
   }
   const parsed = ProductImageResponse.safeParse(body);
   if (!parsed.success) throw new PreflightError("SCHEMA_INVALID", "The server answer had an unexpected shape.");

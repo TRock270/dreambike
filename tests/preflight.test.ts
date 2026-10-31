@@ -1,8 +1,9 @@
 // Browser preflight header checks run before any DOM call, so Node can test them.
 import sharp from "sharp";
-import { describe, expect, it } from "vitest";
-import { PreflightError, checkHeader, checkLogoHeader, logoOutputSize, logoTargetSize, LOGO_MAX_BYTES } from "@/lib/browser/preflight";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { PreflightError, checkHeader, httpFailure, checkLogoHeader, logoOutputSize, logoTargetSize, LOGO_MAX_BYTES } from "@/lib/browser/preflight";
 import { HEIC_MESSAGE } from "@/lib/errors";
+import { uploadForNormalize } from "@/lib/browser/normalizeClient";
 
 const HEIC = new Uint8Array([0, 0, 0, 0x18, ...Buffer.from("ftypheic"), 0, 0, 0, 0, ...Buffer.from("mif1heic"), ...new Array(64).fill(0)]);
 const jpeg = async () => new Uint8Array(await sharp({ create: { width: 640, height: 480, channels: 3,
@@ -112,5 +113,31 @@ describe("logoOutputSize", () => {
 
   it("uses the 500,000 byte logo limit", () => {
     expect(LOGO_MAX_BYTES).toBe(500_000);
+  });
+});
+
+describe("httpFailure for non-JSON HTTP errors", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("maps 429, 5xx and other statuses with exact codes and messages", () => {
+    const rate = httpFailure(429, "fallback");
+    expect([rate.code, rate.message]).toEqual(["RATE_LIMITED", "Too many requests from your network. Try again in a minute."]);
+    expect(rate.retryable).toBe(true);
+    const up = httpFailure(502, "fallback");
+    expect([up.code, up.message]).toEqual(["UPSTREAM_UNAVAILABLE", "fallback"]);
+    const bad = httpFailure(400, "fallback");
+    expect([bad.code, bad.message]).toEqual(["INVALID_REQUEST", "fallback"]);
+  });
+
+  it("uploadForNormalize maps a plain-text 429 and keeps a JSON ErrorResponse 429", async () => {
+    const photo = new Blob([new Uint8Array(4)], { type: "image/webp" });
+    vi.stubGlobal("fetch", async () => new Response("Too Many Requests", { status: 429 }));
+    await expect(uploadForNormalize(photo)).rejects.toMatchObject({
+      code: "RATE_LIMITED", message: "Too many requests from your network. Try again in a minute.",
+    });
+    const json = { error: { code: "BUDGET_EXCEEDED", message: "Own message.", retryable: false,
+      requestId: "123e4567-e89b-42d3-a456-426614174000", retryAfterSeconds: null } };
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify(json), { status: 429 }));
+    await expect(uploadForNormalize(photo)).rejects.toMatchObject({ code: "BUDGET_EXCEEDED", message: "Own message." });
   });
 });

@@ -1,7 +1,8 @@
 // withReservation against a fake Upstash REST endpoint: no network, no Meta.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppError } from "@/lib/errors";
-import { countLimitFor, freeFetchDenied, FREE_FETCH_PER_DAY, FREE_FETCH_PER_MINUTE, normalizeClientIp, POST_ATTEMPTS_DAILY_LIMIT, POST_ATTEMPTS_LIMIT, POST_ATTEMPTS_WINDOW_MS, quotaLimiterSizesForTests, resetQuotaLimitersForTests, withReservation, type PaidCall } from "@/lib/server/paid";
+import { countLimitFor, freeFetchDenied, imageWorkDenied, IMAGE_WORK_PER_DAY, IMAGE_WORK_PER_MINUTE, FREE_FETCH_PER_DAY, FREE_FETCH_PER_MINUTE, normalizeClientIp, POST_ATTEMPTS_DAILY_LIMIT, POST_ATTEMPTS_LIMIT, POST_ATTEMPTS_WINDOW_MS, quotaLimiterSizesForTests, resetQuotaLimitersForTests, withReservation, type PaidCall } from "@/lib/server/paid";
+import { bucketKeys, clearStatusCache, readStatus, type Buckets } from "@/lib/server/budget";
 import { loadConfig } from "@/lib/server/config";
 import { labeledHmac } from "@/lib/server/http";
 import { sessionCookie } from "./support/session";
@@ -94,6 +95,42 @@ describe("withReservation", () => {
     replies.settle = "fail";
     vi.spyOn(console, "error").mockImplementation(() => {});
     expect(await withReservation(makeCall(), async () => ({ value: "kept", chargedMicroUsd: 2500 }))).toBe("kept");
+  });
+});
+
+describe("status cache after a paid call (display only)", () => {
+  /** Buckets rebuilt from the keys the reserve EVAL used, so readStatus keys match the visitor's cache entry. */
+  const bucketsFromReserve = (): Buckets => {
+    const keys = commands.find((c) => c[1]!.includes("budget reservation"))!.slice(3, 3 + 9);
+    const part = (re: RegExp) => keys.map((k) => re.exec(k)).find(Boolean)!;
+    const v = part(/:visitor:(.+):(\d{4}-\d{2}-\d{2})$/);
+    const ip = part(/:ip:(.+):\d{4}-\d{2}-\d{2}$/);
+    const ticket = part(/:ticket:(.+)$/);
+    const phase = part(/:phase:(.+)$/);
+    return { phase: phase[1]!, ticket: ticket[1]!, day: v[2]!, visitor: v[1]!, ip: ip[1]! };
+  };
+  const evals = () => commands.filter((c) => c[1]!.includes("status")).length;
+
+  it("the next status read is fresh after a settled call and after a failed dispatch", async () => {
+    clearStatusCache();
+    for (const dispatch of [
+      async () => ({ value: 1, chargedMicroUsd: 2500 }),
+      async (): Promise<{ value: number; chargedMicroUsd: number | null }> => { throw new AppError("UPSTREAM_TIMEOUT"); },
+    ]) {
+      commands = [];
+      const call = makeCall();
+      await withReservation(call, dispatch).catch(() => undefined);
+      const b = bucketsFromReserve();
+      expect(bucketKeys(b).length).toBe(6);
+      const redis = { url: REDIS, token: "t" };
+      await readStatus(redis, { buckets: b });
+      await readStatus(redis, { buckets: b });
+      const first = evals();
+      expect(first).toBe(1); // cached after the first read
+      await withReservation(makeCall({ Cookie: call.req.headers.get("cookie")! }), dispatch).catch(() => undefined);
+      await readStatus(redis, { buckets: b });
+      expect(evals()).toBe(2); // the settle evicted the entry, so this was a new EVAL
+    }
   });
 });
 
@@ -282,6 +319,17 @@ describe("per-IP attempt limiter (Redis quota protection, not a spend cap)", () 
     await ok();
   });
 
+  it("allows one full part map (15 calls) and refuses the 31st within a minute (literal counts, so a revert to 10 fails)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-30T15:00:00Z") });
+    demo();
+    // One part map: 1 bike outline + 14 core-phrase /api/segment calls from one IP.
+    for (let i = 0; i < 15; i++) await ok();
+    for (let i = 15; i < 30; i++) await ok();
+    const error = (await withReservation(makeCall({ "x-vercel-forwarded-for": IP }), async () => ({ value: 1, chargedMicroUsd: 1 })).catch((e: unknown) => e)) as AppError;
+    expect(error.code).toBe("RATE_LIMITED");
+    expect(POST_ATTEMPTS_LIMIT).toBe(30);
+  });
+
   it("a sustained client hits the daily ceiling: further attempts make zero Redis commands", async () => {
     vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-30T15:00:00Z") });
     demo();
@@ -367,5 +415,50 @@ describe("freeFetchDenied", () => {
     freeFetchDenied(reqFrom("192.0.2.9"), deployed, T0);
     expect(quotaLimiterSizesForTests()).toMatchObject({ postAttempts: 0, dailyAttempts: 0, visitorWindows: 0 });
     expect(commands).toEqual([]);
+  });
+});
+
+describe("imageWorkDenied", () => {
+  const local = loadConfig(process.env);
+  const deployed = { ...local, deployed: true };
+  const reqFrom = (ip: string | null) => new Request("http://localhost:3000/api/normalize", {
+    method: "POST", headers: ip === null ? {} : { "x-vercel-forwarded-for": ip } });
+  const T0 = Date.UTC(2026, 9, 31, 15, 0, 0);
+
+  it("allows exactly 30 per minute; the window edge frees the oldest slot", () => {
+    expect(IMAGE_WORK_PER_MINUTE).toBe(30);
+    for (let i = 0; i < 30; i++) expect(imageWorkDenied(reqFrom("203.0.113.5"), deployed, T0 + i)).toBeNull();
+    expect(imageWorkDenied(reqFrom("203.0.113.5"), deployed, T0 + 59_999)).toBe(1);
+    expect(imageWorkDenied(reqFrom("203.0.113.5"), deployed, T0 + 60_000)).toBeNull(); // oldest left the window
+    expect(imageWorkDenied(reqFrom("203.0.113.5"), deployed, T0 + 60_000)).not.toBeNull(); // slot 2 not free yet
+  });
+
+  it("caps a day at 600 with 3600 s, and the next ET day (DST end included) starts fresh", () => {
+    const before = Date.UTC(2026, 10, 1, 3, 0, 0), after = Date.UTC(2026, 10, 1, 4, 0, 1);
+    for (let i = 0; i < IMAGE_WORK_PER_DAY; i++) {
+      expect(imageWorkDenied(reqFrom("203.0.113.6"), deployed, before - (IMAGE_WORK_PER_DAY - i) * 61_000)).toBeNull();
+    }
+    expect(imageWorkDenied(reqFrom("203.0.113.6"), deployed, before)).toBe(3600);
+    expect(imageWorkDenied(reqFrom("203.0.113.6"), deployed, after)).toBeNull();
+  });
+
+  it("never refuses for a missing secret or header: it uses one shared bucket instead", () => {
+    vi.stubEnv("VISITOR_HASH_SECRET", "");
+    vi.stubEnv("NODE_ENV", "production");
+    expect(imageWorkDenied(reqFrom("192.0.2.1"), deployed, T0)).toBeNull();
+    expect(imageWorkDenied(reqFrom(null), local, T0)).toBeNull();
+    // Shared bucket: different (even valid) IPs without a secret add to the same count.
+    for (let i = 0; i < IMAGE_WORK_PER_MINUTE; i++) imageWorkDenied(reqFrom(`192.0.2.${i}`), deployed, T0);
+    expect(imageWorkDenied(reqFrom("198.51.100.1"), deployed, T0)).not.toBeNull();
+    // Local requests have their own bucket.
+    expect(imageWorkDenied(reqFrom(null), local, T0 + 1)).toBeNull();
+  });
+
+  it("stays bounded under many clients and does not touch the other limiters", () => {
+    for (let i = 0; i < 2100; i++) imageWorkDenied(reqFrom(`10.${i >> 8}.${i & 255}.1`), deployed, T0);
+    const sizes = quotaLimiterSizesForTests();
+    expect(sizes.imageWorkRecent).toBe(2000);
+    expect(sizes.imageWorkDaily).toBe(2000);
+    expect(sizes).toMatchObject({ postAttempts: 0, dailyAttempts: 0, freeFetchRecent: 0, freeFetchDaily: 0 });
   });
 });

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppError, ERRORS, VISITOR_BUDGET_MESSAGE } from "@/lib/errors";
 import {
-  accountingHealth, bucketKeys, clearStatusCache, statusCacheSize, STATUS_CACHE_MAX, STATUS_CACHE_TTL_MS, dayET, nextMidnightET, readStatus, reserve, settle, settleSafely, type Reservation,
+  accountingHealth, bucketKeys, forgetStatusFor, clearStatusCache, statusCacheSize, STATUS_CACHE_MAX, STATUS_CACHE_TTL_MS, dayET, nextMidnightET, readStatus, reserve, settle, settleSafely, type Reservation,
 } from "@/lib/server/budget";
 
 describe("ET day boundaries", () => {
@@ -323,7 +323,7 @@ describe("status display cache (display only; enforcement stays in Redis)", () =
     ["OK", "0", "100000000", "5000000", "40", "10", "0", "0", "0", "0", "7", "3", "5", "0", "4", "0", ...extra];
   const t0 = 1_000_000;
 
-  it("shares one EVAL for 10 s per key list and models, then reads again", async () => {
+  it("shares one EVAL for 60 s per key list and models, then reads again", async () => {
     const { sent, fetchFn } = recorder(reply());
     const redis = redisCfg(fetchFn);
     for (let i = 0; i < 20; i++) await readStatus(redis, { buckets, now: t0 + i * 400 });
@@ -339,6 +339,29 @@ describe("status display cache (display only; enforcement stays in Redis)", () =
     await readStatus(redis, { buckets, cache: false });
     await readStatus(redis, { buckets, cache: false });
     expect(sent).toHaveLength(6);
+  });
+
+  it("forgetStatusFor drops only entries containing that exact visitor key", async () => {
+    const { sent, fetchFn } = recorder(reply());
+    const redis = redisCfg(fetchFn);
+    const T = Date.now(); // health reads use the real clock
+    const mine = { ...buckets, visitor: "me" };
+    const other = { ...buckets, visitor: "me2" }; // shares a prefix with "me" on purpose
+    const visitorKey = (b: typeof buckets) => bucketKeys(b)[4]!;
+    await readStatus(redis, { buckets: mine, now: T });
+    await readStatus(redis, { buckets: other, now: T });
+    await readStatus(redis, { buckets: mine, models: ["sam-3.1"], now: T });
+    await accountingHealth(redis);
+    const before = sent.length;
+    forgetStatusFor(visitorKey(mine));
+    await readStatus(redis, { buckets: other, now: T + 1 }); // still cached
+    expect(sent).toHaveLength(before);
+    await readStatus(redis, { buckets: mine, now: T + 1 });
+    await readStatus(redis, { buckets: mine, models: ["sam-3.1"], now: T + 1 });
+    expect(sent).toHaveLength(before + 2);
+    await accountingHealth(redis); // health entry survives the forget
+    expect(sent).toHaveLength(before + 2);
+    expect(() => forgetStatusFor("nothing")).not.toThrow();
   });
 
   it("concurrent callers share one in-flight read", async () => {

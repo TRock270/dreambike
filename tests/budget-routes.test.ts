@@ -15,7 +15,7 @@ import { POST as productImagePOST } from "@/app/api/product-image/route";
 import { BudgetResponse, ErrorResponse, HealthResponse } from "@/lib/contracts";
 import { SESSION_COOKIE, SESSION_MAX_AGE_S, issueSession, readSession } from "@/lib/server/http";
 import { clearStatusCache } from "@/lib/server/budget";
-import { mayUseOwnStatusBucket, quotaLimiterSizesForTests, resetQuotaLimitersForTests, VISITORS_PER_IP_LIMIT, VISITORS_PER_IP_WINDOW_MS } from "@/lib/server/paid";
+import { IMAGE_WORK_PER_DAY, IMAGE_WORK_PER_MINUTE, mayUseOwnStatusBucket, quotaLimiterSizesForTests, resetQuotaLimitersForTests, VISITORS_PER_IP_LIMIT, VISITORS_PER_IP_WINDOW_MS } from "@/lib/server/paid";
 import { config as proxyConfig, proxy } from "@/proxy";
 import { sessionCookie } from "./support/session";
 
@@ -204,7 +204,7 @@ describe("GET /api/budget", () => {
   it("unavailable accounting: liveEnabled false, spend unknown (null), remaining zero, and the cookie is still set", async () => {
     liveEnv();
     redisReply = "down";
-    clearStatusCache(); // a changed fake reply must not be hidden by the 10 s display cache
+    clearStatusCache(); // a changed fake reply must not be hidden by the 60 s display cache
     const res = await budgetGET(get("/api/budget"));
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
@@ -220,7 +220,7 @@ describe("GET /api/budget", () => {
     liveEnv();
     for (const reply of [["UNAVAILABLE", "lifetime_uninitialized"], ["UNAVAILABLE", "caps_uninitialized"], ["garbage"], statusReply({ halted: true })]) {
       redisReply = () => reply;
-      clearStatusCache(); // a changed fake reply must not be hidden by the 10 s display cache
+      clearStatusCache(); // a changed fake reply must not be hidden by the 60 s display cache
       const body = await parseBudget(await budgetGET(get("/api/budget")));
       expect(body).toMatchObject({ liveEnabled: false, spentTodayMicroUsd: null, reservedTodayMicroUsd: null,
         visitorRemainingMicroUsd: 0, remainingEdits: 0, reason: "accounting_unavailable" });
@@ -230,7 +230,7 @@ describe("GET /api/budget", () => {
   it("reads the ledger once, read-only, and reports totals when healthy", async () => {
     liveEnv();
     redisReply = () => statusReply({ buckets: { global_day: [1_200_000, 300_000] } });
-    clearStatusCache(); // a changed fake reply must not be hidden by the 10 s display cache
+    clearStatusCache(); // a changed fake reply must not be hidden by the 60 s display cache
     const res = await budgetGET(get("/api/budget"));
     const body = await parseBudget(res);
     expect(redisEvals).toBe(1);
@@ -259,7 +259,7 @@ describe("GET /api/budget", () => {
     demoEnv();
     const reasonFor = async (o: Parameters<typeof statusReply>[0]) => {
       redisReply = () => statusReply(o);
-      clearStatusCache(); // a changed fake reply must not be hidden by the 10 s display cache
+      clearStatusCache(); // a changed fake reply must not be hidden by the 60 s display cache
       return (await parseBudget(await budgetGET(get("/api/budget", { "x-vercel-forwarded-for": "203.0.113.5" })))).reason;
     };
     expect(await reasonFor({ buckets: { visitor_day: [499_000, 0] } })).toBe("visitor_cap");
@@ -273,7 +273,7 @@ describe("GET /api/budget", () => {
     const headers = { "x-vercel-forwarded-for": "203.0.113.5" };
     const run = async (counts: [number, number][]) => {
       redisReply = () => statusReply({ counts });
-      clearStatusCache(); // a changed fake reply must not be hidden by the 10 s display cache
+      clearStatusCache(); // a changed fake reply must not be hidden by the 60 s display cache
       return parseBudget(await budgetGET(get("/api/budget", headers)));
     };
     const limit = (await run([[0, 0], [0, 0], [0, 0], [0, 0]])).remainingEdits; // money-limited here
@@ -285,7 +285,7 @@ describe("GET /api/budget", () => {
     }
     // A stronger reason wins.
     redisReply = () => statusReply({ buckets: { global_day: [4_999_000, 0] }, counts: [[0, 0], [5, 5], [0, 0], [0, 0]] });
-    clearStatusCache(); // a changed fake reply must not be hidden by the 10 s display cache
+    clearStatusCache(); // a changed fake reply must not be hidden by the 60 s display cache
     expect((await parseBudget(await budgetGET(get("/api/budget", headers)))).reason).toBe("global_cap");
     // One edit left: still live.
     const left = await run([[0, 0], [4, 0], [0, 0], [0, 0]]);
@@ -296,7 +296,7 @@ describe("GET /api/budget", () => {
     demoEnv();
     for (const buckets of [{ visitor_day: [499_000, 0] }, { global_day: [4_999_000, 0] }, { lifetime: [99_999_000, 0] }] as Parameters<typeof statusReply>[0] extends infer O ? NonNullable<O extends { buckets?: infer B } ? B : never>[] : never) {
       redisReply = () => statusReply({ buckets });
-      clearStatusCache(); // a changed fake reply must not be hidden by the 10 s display cache
+      clearStatusCache(); // a changed fake reply must not be hidden by the 60 s display cache
       const body = await parseBudget(await budgetGET(get("/api/budget", { "x-vercel-forwarded-for": "203.0.113.5" })));
       expect(body.reason).not.toBeNull();
       expect(body.liveEnabled).toBe(false);
@@ -306,7 +306,7 @@ describe("GET /api/budget", () => {
   it("BUDGET_TICKET unset locally is live_disabled, not an accounting failure, and makes no Redis call", async () => {
     liveEnv({ BUDGET_TICKET: "" });
     redisReply = () => statusReply();
-    clearStatusCache(); // a changed fake reply must not be hidden by the 10 s display cache
+    clearStatusCache(); // a changed fake reply must not be hidden by the 60 s display cache
     const res = await budgetGET(get("/api/budget"));
     expect(await parseBudget(res)).toMatchObject({ liveEnabled: false, spentTodayMicroUsd: null, reason: "live_disabled" });
     expect(redisEvals).toBe(0);
@@ -316,7 +316,7 @@ describe("GET /api/budget", () => {
   it("a long session cookie is renewed with the same id once it is older than 24 h", async () => {
     demoEnv();
     redisReply = () => statusReply();
-    clearStatusCache(); // a changed fake reply must not be hidden by the 10 s display cache
+    clearStatusCache(); // a changed fake reply must not be hidden by the 60 s display cache
     const headers = { "x-vercel-forwarded-for": "203.0.113.5" };
     const old = issueSession(process.env, Date.now() - 30 * 3600 * 1000)!;
     const res = await budgetGET(get("/api/budget", { ...headers, Cookie: `${SESSION_COOKIE}=${old.value}` }));
@@ -328,7 +328,7 @@ describe("GET /api/budget", () => {
   it("demo deployment without the platform IP header: no live allowance, no Redis call, cookie still set", async () => {
     demoEnv();
     redisReply = () => statusReply();
-    clearStatusCache(); // a changed fake reply must not be hidden by the 10 s display cache
+    clearStatusCache(); // a changed fake reply must not be hidden by the 60 s display cache
     const res = await budgetGET(get("/api/budget"));
     expect((await parseBudget(res)).reason).toBe("accounting_unavailable");
     expect(redisEvals).toBe(0);
@@ -338,7 +338,7 @@ describe("GET /api/budget", () => {
   it("a first visitor gets a cookie and counts against that very session; a returning one keeps theirs", async () => {
     demoEnv();
     redisReply = () => statusReply();
-    clearStatusCache(); // a changed fake reply must not be hidden by the 10 s display cache
+    clearStatusCache(); // a changed fake reply must not be hidden by the 60 s display cache
     const headers = { "x-vercel-forwarded-for": "203.0.113.5" };
     const first = await budgetGET(get("/api/budget", headers));
     expect((await parseBudget(first)).liveEnabled).toBe(true);
@@ -354,7 +354,7 @@ describe("GET /api/budget", () => {
   it("rejects any query parameter, with the cookie still set and no Redis call", async () => {
     liveEnv();
     redisReply = () => statusReply();
-    clearStatusCache(); // a changed fake reply must not be hidden by the 10 s display cache
+    clearStatusCache(); // a changed fake reply must not be hidden by the 60 s display cache
     for (const q of ["?x=1", "?live=true&x", "?debug"]) {
       const res = await budgetGET(get(`/api/budget${q}`));
       expect(res.status).toBe(400);
@@ -390,18 +390,18 @@ describe("GET /api/budget", () => {
   it("never leaks secrets or connection details", async () => {
     liveEnv();
     redisReply = "down";
-    clearStatusCache(); // a changed fake reply must not be hidden by the 10 s display cache
+    clearStatusCache(); // a changed fake reply must not be hidden by the 60 s display cache
     const text = await (await budgetGET(get("/api/budget"))).text();
     for (const secret of [SECRET, "redis.invalid", "network"]) expect(text).not.toContain(secret);
   });
 });
 
-describe("Redis quota protection (10 s display cache)", () => {
+describe("Redis quota protection (60 s display cache)", () => {
   afterEach(() => { vi.useRealTimers(); });
   const fakeClock = () => vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-30T15:00:00Z") });
   const cookieOf = (res: Response) => /db_session=[^;]+/.exec(setCookieOf(res) ?? "")![0];
 
-  it("same cookie: one EVAL for many requests within 10 s, a new one after the TTL", async () => {
+  it("same cookie: one EVAL for many requests within 60 s, a new one after the TTL", async () => {
     fakeClock();
     liveEnv();
     redisReply = () => statusReply();
@@ -410,7 +410,7 @@ describe("Redis quota protection (10 s display cache)", () => {
       expect((await budgetGET(get("/api/budget", { cookie }))).status).toBe(200);
     }
     expect(redisEvals).toBe(1);
-    vi.setSystemTime(Date.now() + 9_000);
+    vi.setSystemTime(Date.now() + 59_000);
     await budgetGET(get("/api/budget", { cookie }));
     expect(redisEvals).toBe(1);
     vi.setSystemTime(Date.now() + 1_500);
@@ -431,7 +431,7 @@ describe("Redis quota protection (10 s display cache)", () => {
     }
     expect(cookies.size).toBe(25);
     expect(redisEvals).toBe(1);
-    vi.setSystemTime(Date.now() + 10_001);
+    vi.setSystemTime(Date.now() + 60_001);
     await budgetGET(get("/api/budget", ip));
     expect(redisEvals).toBe(2);
     // A visitor who keeps a cookie reads their own bucket, not the placeholder.
@@ -504,18 +504,18 @@ describe("Redis quota protection (10 s display cache)", () => {
       expect(body).toMatchObject({ liveEnabled: false, spentTodayMicroUsd: null, reason: "accounting_unavailable" });
     }
     expect(redisEvals).toBe(1);
-    vi.setSystemTime(Date.now() + 10_001);
+    vi.setSystemTime(Date.now() + 60_001);
     await budgetGET(get("/api/budget", { cookie }));
     expect(redisEvals).toBe(2);
   });
 
-  it("health reads the ledger once per 10 s, outage included", async () => {
+  it("health reads the ledger once per 60 s, outage included", async () => {
     fakeClock();
     liveEnv();
     redisReply = () => healthReply();
     for (let i = 0; i < 20; i++) await healthGET(get("/api/health"));
     expect(redisEvals).toBe(1);
-    vi.setSystemTime(Date.now() + 10_001);
+    vi.setSystemTime(Date.now() + 60_001);
     await healthGET(get("/api/health"));
     expect(redisEvals).toBe(2);
     clearStatusCache();
@@ -531,19 +531,19 @@ describe("GET /api/health", () => {
   it("never calls Meta or any host except the ledger, and reports live only with a healthy ledger", async () => {
     liveEnv();
     redisReply = () => healthReply();
-    clearStatusCache(); // a changed fake reply must not be hidden by the 10 s display cache
+    clearStatusCache(); // a changed fake reply must not be hidden by the 60 s display cache
     const live = HealthResponse.parse(await (await healthGET(get("/api/health"))).json());
     expect(live).toEqual({ ok: true, mode: "live", accountingReady: true, apiConfigured: true });
     redisReply = "down";
-    clearStatusCache(); // a changed fake reply must not be hidden by the 10 s display cache
+    clearStatusCache(); // a changed fake reply must not be hidden by the 60 s display cache
     const down = await healthGET(get("/api/health"));
     expect(down.status).toBe(200); // the cached demo is still usable
     expect(HealthResponse.parse(await down.json())).toEqual({ ok: true, mode: "demo_only", accountingReady: false, apiConfigured: true });
     redisReply = () => ["UNAVAILABLE", "lifetime_uninitialized"];
-    clearStatusCache(); // a changed fake reply must not be hidden by the 10 s display cache
+    clearStatusCache(); // a changed fake reply must not be hidden by the 60 s display cache
     expect(HealthResponse.parse(await (await healthGET(get("/api/health"))).json()).accountingReady).toBe(false);
     redisReply = () => healthReply({ halted: true });
-    clearStatusCache(); // a changed fake reply must not be hidden by the 10 s display cache
+    clearStatusCache(); // a changed fake reply must not be hidden by the 60 s display cache
     expect(HealthResponse.parse(await (await healthGET(get("/api/health"))).json()).mode).toBe("demo_only");
     expect(fetched.length).toBeGreaterThan(0);
     expect(fetched.every((u) => u === REDIS)).toBe(true);
@@ -574,7 +574,7 @@ describe("GET /api/health", () => {
   it("a preview deployment is never live", async () => {
     liveEnv({ VERCEL_ENV: "preview", NODE_ENV: "production", BUDGET_PHASE: "demo", APP_ORIGIN: "https://p.example" });
     redisReply = () => healthReply();
-    clearStatusCache(); // a changed fake reply must not be hidden by the 10 s display cache
+    clearStatusCache(); // a changed fake reply must not be hidden by the 60 s display cache
     const body = HealthResponse.parse(await (await healthGET(get("/api/health"))).json());
     expect(body.mode).toBe("demo_only");
   });
@@ -585,5 +585,76 @@ describe("GET /api/health", () => {
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect((await healthGET(get("/api/health"))).headers.get("cache-control")).toBe("no-store");
     expect(fetched).toEqual([]);
+  });
+});
+
+describe("image-work limiter on /api/normalize and /api/composite", () => {
+  const SITE = "https://dreambike.example";
+  const T0 = Date.UTC(2026, 9, 31, 15, 0, 0);
+  beforeEach(() => { demoEnv(); vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(T0); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  /** A multipart request whose photo is not an image: it fails format checks, but only after the limiter. */
+  function badPhoto(path: string, ip: string | null, origin = SITE): Request {
+    const form = new FormData();
+    form.set(path.endsWith("normalize") ? "photo" : "base", new File(["not an image"], "a.jpg", { type: "image/jpeg" }));
+    const headers: Record<string, string> = { Origin: origin, Cookie: sessionCookie(), "X-Request-Id": crypto.randomUUID() };
+    if (ip) headers["x-vercel-forwarded-for"] = ip;
+    return new Request(`${SITE}${path}`, { method: "POST", body: form, headers });
+  }
+  async function codeOf(res: Response): Promise<string> { return ErrorResponse.parse(await res.json()).error.code; }
+
+  it("refuses the 31st request in a minute with 429 before any format work, other IPs unaffected", async () => {
+    for (let i = 0; i < IMAGE_WORK_PER_MINUTE; i++) {
+      const res = await normalizePOST(badPhoto("/api/normalize", "203.0.113.5"));
+      expect(res.status).toBe(415); // reached format work, so it was counted and allowed
+    }
+    const denied = await normalizePOST(badPhoto("/api/normalize", "203.0.113.5"));
+    expect(denied.status).toBe(429);
+    const body = ErrorResponse.parse(await denied.json());
+    expect(body.error.code).toBe("RATE_LIMITED");
+    expect(body.error.message).toContain("Try again in a minute.");
+    expect(body.error.retryAfterSeconds).toBeGreaterThan(0);
+    expect((await normalizePOST(badPhoto("/api/normalize", "203.0.113.6"))).status).toBe(415);
+    expect(fetched).toEqual([]);
+  });
+
+  it("a missing or invalid platform header shares one bucket and is never refused for that alone", async () => {
+    expect((await normalizePOST(badPhoto("/api/normalize", null))).status).toBe(415);
+    expect((await normalizePOST(badPhoto("/api/normalize", "garbage"))).status).toBe(415);
+    for (let i = 2; i < IMAGE_WORK_PER_MINUTE; i++) await normalizePOST(badPhoto("/api/normalize", null));
+    expect((await normalizePOST(badPhoto("/api/normalize", null))).status).toBe(429);
+    // Real client IPs have their own buckets.
+    expect((await normalizePOST(badPhoto("/api/normalize", "203.0.113.7"))).status).toBe(415);
+  });
+
+  it("the daily cap says try again later", async () => {
+    for (let i = 0; i < IMAGE_WORK_PER_DAY; i++) {
+      vi.setSystemTime(T0 + i * 61_000); // stay inside one ET day; one request per window
+      await normalizePOST(badPhoto("/api/normalize", "203.0.113.8"));
+    }
+    vi.setSystemTime(T0 + IMAGE_WORK_PER_DAY * 61_000);
+    const res = await normalizePOST(badPhoto("/api/normalize", "203.0.113.8"));
+    expect(res.status).toBe(429);
+    expect(ErrorResponse.parse(await res.json()).error.message).toContain("Try again later.");
+  });
+
+  it("an exhausted client still gets 413 for an oversize body and 403 for a foreign Origin", async () => {
+    for (let i = 0; i <= IMAGE_WORK_PER_MINUTE; i++) await normalizePOST(badPhoto("/api/normalize", "203.0.113.9"));
+    expect((await normalizePOST(badPhoto("/api/normalize", "203.0.113.9"))).status).toBe(429);
+    const big = new Request(`${SITE}/api/normalize`, { method: "POST", body: new Uint8Array(1_250_000 + 50_001),
+      headers: { Origin: SITE, Cookie: sessionCookie(), "x-vercel-forwarded-for": "203.0.113.9", "content-type": "multipart/form-data; boundary=x" } });
+    expect((await normalizePOST(big)).status).toBe(413);
+    expect((await normalizePOST(badPhoto("/api/normalize", "203.0.113.9", "https://evil.example"))).status).toBe(403);
+  });
+
+  it("composite and normalize share one counter per IP", async () => {
+    for (let i = 0; i < IMAGE_WORK_PER_MINUTE; i++) {
+      const route = i % 2 ? compositePOST : normalizePOST;
+      const res = await route(badPhoto(i % 2 ? "/api/composite" : "/api/normalize", "203.0.113.10"));
+      expect(await codeOf(res)).not.toBe("RATE_LIMITED");
+    }
+    expect(await codeOf(await compositePOST(badPhoto("/api/composite", "203.0.113.10")))).toBe("RATE_LIMITED");
+    expect(await codeOf(await normalizePOST(badPhoto("/api/normalize", "203.0.113.10")))).toBe("RATE_LIMITED");
   });
 });
