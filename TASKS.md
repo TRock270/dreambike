@@ -24,7 +24,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 
 ## T0 — Day 0 API and image spike
 
-- Status: IN PROGRESS. Offline part done 2026-10-27. Shared ledger verified and owner fixtures built 2026-10-28. Live profiles wait for the owner's pricing review, fixture sign-off and consent record (see log, T0 session 3).
+- Status: IN PROGRESS. Offline part done 2026-10-27. Shared ledger verified and owner fixtures built 2026-10-28. Live profiles wait for the owner's pricing review, fixture sign-off and consent record (see log, T0 session 3). Update 2026-10-30: the inputs arrived and the live profiles ran on 2026-10-28 (paid smoke run 0.022 USD with U01–U04 evidence, compose run 0.010 USD); MVP gates met. Still open, by design: SAM point placement (U01 point lane) and grounded JSON reliability (U02 partial, 1 of 3 probes).
 - Priority: MVP. Estimate: 3h, split Oct 27/28. Depends on: none.
 - Files: budget/reserve.lua/settle.lua, spike/requirements.txt, common.py, run_all.py, responses_sam.py, responses_spark.py, images_edits.py, asr_transcribe.py, files.py, local_images.py, deployment.py; docs/api-evidence.md; fixtures/expected.json locally; .gitignore; PLAN.md 7.2 status references.
 - Work: inspect installed Python/Node and package availability; record package sizes before installing >1MB packages; obtain owner fixture/consent/Billing inputs; implement the command contracts in SPEC 12; create the shared atomic reserve/settle policy and connect the cost ledger before paid dispatch. Start with one owned baseline. Test concept, off-origin point, identify JSON, text edit, and owned reference. Visit all five fixture input cases with local tests. Grounded checks wait for U06 billing bounds. Files and ASR remain opt-in.
@@ -48,7 +48,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 
 ## T3 — Bike cutout, part map, and point selection
 
-- Status: DONE OFFLINE AND IN MOCK 2026-10-28. U01 2026-10-28 13:47 ET: concept masks verified live (box-sized and downscaled); live point clicks stay refused before any reservation. "A wheel click highlights its real pixels" is still open (point lane). See log.
+- Status: DONE OFFLINE AND IN MOCK 2026-10-28. U01 2026-10-28 13:47 ET: concept masks verified live (box-sized and downscaled); live point clicks stay refused before any reservation. "A wheel click highlights its real pixels" is still open (point lane). See log. Update 2026-10-30: live concept masks were used in the T7 app run and for the demo project; point clicks stay refused live.
 - Priority: MVP. Estimate: 3h, Oct 29. Depends on: T2 and U01 resolved for mask display.
 - Files: src/app/api/segment/route.ts, src/lib/server/meta.ts/images.ts, src/lib/coordinates.ts/slots.ts, src/components/PartOverlay.tsx/PartSelector.tsx, tests/coordinates.test.ts/masks.test.ts.
 - Work: exact SAM SSE body/parser; full-image binary mask adapter; cutout; core phrase queue at concurrency 4; fixed colors; front/rear by facing; smallest-mask hit test; point fallback; manual custom name. All live calls use the Node wrapper over the same atomic policy created in T0/T1. Public visitor hardening and demo integration arrive in T13; local accounting already enforces project, development, ticket, and day caps.
@@ -56,7 +56,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 
 ## T4 — Bike confirmation and edit instruction
 
-- Status: DONE OFFLINE AND IN MOCK 2026-10-28. Live Spark answers are gated on U02 (strict JSON on this account). See log.
+- Status: DONE OFFLINE AND IN MOCK 2026-10-28. Live Spark answers are gated on U02 (strict JSON on this account). See log. Update 2026-10-30: live identify and instruction ran in the T7 app run and made the demo project (U02 image JSON live, grounded JSON partial).
 - Priority: MVP. Estimate: 2h, Oct 30. Depends on: T3 and U02 identify/instruction profiles.
 - Files: prompts/identify.v1.md/instruction.v1.md/paint.v1.md/compose.v1.md, src/app/api/identify/route.ts/instruction/route.ts, src/lib/server/meta.ts, src/components/BikeConfirm.tsx/DescribeForm.tsx/PaintForm.tsx.
 - Work: exact Spark text.format schema; editable one-panel bike ID; allow unknown ABS/year/facing; instruction preview and geometry intent; paint-only engine/frame. Model response traversal handles reasoning/tool items before message output.
@@ -64,7 +64,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 
 ## T5 — One render, compositing, drift, and preview acceptance
 
-- Status: DONE OFFLINE AND IN MOCK 2026-10-28. A live render is gated on U04 (and real masks on U01). Accept works in memory; history and persistence come with T6. See log.
+- Status: DONE OFFLINE AND IN MOCK 2026-10-28. A live render is gated on U04 (and real masks on U01). Accept works in memory; history and persistence come with T6. See log. Update 2026-10-30: live renders ran in T7 and on the public site in T14 (under 30 s); drift measured on the three demo edits (all above 0.05, so the full edit is shown; docs/api-evidence.md U04).
 - Priority: MVP. Estimate: 3h, Oct 30. Depends on: T4 and U04 edit profile; U01 for composition.
 - Files: src/app/api/edit/route.ts/composite/route.ts, src/lib/server/meta.ts/images.ts, src/components/ProgressStatus.tsx/EditReview.tsx/BeforeAfter.tsx, tests/composite.test.ts.
 - Work: single-shot JSON edit; no mask field; one render per click; bounded result cached before new masks; selected-slot SAM refresh; local composite route with exact dilation/feather/drift; clear full-image fallback. Implement the staged progress UI and manual resume after a mask/composite failure.
@@ -96,7 +96,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 
 ## T9 — Sourced fit and German paperwork pre-check
 
-- Status: DONE 2026-10-29 (offline, mock, 3 paid spike probes, one live app check on the owned bike). Open: the ledger over-counts kept grounded reservations (no reconcile path); a fit result does not trigger the folder save; the fit cache is not read back; the live ABE case used a mismatched part, so a fitting ABE part with a condition has offline evidence only. See log.
+- Status: DONE 2026-10-29 (offline, mock, 3 paid spike probes, one live app check on the owned bike). Open: the ledger over-counts kept grounded reservations (no reconcile path); (closed 2026-10-30: a fit result now triggers the folder save, and the fit cache is read back); the live ABE case used a mismatched part, so a fitting ABE part with a condition has offline evidence only. See log.
 - Priority: MVP. Estimate: 3h, Oct 31. Depends on: T8, U02 grounded profile, U06 cost bound; owner's rule review remains visible if pending.
 - Files: prompts/fit-check.v1.md, src/app/api/check/route.ts, src/lib/server/meta.ts, src/lib/project.ts/cache.ts, src/components/FitBadge.tsx/EvidenceLinks.tsx/PaperworkSummary.tsx, tests/fit-policy.test.ts.
 - Work: <=3 target items plus whole-build context; exact IDs; citation/result extraction; conservative source applicability; all German fields; batch progress/failure; stale hash protection; interaction invalidation. No standalone legal chatbot.
@@ -1421,3 +1421,20 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Spend: $0.00. No paid calls.
 - Duration: about 0.75 h (19:00–19:45 ET), including the 11-agent build workflow and the 3-agent quick review.
 - Owner follow-up 2026-10-30, about 19:50–20:05 ET: README names no free-chat reviewers (the review/ row says "including OpenAI Codex"; the disclosure says "including OpenAI Codex, NVIDIA Nemotron and Google Gemini"; "including" keeps it true, since review/planning still holds the Qwen and DeepSeek answers). History decision A (owner): no history rewrite; the family relation removed from current files (PLAN.md summary, TASKS.md T7 edit-type line, one sentence in each review/planning answer, marked as removed); docs/submission.md item 6 records the decision. `/review-changes` quick green (release, general; minors only on the owner's wording choice). npm run lint, npm test 908 passed / 24 skipped.
+
+### Gap fixes after T15 — 2026-10-30, about 20:10–21:15 ET (owner: "fix up to three of these gaps")
+
+- Picked three gaps that need no paid call and no owner photo work: the folder save after a fit result, the fit cache read-back (both T9 open items), and drift on live edits (U04). Not picked: point clicks (U01) and grounded JSON (U02) need paid runs; Safari import needs the owner; the ledger over-count would change spend accounting on a security path just before the deadline (it errs on the safe side).
+- `/build-ticket T9`, first run (4 agents): the plan check split the work into fitcache (db.ts, tests) and fitwire (BuildSheet, Workspace); the fitcache builder listed fitwire's part as outside its files, so its unit ended needs_lead before review and fitwire was skipped. Rerun with both units given explicitly (10 agents): green, both approved in round 1 (shop, general; fitwire also security). Checks typecheck, lint, npm test 923 passed / 24 skipped, build.
+  - src/lib/db.ts: readCachedFit(h, inputHash, itemIds, now) returns the cached real result only when every requested id has one, the stored hash matches, no result is mock-labelled, all selected results share one checkedAt (no mixed or invented date) and that checkedAt is within 24 h (a re-put cannot extend it); the cache entry now keeps each result's own checkedAt, old-shape entries are a miss and get replaced.
+  - src/components/BuildSheet.tsx: per batch the order is unsaved answer, then the saved check, then a paid request; a cancel during the cache read saves nothing; a hit goes through attachFitResponse (hash, head and canonical checks) and shows "saved from the check of <date>; no request was sent and nothing was spent" (lead: date formatted with toLocaleString like the rest of the app).
+  - src/components/Workspace.tsx: `cached` wired to readCachedFit; onPersisted starts the never-awaited background folder save when the head is still current.
+  - tests/db.test.ts: readCachedFit hit, missing id, empty/over-3/duplicate ids, other or mismatched hash, mock label, 24 h after a re-put, mixed dates, old shape, attach keeps the original checkedAt.
+- Lead decisions on gate minors: F1 (no component test for the lookup order and the folder-save trigger) accepted, checked by code reading and both reviews; F3 (no folder save when the head moved during the check) accepted, the next save covers it. Review minor: no forced recheck within 24 h for the same input; accepted, it follows SPEC 9 "reuse without spending".
+- U04 drift (lead, scratchpad script on the public demo files with spike/imaging.py): front wheel 0.0688, rear wheel 0.0572, tank 0.0678 (the app recorded 0.0677 live), all above 0.05; recorded in docs/api-evidence.md U04. Threshold unchanged.
+- Status lines of T0, T3, T4 and T5 got dated updates for the later live evidence.
+- Consultant: PAL chat nim-nemotron35 on the 323-line diff (one call). 14 points, none adopted: mock results are cached but never read back (1, 8: the MOCK_LABEL rule is the app-wide convention); one checkedAt per response is required by the contract, and batches of the same hash have the same items, so mixed dates are rare and only cost a request (2); the abort check already follows the cache read (3); inFlight blocks a second run (4); not_current answers stay in the cache for later reuse (5); a client clock is the app's clock everywhere (7); attachFitResponse refuses ids from another input via the canonical check (9); requestFolderSave queues and re-reads stored records (10); tests 11–13 and 14 are covered or follow from the same-hash rule.
+- `/review-changes` quick after the lead edit (shop, release, general): green, one minor above. npm test on the full tree 933 passed / 24 skipped (the extra tests belong to a parallel session's uncommitted work); HEAD plus only these four files in a clean export: tsc clean, 915 passed / 26 skipped.
+- Parallel session: dreambike-6b is editing other files at the same time (.claude settings/workflows, config.ts, paid.ts, project.ts, projectSession.ts, deployment.py, .env.example and tests). They are not part of this commit.
+- Owner check (optional): Chrome, `MOCK=1 npm run dev`, pick a save folder, run a fit check: the folder status updates without pressing Save.
+- Spend: $0.00. No paid calls.

@@ -20,8 +20,9 @@ import {
 } from "./contracts";
 import { adjustLedger, cacheKeys, cleanupSafeCache, getCache, putCache, collectReferences, dropCacheForRemovedBlobs, evictTransient, readLedger, ledgerTotal } from "./cache";
 import { AppError } from "./errors";
+import { MOCK_LABEL } from "./mocks";
 import { EXAMPLE_SETTINGS, REAL_SETTINGS_DEFAULT } from "./quote";
-import { children, fitInputCanonical, LEGAL_SEED, pathToRoot, sha256OfText, undoTarget } from "./project";
+import { children, FIT_TTL_MS, fitInputCanonical, LEGAL_SEED, pathToRoot, sha256OfText, undoTarget } from "./project";
 import type {
   BikeRevision, CacheEntry, ImageRef, MaskMeta, MetaRecordData, Part, Project, ProjectSnapshot, ShopSettings,
   StoredImage, StoredMask, Version,
@@ -944,7 +945,7 @@ async function removeImageIfUnused(tx: WriteTx, imageId: string): Promise<void> 
 
 // ------------------------------------------------------------- fit results
 
-type CheckResponseData = z.infer<typeof CheckResponseSchema>;
+export type CheckResponseData = z.infer<typeof CheckResponseSchema>;
 export type AttachFitInput = {
   projectId: string; versionId: string;
   /** The canonical text the request's inputHash was made from (fitInputCanonical at send time). */
@@ -960,8 +961,9 @@ export type AttachFitResult =
  * entry fit:<hash> holds the merged results of all batches (SPEC 9 key family is unchanged).
  */
 const CachedFitSchema = z.object({
-  inputHash: CheckResponseSchema.shape.inputHash, checkedAt: CheckResponseSchema.shape.checkedAt,
-  results: z.array(FitResultSchema).min(1).max(60),
+  inputHash: CheckResponseSchema.shape.inputHash,
+  // Each result keeps the checkedAt of its own batch, so a merge never freshens an older result.
+  results: z.array(z.object({ checkedAt: CheckResponseSchema.shape.checkedAt, result: FitResultSchema }).strict()).min(1).max(60),
 }).strict();
 let fitCacheQueue: Promise<unknown> = Promise.resolve();
 
@@ -970,14 +972,39 @@ function cacheFitResponse(h: DreamDb, response: CheckResponseData): Promise<void
   const run = async () => {
     const key = cacheKeys.fit(response.inputHash);
     const prev = await getCache(h, key, CachedFitSchema);
-    const byId = new Map((prev?.value.results ?? []).map((r) => [r.itemId, r]));
-    for (const r of response.results) byId.set(r.itemId, r);
-    const checkedAt = prev && prev.value.checkedAt > response.checkedAt ? prev.value.checkedAt : response.checkedAt;
-    await putCache(h, { key, value: { inputHash: response.inputHash, checkedAt, results: [...byId.values()].slice(-60) }, schema: CachedFitSchema });
+    const byId = new Map((prev?.value.results ?? []).map((r) => [r.result.itemId, r]));
+    for (const r of response.results) byId.set(r.itemId, { checkedAt: response.checkedAt, result: r });
+    await putCache(h, { key, value: { inputHash: response.inputHash, results: [...byId.values()].slice(-60) }, schema: CachedFitSchema });
   };
   const next = fitCacheQueue.then(run, run);
   fitCacheQueue = next.catch(() => undefined);
   return next;
+}
+
+/**
+ * Read a fit response back from fit:<inputHash> without spending (SPEC 9). Returns null unless every
+ * requested item (1 to 3 distinct ids) has a real (non-mock) result younger than FIT_TTL_MS and all
+ * selected results come from one check. The age counts from each result's own checkedAt, because a
+ * re-put renews the entry's expiresAt. The returned checkedAt is that check's original date; a date
+ * is never invented or mixed.
+ */
+export async function readCachedFit(h: DreamDb, inputHash: string, itemIds: string[], now: number = Date.now()): Promise<CheckResponseData | null> {
+  if (itemIds.length === 0 || itemIds.length > 3 || new Set(itemIds).size !== itemIds.length) return null;
+  const hit = await getCache(h, cacheKeys.fit(inputHash), CachedFitSchema, now);
+  if (!hit || hit.expired || hit.value.inputHash !== inputHash) return null;
+  const byId = new Map(hit.value.results.map((r) => [r.result.itemId, r]));
+  const picked: Array<{ checkedAt: string; result: z.infer<typeof FitResultSchema> }> = [];
+  for (const id of itemIds) {
+    const r = byId.get(id);
+    if (!r || r.result.reasons.some((x) => x.includes(MOCK_LABEL))) return null;
+    picked.push(r);
+  }
+  const checkedAt = picked[0]!.checkedAt;
+  if (picked.some((r) => r.checkedAt !== checkedAt)) return null;
+  const time = Date.parse(checkedAt);
+  if (!Number.isFinite(time) || now - time > FIT_TTL_MS) return null;
+  const parsed = CheckResponseSchema.safeParse({ inputHash, checkedAt, results: picked.map((r) => r.result) });
+  return parsed.success ? parsed.data : null;
 }
 
 /**

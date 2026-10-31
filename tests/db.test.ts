@@ -4,13 +4,14 @@ import { openDB } from "idb";
 import { z } from "zod";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  acceptSheet, acceptVisual, attachFitResponse, attachParts, closeDreamDb, CorruptRecordError, createProject, deleteProject,
+  acceptSheet, acceptVisual, attachFitResponse, attachParts, readCachedFit, closeDreamDb, CorruptRecordError, createProject, deleteProject,
   getLastOpenProject, getStoredImage, moveHead, StorageClosedError, getStoredMask, InvalidWriteError, listProjects, loadProject,
   importProject, openDreamDb, putShopSettings, loadSettings, setProjectSettings, putLogo, removeLogo, snapshotSources, StorageUnavailableError, getShopSettings, ReadOnlyError, redo, setHead, undo, updateBikeRevision,
   type DreamDb, type PreparedAccept,
 } from "@/lib/db";
 import { cacheKeys, getCache, putCache, rebuildLedger, storageStatus } from "@/lib/cache";
 import { AppError } from "@/lib/errors";
+import { MOCK_LABEL } from "@/lib/mocks";
 import { EXAMPLE_SETTINGS, REAL_SETTINGS_DEFAULT } from "@/lib/quote";
 import { activeItems, exportPlan, fitInputCanonical, LEGAL_SEED, sha256OfText, pathFromRoot, projectSnapshot, sheetChild, visualChild, type VisualChildInput } from "@/lib/project";
 import type { StoredImage, StoredMask, Version } from "@/lib/types";
@@ -1114,8 +1115,111 @@ describe("attachFitResponse", () => {
     const second = { ...f.response, results: [fit(uuid())] };
     await attachFitResponse(h, { projectId: f.project.id, versionId: f.version.id, canonical: f.canonical, response: f.response });
     await attachFitResponse(h, { projectId: f.project.id, versionId: f.version.id, canonical: f.canonical, response: second });
-    const hit = await getCache(h, cacheKeys.fit(f.inputHash), z.object({ results: z.array(z.object({ itemId: z.string() })) }));
-    expect(hit!.value.results.map((x) => x.itemId).sort()).toEqual([f.version.items[0]!.id, second.results[0]!.itemId].sort());
+    const hit = await getCache(h, cacheKeys.fit(f.inputHash), z.object({ results: z.array(z.object({ result: z.object({ itemId: z.string() }) })) }));
+    expect(hit!.value.results.map((x) => x.result.itemId).sort()).toEqual([f.version.items[0]!.id, second.results[0]!.itemId].sort());
+  });
+
+  describe("readCachedFit", () => {
+    const T1 = "2026-10-29T10:00:00.000Z";
+    const T2 = "2026-10-29T15:00:00.000Z";
+    const at = (iso: string, plusMs = 0) => Date.parse(iso) + plusMs;
+    const HOUR = 3600_000;
+    const put = async (hash: string, ids: string[], checkedAt: string, reasons = ["Unknown."]) => {
+      const response = { inputHash: hash, checkedAt, results: ids.map((id) => ({ ...fit(id), reasons })) };
+      return response;
+    };
+    // Cache directly through the real merge path: attachFitResponse needs a matching canonical.
+    async function cacheBatch(f: Awaited<ReturnType<typeof fitSetup>>, ids: string[], checkedAt: string, reasons?: string[]) {
+      const response = await put(f.inputHash, ids, checkedAt, reasons);
+      await attachFitResponse(h, { projectId: f.project.id, versionId: f.version.id, canonical: f.canonical, response });
+    }
+
+    it("hit returns the original checkedAt and the ids in the requested order", async () => {
+      const f = await fitSetup();
+      const [a, b] = [uuid(), uuid()];
+      await cacheBatch(f, [a, b], T1);
+      const r = await readCachedFit(h, f.inputHash, [b, a], at(T1, HOUR));
+      expect(r!.checkedAt).toBe(T1);
+      expect(r!.results.map((x) => x.itemId)).toEqual([b, a]);
+    });
+
+    it("misses when an id is missing, the list is empty or longer than 3, or the hash differs", async () => {
+      const f = await fitSetup();
+      const a = uuid();
+      await cacheBatch(f, [a], T1);
+      expect(await readCachedFit(h, f.inputHash, [a, uuid()], at(T1, HOUR))).toBeNull();
+      expect(await readCachedFit(h, f.inputHash, [], at(T1, HOUR))).toBeNull();
+      expect(await readCachedFit(h, f.inputHash, [a, a, a, a], at(T1, HOUR))).toBeNull();
+      expect(await readCachedFit(h, await sha256OfText("other"), [a], at(T1, HOUR))).toBeNull();
+    });
+
+    it("misses when any selected result is mock-labelled", async () => {
+      const f = await fitSetup();
+      const [real, mock] = [uuid(), uuid()];
+      await cacheBatch(f, [real], T1);
+      await cacheBatch(f, [mock], T1, [`${MOCK_LABEL} (example)`]);
+      expect(await readCachedFit(h, f.inputHash, [real], at(T1, HOUR))).not.toBeNull();
+      expect(await readCachedFit(h, f.inputHash, [real, mock], at(T1, HOUR))).toBeNull();
+    });
+
+    it("misses past 24 h from checkedAt, also after a re-put renewed expiresAt", async () => {
+      const f = await fitSetup();
+      const [a, b] = [uuid(), uuid()];
+      await cacheBatch(f, [a], T1);
+      expect(await readCachedFit(h, f.inputHash, [a], at(T1, 25 * HOUR))).toBeNull();
+      // A later batch re-puts the entry now, which renews the entry expiry but not a's checkedAt.
+      vi.useFakeTimers({ toFake: ["Date"], now: at(T1, 23 * HOUR) });
+      try { await cacheBatch(f, [b], "2026-10-30T09:00:00.000Z"); } finally { vi.useRealTimers(); }
+      expect(await readCachedFit(h, f.inputHash, [b], at(T1, 25 * HOUR))).not.toBeNull();
+      expect(await readCachedFit(h, f.inputHash, [a], at(T1, 25 * HOUR))).toBeNull();
+      expect(await readCachedFit(h, f.inputHash, [a, b], at(T1, 25 * HOUR))).toBeNull();
+    });
+
+    it("keeps each batch's own date after a merge, and misses when selected results differ in date", async () => {
+      const f = await fitSetup();
+      const [a, b] = [uuid(), uuid()];
+      await cacheBatch(f, [a], T1);
+      await cacheBatch(f, [b], T2);
+      expect((await readCachedFit(h, f.inputHash, [a], at(T2)))!.checkedAt).toBe(T1);
+      expect((await readCachedFit(h, f.inputHash, [b], at(T2)))!.checkedAt).toBe(T2);
+      expect(await readCachedFit(h, f.inputHash, [a, b], at(T2))).toBeNull();
+    });
+
+    it("misses on duplicate ids", async () => {
+      const f = await fitSetup();
+      const a = uuid();
+      await cacheBatch(f, [a], T1);
+      expect(await readCachedFit(h, f.inputHash, [a], at(T1, HOUR))).not.toBeNull();
+      expect(await readCachedFit(h, f.inputHash, [a, a], at(T1, HOUR))).toBeNull();
+    });
+
+    it("misses when the stored inputHash differs from the requested one", async () => {
+      const f = await fitSetup();
+      const a = uuid();
+      const other = await sha256OfText("other");
+      // Entry under f's key whose value claims another hash.
+      await putCache(h, { key: cacheKeys.fit(f.inputHash), value: { inputHash: other, results: [{ checkedAt: T1, result: fit(a) }] }, schema: z.any() });
+      expect(await readCachedFit(h, f.inputHash, [a], at(T1, HOUR))).toBeNull();
+    });
+
+    it("treats an old-shape entry as a miss and the next cache write replaces it", async () => {
+      const f = await fitSetup();
+      const a = uuid();
+      await putCache(h, { key: cacheKeys.fit(f.inputHash), value: { inputHash: f.inputHash, results: [fit(a)] }, schema: z.any() });
+      expect(await readCachedFit(h, f.inputHash, [a], at(T1, HOUR))).toBeNull();
+      await cacheBatch(f, [a], T1);
+      expect((await readCachedFit(h, f.inputHash, [a], at(T1, HOUR)))!.checkedAt).toBe(T1);
+    });
+
+    it("a returned response attaches with fitCheckedAt equal to the original", async () => {
+      const f = await fitSetup();
+      const id = f.version.items[0]!.id;
+      await cacheBatch(f, [id], T1);
+      const cached = (await readCachedFit(h, f.inputHash, [id], at(T1, HOUR)))!;
+      await attachFitResponse(h, { projectId: f.project.id, versionId: f.version.id, canonical: f.canonical, response: cached });
+      const v = (await loadProject(h, f.project.id))!.versions.find((x) => x.id === f.version.id)!;
+      expect(v.items[0]!.fitCheckedAt).toBe(T1);
+    });
   });
 
   it("stays cache only for a missing version or another project, and rejects a hash that is not the canonical's", async () => {

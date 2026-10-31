@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { PreflightError } from "@/lib/browser/preflight";
 import { requestCheck } from "@/lib/browser/sparkClient";
-import type { AttachFitInput, AttachFitResult } from "@/lib/db";
+import type { AttachFitInput, AttachFitResult, CheckResponseData } from "@/lib/db";
 import { ERRORS } from "@/lib/errors";
 import { MOCK_LABEL } from "@/lib/mocks";
 import {
@@ -32,6 +32,8 @@ export type FitSupport = {
   loadShopRules: () => Promise<string[]>;
   /** attachFitResponse from db.ts: caches the result and attaches it only when its hash is still current. */
   persist: (input: AttachFitInput) => Promise<AttachFitResult>;
+  /** readCachedFit from db.ts: a saved real result for this input within 24 h, or null. Never sends a request. */
+  cached: (inputHash: string, itemIds: string[]) => Promise<CheckResponseData | null>;
   /** Re-read the saved project so rows show the new results. Never moves the head. */
   onPersisted: () => Promise<void>;
 };
@@ -68,6 +70,7 @@ function UnknownIcon() {
 
 type BatchState =
   | { state: "waiting" | "running" | "done" | "current" } // "current": already checked, nothing sent
+  | { state: "cached"; checkedAt: string } // from the saved check of that date; no request, no cost
   | { state: "not_current"; message: string }
   | { state: "failed"; message: string; retryable: boolean; received?: boolean };
 /** One "Check fit" run. It keeps the exact input it was started with, so a retry sends the same input. */
@@ -147,17 +150,28 @@ function FitPanel({ head, fit, disabledReason, onRunningChange, currentHash, now
           if (signal.aborted) throw new Error("Cancelled. Nothing was saved for this batch.");
           if (wideError) throw wideError;
           // Reuse an answer that was already paid for and only failed to save.
-          const response = unsaved.current.get(index) ?? await requestCheck({
-            bike: fit.bikeRevision.bike, bikeConfirmed: true, inputHash: r.hash, items: batch,
-            activeBuild: r.activeBuild, shopRules: r.shopRules,
-          }, signal);
+          // Order: unsaved answer, then the saved check (no request), then a paid request as the last resort.
+          let response = unsaved.current.get(index);
+          let fromCache = false;
+          if (!response) {
+            const hit = await fit.cached(r.hash, batch.map((it) => it.id)).catch(() => null);
+            if (signal.aborted) throw new Error("Cancelled. Nothing was saved for this batch.");
+            if (hit) { response = hit; fromCache = true; }
+          }
+          if (!response) {
+            response = await requestCheck({
+              bike: fit.bikeRevision.bike, bikeConfirmed: true, inputHash: r.hash, items: batch,
+              activeBuild: r.activeBuild, shopRules: r.shopRules,
+            }, signal);
+          }
           unsaved.current.set(index, response);
-          const mock = response.results.some((x) => x.reasons.some((t) => t.includes(MOCK_LABEL)));
+          // A cache hit is a real result (mock results are never cached or reused), so it never sets the mock label.
+          const mock = !fromCache && response.results.some((x) => x.reasons.some((t) => t.includes(MOCK_LABEL)));
           if (mock) setRun((cur) => (cur ? { ...cur, mock: true } : cur));
           const out = await fit.persist({ projectId: head.projectId, versionId: r.versionId, canonical: r.canonical, response });
           unsaved.current.delete(index); // saved or judged not current: never send it again
           if (out.status === "attached") {
-            setBatch(index, { state: "done" });
+            setBatch(index, fromCache ? { state: "cached", checkedAt: response.checkedAt } : { state: "done" });
             await fit.onPersisted().catch(() => undefined);
           } else {
             setBatch(index, { state: "not_current", message: `${NOT_CURRENT[out.reason] ?? "The result is not current."} It is not shown as current.` });
@@ -276,6 +290,11 @@ function FitPanel({ head, fit, disabledReason, onRunningChange, currentHash, now
               {s.state === "waiting" && <span className="text-text-muted">waiting</span>}
               {s.state === "running" && <span>checking…</span>}
               {s.state === "done" && <span className="text-success-soft-text"><span aria-hidden="true">✓ </span>saved</span>}
+              {s.state === "cached" && (
+                <span className="text-text-muted">
+                  <span aria-hidden="true">✓ </span>saved from the check of <span className="tabular">{new Date(s.checkedAt).toLocaleString()}</span>; no request was sent and nothing was spent
+                </span>
+              )}
               {s.state === "current" && <span className="text-text-muted"><span aria-hidden="true">✓ </span>already current, not sent again</span>}
               {s.state === "not_current" && (
                 <span role="status" className="rounded-chip bg-neutral-soft px-2 py-0.5 text-neutral-soft-text"><span aria-hidden="true">ⓘ </span>{s.message}</span>

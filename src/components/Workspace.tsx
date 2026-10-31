@@ -5,7 +5,7 @@ import {
   applySuggestion, bikeFormFromRevision, bikeRevisionFromForm, editField, emptyBikeForm, type BikeFormState,
 } from "@/lib/bikeForm";
 import {
-  attachFitResponse, deleteProject, getLastOpenProject, getShopSettings, getStoredImage, getStoredMask, listProjects, loadProject, loadSettings,
+  attachFitResponse, deleteProject, getLastOpenProject, getShopSettings, getStoredImage, getStoredMask, listProjects, readCachedFit, loadProject, loadSettings,
   setLastOpenProject, snapshotSources, type DreamDb,
 } from "@/lib/db";
 import { children, exportPlan, projectSnapshot, type PendingRef, type SnapshotResult } from "@/lib/project";
@@ -732,6 +732,7 @@ export function Workspace({ referenceEnabled, appMode }: { referenceEnabled: boo
     bikeRevision,
     loadShopRules: async () => (await getShopSettings(readyForFit.h, session.project.settingsId))?.settings.shopRules ?? [],
     persist: (input) => attachFitResponse(readyForFit.h, input),
+    cached: (hash, ids) => readCachedFit(readyForFit.h, hash, ids),
     // Reload the saved rows. The current version stays the one shown: a project that moved on is left alone.
     onPersisted: async () => {
       await persistChain.current;
@@ -741,6 +742,8 @@ export function Workspace({ referenceEnabled, appMode }: { referenceEnabled: boo
       const now = sessionRef.current;
       if (loaded && now && now.project.id === loaded.project.id && now.project.headVersionId === loaded.project.headVersionId) {
         setSession({ project: loaded.project, versions: loaded.versions });
+        // Background folder save, never awaited; overlapping saves are queued by requestFolderSave.
+        if (folderHandleRef.current) void requestFolderSave(folderHandleRef.current, true);
       }
     },
   } : null;
