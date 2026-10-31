@@ -1491,3 +1491,17 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Owner decision needed for the live lookup. (a) Allow one curl against `npm run dev` with BUDGET_TICKET=T12, the way the 2026-10-30 lookups ran; curl only, no headless browser. (b) Or keep the production-build rule, and the lookup cannot run locally. If customchrome.com refuses (it gave HTTP 429 to a free curl on 2026-10-30), www.wwag.com from shop-links.txt is a candidate Harley parts shop; it has not been queried.
 - Review: `/review-changes` quick (wf_e85c2c6c-6f8: release-reviewer, general-reviewer): green, no blocker/major. Minor F1 from both, the api-evidence.md "Last updated" header was not bumped: fixed.
 - Files: docs/api-evidence.md, TASKS.md.
+
+### T12 follow-up, part 2 resumed: one live link lookup — 2026-10-31, about 07:20–07:35 ET (lead, owner chose option a)
+
+- Owner decision: option (a), exactly one curl link lookup against `npm run dev` with BUDGET_TICKET=T12, no browser, no preflight or retry. If and only if it returns an imageUrl, one free /api/product-image call. No render. Start: HEAD e1f55be, clean tree (checked).
+- Setup: the .env files keep LIVE_API_ENABLED off. The first dev start (BUDGET_TICKET=T12, caps $2) answered demo_only. loadConfig's own blocked reason (no values printed) was "live mode is switched off", so that server was stopped before any POST. It was restarted the way the T7/T9 runs did it: `LIVE_API_ENABLED=true MOCK=0 BUDGET_TICKET=T12 TICKET_CAP_USD=2 DAILY_CAP_USD=2 VISITOR_DAILY_CAP_USD=2 npm run dev`. /api/health then answered mode live, accountingReady true.
+- Ledger before (GET /api/budget): spent today 0, reserved 0, T12 remaining 1629266 µ$.
+- Lookup (one POST /api/search-parts, mode url, slot tank, owner's demo bike BMW R NineT 2014–2016): HTTP 200 in 24.5 s. One product: Santee 2.35 gal bobber tank for Harley Twin Cam 88 Softail 2000–2006, part number 600157, linkState reachable, imageUrl on customchrome.com/cdn/shop. Price null/unknown, because the model saw a USD price, not EUR. Approval, VAT basis and region unknown. Warnings: wrong fitment for the BMW, out of stock. The page was not fetched again to check this by hand (one-request rule).
+- Product photo (one POST /api/product-image): HTTP 200 in 0.85 s, external_runtime, 800×800 WebP. Only the metadata was printed, and the response file was deleted.
+- Ledger after: spent today 975 µ$, reserved 0, T12 remaining 1628291 µ$. Delta 975 µ$ (the lookup's settled cost; the photo route makes no Meta call). The T12 total is now 0.371709 USD booked, far under the $5 ticket cap.
+- No render, no image generation, no browser. The dev server was stopped (port 3000 free) and the tree was clean afterwards. Details: docs/api-evidence.md U07 and the ledger table.
+- Done-when effect: "actual supported listing gives its exact listed price or explicit unknown" holds again with an explicit unknown (USD only). A live confirmed EUR price is still unseen. The photo step now has a real allowlisted shop image, so the owner's browser render and the PDF note can be tested.
+- Open for the owner: the browser render with this tank (paid edit, the owner clicks Render), then the PDF note "…: outside web source, left out." and the folder-save warning.
+- Review: `/review-changes` quick (wf_3ddf4811-971: release-reviewer, general-reviewer): green, both approve, no findings.
+- Files: docs/api-evidence.md, TASKS.md. Spend: 975 µ$.
