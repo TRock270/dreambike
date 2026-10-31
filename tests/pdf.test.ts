@@ -2141,9 +2141,14 @@ describe("export code boundaries", () => {
     expect(source("lib/browser/pdfExport.ts")).not.toMatch(/never earlier/);
   });
 
-  it("hands the client only the reference flag and the mode, and holds no color literal outside tokens.css", () => {
+  it("hands the client only the reference flag, the mode and three part-search booleans, and holds no color literal outside tokens.css", () => {
     const page = all.find((s) => s.file === "app/page.tsx")!.text;
-    expect(page.match(/<Workspace ([^>]*)\/>/)![1]!.trim()).toBe("referenceEnabled={config.features.reference} appMode={config.mode}");
+    expect(page.match(/<Workspace ([^>]*)\/>/)![1]!.trim()).toBe("referenceEnabled={config.features.reference} appMode={config.mode} partSearch={partSearch}");
+    // partSearch is a literal with exactly the keys query, url and photo; the shop list itself never reaches the client.
+    const flags = page.match(/const partSearch: PartSearchFlags = \{([\s\S]*?)\n {2}\};/)![1]!;
+    expect([...flags.matchAll(/^\s*(\w+):/gm)].map((m) => m[1])).toEqual(["query", "url", "photo"]);
+    expect(page.match(/config\.shopDomains/g)).toHaveLength(1);
+    expect(page).toContain("const shops = config.shopDomains !== null;");
     for (const name of ["lib/browser/pdfExport.ts", "components/ExportButton.tsx", "lib/browser/jpeg.ts"]) {
       const text = all.find((s) => s.file === name)!.text;
       expect(text, name).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);

@@ -57,6 +57,8 @@ BODY_LIMITS: dict[str, int] = {
     "edit": 2_550_000,         # src/app/api/edit/route.ts
     "composite": 3_550_000,    # src/app/api/composite/route.ts
     "check": 100_000,          # src/app/api/check/route.ts
+    "search-parts": 20_000,    # src/app/api/search-parts/route.ts
+    "product-image": 8_000,    # src/app/api/product-image/route.ts
 }
 
 SCAN_MAX_FILES = 300

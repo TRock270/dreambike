@@ -1,7 +1,7 @@
 // Labeled mock responses for MOCK=1 UI work. Every mock says it is a mock in
 // visible text so it can never pass for a real model result or a real check.
 import { LEGAL_SEED } from "../project";
-import type { BikeData, FitData, InstructionData } from "../types";
+import type { BikeData, FitData, InstructionData, ProductData, SearchRequestData, SearchResponseData } from "../types";
 
 export const MOCK_LABEL = "Mock data — not from an AI model";
 
@@ -34,6 +34,22 @@ export function mockFitFor(itemId: string, accessedAt: string): FitData {
     ...fit, itemId,
     sources: seed ? [{ url: seed.url, title: `Mock source (not researched): ${seed.title}`, accessedAt,
       supports: `${MOCK_LABEL}. A seeded law link, not evidence for this part.` }] : [],
+  };
+}
+
+/** Labeled mock search answer: example hosts only, no price, nothing fetched and nothing from a model. */
+export function mockSearchResponse(request: SearchRequestData, searchedAt: string): SearchResponseData {
+  const make = (n: number): ProductData => ({
+    id: crypto.randomUUID(), name: `${MOCK_LABEL}: sample part ${n}`, brand: null, partNumber: null,
+    url: `https://shop.example/mock-product-${n}`, imageUrl: null, priceText: null, priceEurCents: null,
+    taxBasis: "unknown", approval: "unknown", approvalText: null, fulfillmentRegion: "unknown",
+    source: { url: `https://shop.example/mock-product-${n}`, title: `${MOCK_LABEL}: example page`, accessedAt: searchedAt,
+      supports: `${MOCK_LABEL}. Nothing was searched or read.` },
+    linkState: "unchecked",
+  });
+  return {
+    products: request.mode === "query" ? [make(1), make(2)] : [make(1)], searchedAt,
+    warnings: [`${MOCK_LABEL}. No shop was searched; enter the real product by hand.`],
   };
 }
 

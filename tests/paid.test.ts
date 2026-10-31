@@ -1,7 +1,7 @@
 // withReservation against a fake Upstash REST endpoint: no network, no Meta.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppError } from "@/lib/errors";
-import { countLimitFor, normalizeClientIp, POST_ATTEMPTS_DAILY_LIMIT, POST_ATTEMPTS_LIMIT, POST_ATTEMPTS_WINDOW_MS, quotaLimiterSizesForTests, resetQuotaLimitersForTests, withReservation, type PaidCall } from "@/lib/server/paid";
+import { countLimitFor, freeFetchDenied, FREE_FETCH_PER_DAY, FREE_FETCH_PER_MINUTE, normalizeClientIp, POST_ATTEMPTS_DAILY_LIMIT, POST_ATTEMPTS_LIMIT, POST_ATTEMPTS_WINDOW_MS, quotaLimiterSizesForTests, resetQuotaLimitersForTests, withReservation, type PaidCall } from "@/lib/server/paid";
 import { loadConfig } from "@/lib/server/config";
 import { labeledHmac } from "@/lib/server/http";
 import { sessionCookie } from "./support/session";
@@ -309,5 +309,63 @@ describe("per-IP attempt limiter (Redis quota protection, not a spend cap)", () 
     for (let i = 0; i < 2100; i++) await ok(`10.${i >> 8}.${i & 255}.1`);
     expect(quotaLimiterSizesForTests().postAttempts).toBeLessThanOrEqual(2000);
     expect(quotaLimiterSizesForTests().dailyAttempts).toBeLessThanOrEqual(2000);
+  });
+});
+
+describe("freeFetchDenied", () => {
+  const local = loadConfig(process.env);
+  const deployed = { ...local, deployed: true };
+  const reqFrom = (ip: string | null) => new Request("http://localhost:3000/api/product-image", {
+    method: "POST", headers: ip === null ? {} : { "x-vercel-forwarded-for": ip } });
+  const T0 = Date.UTC(2026, 9, 30, 15, 0, 0);
+
+  it("allows a burst, then refuses with retry seconds, and recovers after the window", () => {
+    for (let i = 0; i < FREE_FETCH_PER_MINUTE; i++) expect(freeFetchDenied(reqFrom(null), local, T0 + i)).toBeNull();
+    const wait = freeFetchDenied(reqFrom(null), local, T0 + 1000);
+    expect(wait).toBeGreaterThan(0);
+    expect(wait).toBeLessThanOrEqual(60);
+    expect(freeFetchDenied(reqFrom(null), local, T0 + 61_000)).toBeNull();
+  });
+
+  it("resets the local daily count at ET midnight, DST end included", () => {
+    // 2026-11-01 04:00 UTC is 00:00 EDT, the ET midnight; the fall-back hour makes that day 25 hours long.
+    const before = Date.UTC(2026, 10, 1, 3, 0, 0), after = Date.UTC(2026, 10, 1, 4, 0, 1);
+    for (let i = 0; i < FREE_FETCH_PER_DAY; i++) expect(freeFetchDenied(reqFrom(null), local, before - (FREE_FETCH_PER_DAY - i) * 61_000)).toBeNull();
+    expect(freeFetchDenied(reqFrom(null), local, before)).toBe(3600);
+    expect(freeFetchDenied(reqFrom(null), local, after)).toBeNull();
+  });
+
+  it("caps a day and starts a new key on the next ET day", () => {
+    for (let i = 0; i < FREE_FETCH_PER_DAY; i++) expect(freeFetchDenied(reqFrom("203.0.113.5"), deployed, T0 + i * 61_000)).toBeNull();
+    expect(freeFetchDenied(reqFrom("203.0.113.5"), deployed, T0 + FREE_FETCH_PER_DAY * 61_000)).toBe(3600);
+    expect(freeFetchDenied(reqFrom("203.0.113.5"), deployed, T0 + 26 * 3_600_000)).toBeNull();
+  });
+
+  it("deployed: needs the trusted platform header and keeps clients apart", () => {
+    expect(freeFetchDenied(reqFrom(null), deployed, T0)).not.toBeNull();
+    expect(freeFetchDenied(reqFrom("not an ip"), deployed, T0)).not.toBeNull();
+    expect(freeFetchDenied(reqFrom("1.2.3.4, 5.6.7.8"), deployed, T0)).not.toBeNull();
+    // A client-controlled header does not help.
+    const spoof = new Request("http://localhost:3000/x", { headers: { "x-forwarded-for": "1.2.3.4" } });
+    expect(freeFetchDenied(spoof, deployed, T0)).not.toBeNull();
+    for (let i = 0; i < FREE_FETCH_PER_MINUTE; i++) freeFetchDenied(reqFrom("198.51.100.7"), deployed, T0);
+    expect(freeFetchDenied(reqFrom("198.51.100.7"), deployed, T0)).not.toBeNull();
+    expect(freeFetchDenied(reqFrom("198.51.100.8"), deployed, T0)).toBeNull();
+  });
+
+  it("refuses when no secret exists and stays bounded under many clients", () => {
+    for (let i = 0; i < 2100; i++) freeFetchDenied(reqFrom(`10.${i >> 8}.${i & 255}.1`), deployed, T0);
+    const sizes = quotaLimiterSizesForTests();
+    expect(sizes.freeFetchRecent).toBeLessThanOrEqual(2000);
+    expect(sizes.freeFetchDaily).toBeLessThanOrEqual(2000);
+    vi.stubEnv("VISITOR_HASH_SECRET", "");
+    vi.stubEnv("NODE_ENV", "production");
+    expect(freeFetchDenied(reqFrom("192.0.2.1"), deployed, T0)).not.toBeNull();
+  });
+
+  it("does not touch the paid-call limiters or Redis", () => {
+    freeFetchDenied(reqFrom("192.0.2.9"), deployed, T0);
+    expect(quotaLimiterSizesForTests()).toMatchObject({ postAttempts: 0, dailyAttempts: 0, visitorWindows: 0 });
+    expect(commands).toEqual([]);
   });
 });

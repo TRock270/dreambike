@@ -73,6 +73,40 @@ describe("schema and open", () => {
   });
 });
 
+describe("image rights are never shared by dedup", () => {
+  it("same bytes accepted as owner and as external_runtime keep separate records; the web one is not exported", async () => {
+    const { project, rootVersion } = await setup();
+    const owner = prepare(rootVersion, "tank", "Owner tank", "b", 10);
+    await acceptVisual(h, project.id, rootVersion.id, owner);
+    // Same picture hash, accepted from a shop product photo.
+    const web = prepare(owner.version, "seat", "Web seat", "b", 20);
+    const webImage: StoredImage = { ...web.image, hash: owner.image.hash, rights: "external_runtime" };
+    const webVersion: Version = { ...web.version, image: { ...web.version.image, hash: owner.image.hash, rights: "external_runtime" } };
+    const res = await acceptVisual(h, project.id, owner.version.id, { ...web, image: webImage, version: webVersion });
+    expect(res.status).toBe("accepted");
+    if (res.status !== "accepted") return;
+    expect(res.version.image.id).toBe(webImage.id); // not folded into the owner record
+    expect(res.version.image.id).not.toBe(owner.image.id);
+    const ownerRec = (await getStoredImage(h, owner.image.id))!;
+    const webRec = (await getStoredImage(h, webImage.id))!;
+    expect(ownerRec.rights).toBe("owner");
+    expect(webRec.rights).toBe("external_runtime");
+    expect(webRec.rights).toBe(res.version.image.rights);
+
+    // A mismatch between the version reference and the stored picture is refused.
+    const bad = prepare(res.version, "exhaust", "Bad", "e", 30);
+    const badVersion: Version = { ...bad.version, image: { ...bad.version.image, rights: "external_runtime" } };
+    await expect(acceptVisual(h, project.id, res.version.id, { ...bad, version: badVersion })).rejects.toBeInstanceOf(InvalidWriteError);
+
+    const loaded = (await loadProject(h, project.id))!;
+    const plan = exportPlan({ project, versions: loaded.versions, headId: res.version.id, exportedAt: "2026-10-30T00:00:00.000Z" });
+    expect(plan.files.map((f) => f.imageId)).not.toContain(webImage.id);
+    expect(plan.files.map((f) => f.imageId)).toContain(owner.image.id);
+    const snap = projectSnapshot({ project: loaded.project, versions: loaded.versions, cutouts: [], masks: [], plan });
+    expect(snap.complete).toBe(false);
+  });
+});
+
 describe("history", () => {
   it("three accepted edits survive close and reopen", async () => {
     const { project, rootVersion } = await setup();

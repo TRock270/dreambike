@@ -32,7 +32,7 @@ Meta models to name: SAM 3.1, Muse Spark (`muse-spark-1.3-contributor`), Muse Im
 - Live edits on the public site run only from **Thursday, November 5 to Monday, November 9, 2026, US Eastern time**: the official judging days (November 5–8) and the live final round on November 9 ([official participant guide](https://cerebralvalley.ai/e/meta-ai-developer-hackathon/details)). The owner chose this window. Outside these days the site shows the cached demo only, and "Try editing" still copies the demo into your browser.
 - During that window the site spends at most $5 per day in total and $0.50 per visitor per day. When a limit is reached the site says so and the cached demo keeps working.
 - The fit check with web search is off on the public site, because its search cost per request cannot be counted exactly. The demo shows the results of a real fit check made on 2026-10-29.
-- Voice input and product search are not part of this build.
+- Part lookup by product link and product photos work only for the shops in the server's shop list. That list is not set on the public site yet (owner item 9), so part lookup is off there until it is. Text search with web search runs only on a local machine. Voice input is not part of this build.
 
 ## Checked on the deployed site (2026-10-30)
 
@@ -64,3 +64,4 @@ Meta models to name: SAM 3.1, Muse Spark (`muse-spark-1.3-contributor`), Muse Im
 6. Decide on the personal details already in the public Git history: older commits of TASKS.md and PLAN.md name the shop on the studio photo and the family relation (for example commit 27638c4), and every commit carries the owner's university email as author. Decided by the owner on 2026-10-30: history stays unchanged (it is the dated evidence of the build); current files no longer name the shop or the family relation (README, PLAN.md, TASKS.md and one sentence in each of the two review answers in `review/planning/`, marked as removed).
 7. Open the live URL without login on a second laptop and record the date and browser here (the 2026-10-30 checks were Chrome on macOS and Safari on iPhone).
 8. Before submitting: confirm the Meta Billing spend limit is still set and do the final spend check against the caps.
+9. Optional (T12): to offer part lookup on the public site, set PUBLIC_SHOP_DOMAINS in Vercel Production (the same 34 hosts as locally), redeploy and rerun `spike/deployment.py --expect demo_only`. Product photos from Thunderbike come from thunderbike.de, which is not in the list; add it only if you want those photos.

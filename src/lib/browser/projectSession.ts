@@ -225,6 +225,12 @@ export type AcceptInput = {
     drift: number | null; reason: CompositeReason };
   /** The edited part cut again on the result (fresh mask under result.hash), or null. */
   refreshed: MapPart | null;
+  /**
+   * True when this render used a shop product photo as reference. The picture then gets rights
+   * "external_runtime" (never saved to a folder or PDF). Optional, default false. A child of an
+   * external_runtime parent stays external_runtime either way: rights are never upgraded back.
+   */
+  webReference?: boolean;
   now?: number;
 };
 
@@ -254,9 +260,11 @@ export async function acceptEdit(h: DreamDb, session: ProjectSession, input: Acc
 
   const now = input.now ?? Date.now();
   const { result, ids } = input;
+  const rights: StoredImage["rights"] = input.webReference === true || parent.image.rights === "external_runtime"
+    ? "external_runtime" : parent.image.rights;
   const image: StoredImage = {
     id: ids.imageId, hash: result.hash, width: result.width, height: result.height, bytes: result.blob.size,
-    rights: parent.image.rights, blob: result.blob, lastAccessedAt: now,
+    rights, blob: result.blob, lastAccessedAt: now,
   };
   // A fresh part mask exists only for a blended result of the same size (SPEC 9 invalidation table).
   const sameSize = parent.image.width === result.width && parent.image.height === result.height;

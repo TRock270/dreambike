@@ -28,7 +28,35 @@ export type ServerConfig = {
   };
   phase: "development" | "demo";
   searchQueryReserve: number | null;
+  /**
+   * Exact lowercase shop hosts (PUBLIC_SHOP_DOMAINS) that query search, URL lookup and product photos
+   * may use. null (blank or any invalid entry) turns all three off. Not part of `features`, which is a
+   * strict public contract.
+   */
+  shopDomains: Set<string> | null;
 };
+
+const HOST_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/**
+ * PUBLIC_SHOP_DOMAINS: comma or whitespace separated exact lowercase hostnames (bare and www listed
+ * separately). Blank or ANY invalid entry gives null (all shop features off): scheme, port, path, wildcard,
+ * uppercase, IP literal, single-label name, trailing dot. A last label that starts with a digit also
+ * rules out IPv4 text.
+ */
+export function parseShopDomains(text: string | undefined): Set<string> | null {
+  const entries = (text ?? "").split(/[,\s]+/).filter((e) => e !== "");
+  if (entries.length === 0) return null;
+  const hosts = new Set<string>();
+  for (const entry of entries) {
+    const labels = entry.split(".");
+    if (entry.length > 253 || labels.length < 2) return null;
+    if (!labels.every((l) => HOST_LABEL.test(l))) return null;
+    if (!/^[a-z]/.test(labels[labels.length - 1]!)) return null;
+    hosts.add(entry);
+  }
+  return hosts;
+}
 
 /** Parse a decimal USD string into exact integer microdollars (no float math). */
 export function usdToMicro(text: string): number {
@@ -158,5 +186,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, now: Date = new
     // An invalid phase keeps "development" here but blocks live mode above (demo_only).
     phase: budgetPhase === "demo" ? "demo" : "development",
     searchQueryReserve: /^\d+$/.test(reserve) ? Number(reserve) : null,
+    shopDomains: parseShopDomains(env.PUBLIC_SHOP_DOMAINS),
   };
 }

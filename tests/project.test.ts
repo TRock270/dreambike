@@ -6,6 +6,7 @@ import {
 import {
   activeItems, canAcceptPending, children, defaultProjectName, laterSteps, newProject, newRootVersion,
   exportPlan, projectSnapshot, editItem, formatEuroCents, laborDisplay, manualProduct, parseEuroInput, priceDisplay,
+  pickedProductFields, productToSave, priceCentsText,
   removeItem, acknowledgeFit, unacknowledgeFit, fitReviewHash, sheetChangeLabel, sheetChild, pathFromRoot, redoTargets, undoTarget, visualChild, type VisualChildInput,
 } from "@/lib/project";
 import {
@@ -734,5 +735,93 @@ describe("fit acknowledgment and inspection review in sheet versions", () => {
     const r = must(editItem(items, tank.id, { title: "Other tank" }));
     expect(r.items.every((i) => i.fit === null && i.fitReviewedHash === null)).toBe(true);
     expect(removeItem(items, [], tank.id)).toMatchObject({ ok: true });
+  });
+});
+
+describe("picked product helpers", () => {
+  const serverProduct = (over: Partial<ProductData> = {}): ProductData => ({
+    ...prod(), id: id(), name: "Tank Y", brand: "Acme", partNumber: "A-1", url: "https://shop.example/y",
+    imageUrl: "https://shop.example/y.jpg", priceText: "199,00 EUR", priceEurCents: 19900, taxBasis: "gross",
+    approval: "abe", approvalText: "ABE 123",
+    source: { url: "https://shop.example/y", title: "Tank Y", accessedAt: "2026-10-30T09:00:00.000Z", supports: "Listing" },
+    linkState: "reachable", ...over,
+  });
+  const stamp = () => ({ id: id(), now: new Date("2026-10-30T10:00:00.000Z") });
+
+  it("maps a product to form values with the price as 1234,56", () => {
+    expect(pickedProductFields(serverProduct({ priceEurCents: 123456 }))).toMatchObject({
+      name: "Tank Y", url: "https://shop.example/y", brand: "Acme", partNumber: "A-1", approval: "abe",
+      approvalText: "ABE 123", priceText: "1234,56", taxBasis: "gross",
+    });
+    expect(priceCentsText(5)).toBe("0,05");
+  });
+
+  it("a product with '' approval text and padded values counts as unchanged", () => {
+    const p = serverProduct({ approvalText: "", name: "Tank Y ", brand: " Acme" });
+    const r = productToSave({ old: null, picked: p, fields: pickedProductFields(p), priceTextChanged: false, stamp: stamp() });
+    expect(r).toEqual({ ok: true, product: p });
+  });
+
+  it("an unknown price is '' and comes back as null, never 0", () => {
+    const p = serverProduct({ priceEurCents: null, priceText: null, taxBasis: "unknown" });
+    const f = pickedProductFields(p);
+    expect(f.priceText).toBe("");
+    const parsed = parseEuroInput(f.priceText);
+    expect(parsed.ok).toBe(false);
+  });
+
+  it("unchanged picked fields keep the server product exactly", () => {
+    const p = serverProduct();
+    const r = productToSave({ old: null, picked: p, fields: pickedProductFields(p), priceTextChanged: false, stamp: stamp() });
+    expect(r).toEqual({ ok: true, product: p });
+    const typed = productToSave({ old: null, picked: p, fields: { ...pickedProductFields(p), priceText: "180,00" }, priceTextChanged: true, stamp: stamp() });
+    if (!typed.ok || !typed.product) throw new Error("failed");
+    expect(typed.product).toEqual(p); // listing untouched; the typed price belongs to the item
+    expect(typed.product.source.accessedAt).toBe("2026-10-30T09:00:00.000Z");
+    expect(typed.product.linkState).toBe("reachable");
+    expect(typed.product.imageUrl).toBe("https://shop.example/y.jpg");
+  });
+
+  it("a picked product with a null listing price stays null after save", () => {
+    const p = serverProduct({ priceText: null, priceEurCents: null, taxBasis: "unknown" });
+    const r = productToSave({ old: null, picked: p, fields: pickedProductFields(p), priceTextChanged: false, stamp: stamp() });
+    expect(r).toEqual({ ok: true, product: p });
+    if (!r.ok || !r.product) throw new Error("failed");
+    expect(r.product.priceText).toBeNull();
+    expect(r.product.priceEurCents).toBeNull();
+  });
+
+  it("a cleared typed price keeps the listing; the item price is unknown, never 0", () => {
+    const p = serverProduct({ priceText: "€ 99,00", priceEurCents: 9900 });
+    const r = productToSave({ old: null, picked: p, fields: { ...pickedProductFields(p), priceText: "" }, priceTextChanged: true, stamp: stamp() });
+    expect(r).toEqual({ ok: true, product: p });
+    // The item price comes from the typed text: empty text does not parse, so the form stores null.
+    expect(parseEuroInput("").ok).toBe(false);
+  });
+
+  it("an old listing keeps its price fields; an old manual product takes the typed text", () => {
+    const listed = serverProduct({ name: "Old", priceText: "€ 99,00", priceEurCents: 9900 });
+    const f = pickedProductFields(listed);
+    expect(productToSave({ old: listed, picked: null, fields: { ...f, priceText: "50,00" }, priceTextChanged: true, stamp: stamp() }))
+      .toEqual({ ok: true, product: listed });
+    const manual = serverProduct({ name: "Man", priceText: null, priceEurCents: null, taxBasis: "unknown" });
+    const m = productToSave({ old: manual, picked: null, fields: { ...pickedProductFields(manual), priceText: "50,00" }, priceTextChanged: true, stamp: stamp() });
+    expect(m).toEqual({ ok: true, product: { ...manual, priceText: "50,00" } });
+  });
+
+  it("an edited name falls back to a manual product", () => {
+    const p = serverProduct();
+    const r = productToSave({ old: null, picked: p, fields: { ...pickedProductFields(p), name: "Tank Z" }, priceTextChanged: false, stamp: stamp() });
+    if (!r.ok || !r.product) throw new Error("failed");
+    expect(r.product).toMatchObject({ name: "Tank Z", linkState: "unchecked", imageUrl: null, priceEurCents: null });
+    expect(r.product.source.supports).toBe("Entered by the mechanic");
+  });
+
+  it("unchanged old fields keep the old product; empty name and link clear it; bad link is an error", () => {
+    const old = serverProduct({ name: "Old" });
+    const f = pickedProductFields(old);
+    expect(productToSave({ old, picked: null, fields: f, priceTextChanged: false, stamp: stamp() })).toEqual({ ok: true, product: old });
+    expect(productToSave({ old, picked: null, fields: { ...f, name: "", url: "" }, priceTextChanged: false, stamp: stamp() })).toEqual({ ok: true, product: null });
+    expect(productToSave({ old: null, picked: null, fields: { ...f, url: "http://x" }, priceTextChanged: false, stamp: stamp() }).ok).toBe(false);
   });
 });

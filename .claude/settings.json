@@ -8,6 +8,7 @@
       "Bash(npm run lint)",
       "Bash(npm run typecheck)",
       "Bash(npm test)",
+      "Bash(npx --no-install vitest run tests/search-parts.test.ts)",
       "Bash(npx --no-install vitest run tests/folderexport.test.ts)",
       "Bash(npx --no-install vitest run)",
       "Bash(npx --no-install vitest run tests/contracts.test.ts)",

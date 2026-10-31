@@ -153,7 +153,7 @@ function isAbort(error: unknown): boolean {
 
 // ------------------------------------------- Muse Spark (6.3), tools only when grounded
 
-export type SparkFormat = "bike_identification_v1" | "edit_instruction_v1" | "fit_check_v1";
+export type SparkFormat = "bike_identification_v1" | "edit_instruction_v1" | "fit_check_v1" | "parts_search_v1";
 
 /** Trusted instructions: the versioned prompt file, read from disk (traced into the bundle). */
 export function promptText(file: string): string {

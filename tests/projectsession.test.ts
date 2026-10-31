@@ -4,7 +4,8 @@ import "fake-indexeddb/auto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeDreamDb, openDreamDb, type DreamDb } from "@/lib/db";
 import { AppError } from "@/lib/errors";
-import { activeItems, pathFromRoot } from "@/lib/project";
+import { activeItems, exportPlan, pathFromRoot, projectSnapshot } from "@/lib/project";
+import { planPdfImage } from "@/lib/browser/pdfExport";
 import {
   acceptEdit, cachedIdentify, saveSheet, createFromPhoto, headVersion, identifyForPhoto, jumpToVersion, loadHeadView, newAcceptIds,
   openProject, openStorage, persistParts, redoHead, saveBike, saveErrorText, undoHead, type AcceptIds, type AcceptInput, type ProjectSession,
@@ -507,5 +508,62 @@ describe("saveSheet review-only versions (T10)", () => {
     const out = await saveSheet(h, s, { ref: refOf(s), versionId: crypto.randomUUID(), items, fees: p.fees });
     if (out.status !== "saved") throw new Error(out.status);
     expect(headVersion(out.session).items[0]!.fitReviewedHash).toBe(hash("e"));
+  });
+});
+
+describe("web reference rights (shop product photo)", () => {
+  const withRef = (s: ProjectSession, c: string, webReference?: boolean, ids?: AcceptIds): AcceptInput =>
+    ({ ...inputFor(s, "tank", "Red tank", c, ids), webReference });
+
+  it("webReference true gives external_runtime on the version and the stored image", async () => {
+    const s = await start();
+    const out = await acceptEdit(h, s, withRef(s, "b", true));
+    if (out.status !== "accepted") throw new Error(out.status);
+    expect(out.version.image.rights).toBe("external_runtime");
+    expect((await h.db.get("images", out.version.image.id))!.rights).toBe("external_runtime");
+  });
+
+  it("the owner path is unchanged with false or omitted", async () => {
+    const s = await start();
+    const a = await acceptEdit(h, s, withRef(s, "b", false));
+    const s2 = await start("d");
+    const b = await acceptEdit(h, s2, withRef(s2, "c"));
+    if (a.status !== "accepted" || b.status !== "accepted") throw new Error("refused");
+    expect(a.version.image.rights).toBe("owner");
+    expect(b.version.image.rights).toBe("owner");
+    expect((await h.db.get("images", b.version.image.id))!.rights).toBe("owner");
+  });
+
+  it("a child of an external_runtime version stays external_runtime without webReference", async () => {
+    const s0 = await start();
+    const first = await acceptEdit(h, s0, withRef(s0, "b", true));
+    if (first.status !== "accepted") throw new Error(first.status);
+    const second = await acceptEdit(h, first.session, { ...inputFor(first.session, "seat", "Seat", "c"), webReference: false });
+    if (second.status !== "accepted") throw new Error(second.status);
+    expect(second.version.image.rights).toBe("external_runtime");
+    expect((await h.db.get("images", second.version.image.id))!.rights).toBe("external_runtime");
+  });
+
+  it("a retry with the same ids keeps the rights", async () => {
+    const s = await start();
+    const ids = newAcceptIds();
+    const first = await acceptEdit(h, s, withRef(s, "b", true, ids));
+    const again = await acceptEdit(h, s, withRef(s, "b", true, ids));
+    if (first.status !== "accepted" || again.status !== "accepted") throw new Error("refused");
+    expect(again.idempotent).toBe(true);
+    expect(again.version.image.rights).toBe("external_runtime");
+    expect((await h.db.get("images", ids.imageId))!.rights).toBe("external_runtime");
+  });
+
+  it("such a version gets no folder file, an incomplete snapshot and no PDF picture", async () => {
+    const s0 = await start();
+    const out = await acceptEdit(h, s0, withRef(s0, "b", true));
+    if (out.status !== "accepted") throw new Error(out.status);
+    const { project, versions } = out.session;
+    const plan = exportPlan({ project, versions, headId: out.version.id, exportedAt: "2026-10-30T10:00:00.000Z" });
+    expect(plan.files.map((f) => f.imageId)).toEqual([versions.find((v) => v.parentId === null)!.image.id]);
+    const snap = projectSnapshot({ project, versions, cutouts: [], masks: [], plan });
+    expect(snap.complete).toBe(false);
+    expect(planPdfImage({ slot: "after", rights: out.version.image.rights, format: "jpeg", mock: false }).action).toBe("refuse");
   });
 });

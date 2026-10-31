@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loadConfig, usdToMicro } from "@/lib/server/config";
+import { loadConfig, parseShopDomains, usdToMicro } from "@/lib/server/config";
 
 const env = (e: Record<string, string>) => e as unknown as NodeJS.ProcessEnv;
 const liveEnv = {
@@ -135,6 +135,41 @@ describe("server config", () => {
         expect(c.liveBlockedReason).not.toContain(bad);
       }
       expect(modeAt({ ...win, LIVE_FROM_ET: "2026-11-09", LIVE_UNTIL_ET: "2026-11-05" }, at)).toBe("demo_only");
+    });
+  });
+
+  describe("PUBLIC_SHOP_DOMAINS", () => {
+    const shops = (value: string | undefined) => loadConfig(env({ ...liveEnv, ...(value === undefined ? {} : { PUBLIC_SHOP_DOMAINS: value }) })).shopDomains;
+
+    it("is null when unset or blank", () => {
+      expect(shops(undefined)).toBeNull();
+      for (const blank of ["", "   ", " , ,\n"]) expect(shops(blank), JSON.stringify(blank)).toBeNull();
+    });
+
+    it("parses exact hosts separated by commas, spaces or newlines", () => {
+      const want = new Set(["shop.example", "www.shop.example", "parts.example.org"]);
+      expect(shops("shop.example,www.shop.example,parts.example.org")).toEqual(want);
+      expect(shops("shop.example www.shop.example\nparts.example.org")).toEqual(want);
+      expect(shops(" shop.example , www.shop.example,\tparts.example.org, ")).toEqual(want);
+      expect(shops("shop.example, shop.example")).toEqual(new Set(["shop.example"]));
+      expect(shops("xn--bcher-kva.example")).toEqual(new Set(["xn--bcher-kva.example"]));
+    });
+
+    it("is null when any one entry is invalid", () => {
+      for (const bad of ["Shop.example", "https://shop.example", "shop.example:443", "shop.example/path", "*.shop.example",
+        "shop.*", "127.0.0.1", "10.0.0.1", "[::1]", "::1", "shop.example.", "localhost", "shop", "a..example", "-a.example",
+        "shop_x.example", "shop.example?x=1", "user@shop.example", "shop.123", "1.2.3.4.5"]) {
+        expect(parseShopDomains(bad), bad).toBeNull();
+        expect(parseShopDomains(`shop.example, ${bad}`), `list with ${bad}`).toBeNull();
+      }
+      expect(parseShopDomains(`${"a".repeat(64)}.example`)).toBeNull();
+    });
+
+    it("never changes the public feature flags", () => {
+      const features = { composite: true, reference: true, search: false, voice: false };
+      expect(loadConfig(env({ ...liveEnv, PUBLIC_SHOP_DOMAINS: "shop.example" })).features).toEqual(features);
+      expect(loadConfig(env({ ...liveEnv, PUBLIC_SHOP_DOMAINS: "" })).features).toEqual(features);
+      expect(Object.keys(loadConfig(env(liveEnv)).features).sort()).toEqual(["composite", "reference", "search", "voice"]);
     });
   });
 });

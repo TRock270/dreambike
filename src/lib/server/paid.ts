@@ -189,16 +189,66 @@ function postAttemptDenied(ip: string, now: number = Date.now()): number | null 
   return null;
 }
 
+// Free fetches (shop pages and product photos) cost no model money, so they have their own small limiter.
+// This is quota protection for those fetches, NOT a spend cap (never an in-memory counter as a public cap);
+// it never touches reserve/settle or the limiter maps above. Per instance, bounded, HMAC keys only.
+export const FREE_FETCH_PER_MINUTE = 20;
+export const FREE_FETCH_PER_DAY = 300;
+const freeFetchRecent = new Map<string, number[]>();
+const freeFetchDaily = new Map<string, number>();
+
+/**
+ * Counts one free fetch for this client; returns seconds to wait when over the limit, else null. Deployed:
+ * keyed by an HMAC of the trusted platform IP header and the ET day (a missing or invalid header refuses, so no
+ * fetch happens). Local development uses one fixed bucket per ET day.
+ */
+export function freeFetchDenied(req: Request, config: ServerConfig, now: number = Date.now()): number | null {
+  const secret = visitorSecret();
+  if (!secret) return 3600;
+  const day = dayET(new Date(now));
+  let key = `local\n${day}`; // the ET day is part of the local key too, so the daily count resets at ET midnight
+  if (config.deployed) {
+    const address = normalizeClientIp(req.headers.get("x-vercel-forwarded-for"));
+    if (!address) return 3600;
+    key = labeledHmac(secret, "ip", `${address}\n${day}`);
+  }
+  const recent = (freeFetchRecent.get(key) ?? []).filter((t) => t <= now && now - t < POST_ATTEMPTS_WINDOW_MS);
+  if (recent.length >= FREE_FETCH_PER_MINUTE) {
+    freeFetchRecent.set(key, recent);
+    return Math.max(1, Math.ceil((recent[0]! + POST_ATTEMPTS_WINDOW_MS - now) / 1000));
+  }
+  const today = freeFetchDaily.get(key) ?? 0;
+  if (today >= FREE_FETCH_PER_DAY) {
+    freeFetchRecent.set(key, recent);
+    return 3600;
+  }
+  freeFetchDaily.delete(key);
+  makeRoom(freeFetchDaily);
+  freeFetchDaily.set(key, today + 1);
+  recent.push(now);
+  freeFetchRecent.delete(key);
+  makeRoom(freeFetchRecent);
+  freeFetchRecent.set(key, recent);
+  return null;
+}
+
 /** Test only: forget both limiters. */
 export function resetQuotaLimitersForTests(): void {
   visitorWindows.clear();
   postAttempts.clear();
   dailyAttempts.clear();
+  freeFetchRecent.clear();
+  freeFetchDaily.clear();
 }
 
-/** Test only: current sizes of the two maps. */
-export function quotaLimiterSizesForTests(): { visitorWindows: number; postAttempts: number; dailyAttempts: number } {
-  return { visitorWindows: visitorWindows.size, postAttempts: postAttempts.size, dailyAttempts: dailyAttempts.size };
+/** Test only: current sizes of the limiter maps. */
+export function quotaLimiterSizesForTests(): {
+  visitorWindows: number; postAttempts: number; dailyAttempts: number; freeFetchRecent: number; freeFetchDaily: number;
+} {
+  return {
+    visitorWindows: visitorWindows.size, postAttempts: postAttempts.size, dailyAttempts: dailyAttempts.size,
+    freeFetchRecent: freeFetchRecent.size, freeFetchDaily: freeFetchDaily.size,
+  };
 }
 
 export async function withReservation<T>(call: PaidCall, dispatch: (signal: AbortSignal) => Promise<Dispatched<T>>): Promise<T> {

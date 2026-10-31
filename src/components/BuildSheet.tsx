@@ -15,7 +15,7 @@ import { slotInfo } from "@/lib/slots";
 import type { BikeRevision, BuildItemData, FeeData, InspectionReviewData, Version } from "@/lib/types";
 import { FitBadge } from "./FitBadge";
 import { PaperworkSummary } from "./PaperworkSummary";
-import { ProductFields } from "./ProductFields";
+import { ProductFields, type PartSearchSupport } from "./ProductFields";
 
 /** What BuildSheet hands to Workspace to save: the new items for a child of `headId`. */
 export type SheetChange = {
@@ -51,6 +51,10 @@ type Props = {
   fit: FitSupport | null;
   /** Tells Workspace a fit check is running (it keeps Undo and Redo from moving the version meanwhile). */
   onFitRunning: (running: boolean) => void;
+  /** Shop search flags, confirmed bike and preferred hosts for "Find in your shops"; null hides it. */
+  partSearch?: PartSearchSupport | null;
+  /** Tells Workspace a part search started or ended (it refreshes the budget banner). */
+  onPaidSearch?: (running: boolean) => void;
 };
 
 const button = "rounded-full border border-hairline px-4 py-1.5 text-[13px] disabled:opacity-50";
@@ -327,7 +331,7 @@ type RowState = { headId: string; itemId: string; mode: "edit" | "remove" } | nu
  * The sheet of the version shown: one row per part, each with Edit and Remove.
  * Every save makes a new "sheet" step in the history; Undo goes back. The photo never changes.
  */
-export function BuildSheet({ head, readOnlyReason, blockedReason, saving, onSave, onClose, fit, onFitRunning }: Props) {
+export function BuildSheet({ head, readOnlyReason, blockedReason, saving, onSave, onClose, fit, onFitRunning, partSearch, onPaidSearch }: Props) {
   const titleRef = useRef<HTMLHeadingElement>(null);
   const [row, setRow] = useState<RowState>(null);
   const [problem, setProblem] = useState<{ itemId: string; text: string } | null>(null);
@@ -505,6 +509,7 @@ export function BuildSheet({ head, readOnlyReason, blockedReason, saving, onSave
               )}
               {mode === "edit" && head && (
                 <ProductFields key={`${head.id}:${item.id}`} item={item} disabled={locked} saving={saving} error={rowProblem}
+                  partSearch={partSearch} onPaidSearch={onPaidSearch}
                   onSave={(patch) => saveEdit(item, patch)} onCancel={() => { setProblem(null); setRow(null); }} />
               )}
               {mode === "remove" && (

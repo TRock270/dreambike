@@ -5,7 +5,7 @@
 import type { z } from "zod";
 import type {
   Bike, BuildItem, ErrorCode, Fee, FitResult, InspectionReview, Instruction, Point, Product,
-  Settings, Slot, CompositeResponse, EditMode,
+  Settings, Slot, CompositeResponse, EditMode, SearchRequest as SearchRequestSchema, SearchResponse as SearchResponseSchema,
   ImageRef as ImageRefSchema, StoredImage as StoredImageSchema, StoredMask as StoredMaskSchema,
   Part as PartSchema, BikeRevision as BikeRevisionSchema, Version as VersionSchema,
   Project as ProjectSchema, CacheEntry as CacheEntrySchema, MetaRecord as MetaRecordSchema,
@@ -14,6 +14,8 @@ import type {
 
 export type EditModeId = z.infer<typeof EditMode>;
 export type SlotId = z.infer<typeof Slot>;
+export type SearchRequestData = z.infer<typeof SearchRequestSchema>;
+export type SearchResponseData = z.infer<typeof SearchResponseSchema>;
 export type BikeData = z.infer<typeof Bike>;
 export type ProductData = z.infer<typeof Product>;
 export type FitData = z.infer<typeof FitResult>;

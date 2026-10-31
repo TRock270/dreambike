@@ -1,7 +1,7 @@
 // Client calls for POST /api/identify and POST /api/instruction.
 import type { z } from "zod";
-import { CheckResponse, ErrorResponse, IdentifyResponse, InstructionResponse, type CheckRequest } from "../contracts";
-import type { BikeData, InstructionData, PhotoRef, SlotId } from "../types";
+import { CheckResponse, ErrorResponse, IdentifyResponse, InstructionResponse, SearchResponse, type CheckRequest } from "../contracts";
+import type { BikeData, InstructionData, PhotoRef, SearchRequestData, SearchResponseData, SlotId } from "../types";
 import { PreflightError } from "./preflight";
 
 async function post(url: string, form: FormData, signal?: AbortSignal): Promise<unknown> {
@@ -78,5 +78,30 @@ export async function requestCheck(request: CheckRequestData, signal?: AbortSign
   }
   const parsed = CheckResponse.safeParse(body);
   if (!parsed.success) throw new PreflightError("SCHEMA_INVALID", "The fit check answer had an unexpected shape.");
+  return parsed.data;
+}
+
+/**
+ * POST /api/search-parts with a JSON body (SPEC 5). One attempt: URL mode with a dead link costs nothing,
+ * query mode is a paid search, so there is no automatic retry. The server fetches the shop page itself.
+ */
+export async function requestPartSearch(request: SearchRequestData, signal?: AbortSignal): Promise<SearchResponseData> {
+  let res: Response;
+  try {
+    res = await fetch("/api/search-parts", {
+      method: "POST", signal, body: JSON.stringify(request),
+      headers: { "Content-Type": "application/json", "X-Request-Id": crypto.randomUUID() },
+    });
+  } catch {
+    throw new PreflightError("UPSTREAM_UNAVAILABLE", "The app server could not be reached.");
+  }
+  const body: unknown = await res.json().catch(() => null);
+  if (!res.ok) {
+    const err = ErrorResponse.safeParse(body);
+    if (err.success) throw new PreflightError(err.data.error.code, err.data.error.message);
+    throw new PreflightError(res.status >= 500 ? "UPSTREAM_UNAVAILABLE" : "INVALID_REQUEST", "The request failed.");
+  }
+  const parsed = SearchResponse.safeParse(body);
+  if (!parsed.success) throw new PreflightError("SCHEMA_INVALID", "The part search answer had an unexpected shape.");
   return parsed.data;
 }

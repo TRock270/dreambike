@@ -522,7 +522,9 @@ async function putImageDeduped(tx: WriteTx, image: StoredImage, onlyRights?: Sto
     const parsed = StoredImageSchema.safeParse(raw);
     if (!parsed.success) continue;
     const existing = parsed.data;
-    if (onlyRights && existing.rights !== onlyRights) continue; // a logo must keep rights "owner"
+    // Never share a record across rights: version.image.rights and the stored record must agree,
+    // or the PDF (stored record) and folder export (version ref) could disagree.
+    if (existing.rights !== (onlyRights ?? image.rights)) continue;
     if (existing.blob.size !== existing.bytes || existing.width !== image.width || existing.height !== image.height) continue;
     await tx.objectStore("images").put({ ...existing, lastAccessedAt: Math.max(existing.lastAccessedAt, image.lastAccessedAt) });
     return existing.id;
@@ -676,7 +678,8 @@ export async function acceptVisual(
     throw new InvalidWriteError("The new version must be a child of the expected head in this project.");
   }
   if (version.image.id !== image.id || version.image.hash !== image.hash ||
-    version.image.width !== image.width || version.image.height !== image.height || version.image.bytes !== image.bytes) {
+    version.image.width !== image.width || version.image.height !== image.height || version.image.bytes !== image.bytes ||
+    version.image.rights !== image.rights) {
     throw new InvalidWriteError("The new version's image reference does not match the image to store.");
   }
   if (cutout && version.cutoutImageId !== cutout.id) {

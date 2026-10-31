@@ -1,6 +1,6 @@
 // Calls POST /api/normalize and turns the WireImage data URL into a Blob right
 // away, so large base64 strings do not linger in app state (SPEC.md 5).
-import { ErrorResponse, NormalizeResponse } from "../contracts";
+import { ErrorResponse, NormalizeResponse, ProductImageResponse } from "../contracts";
 import type { NormalizedPhoto } from "../types";
 import { PreflightError } from "./preflight";
 
@@ -28,4 +28,32 @@ export async function uploadForNormalize(photo: Blob): Promise<NormalizedPhoto> 
   const { image, warnings } = parsed.data;
   const blob = await (await fetch(image.dataUrl)).blob();
   return { blob, width: image.width, height: image.height, hash: image.hash, warnings };
+}
+
+/**
+ * Fetch a shop product photo through POST /api/product-image (SPEC 5). The server only downloads it from an
+ * allowlisted shop host. The answer is turned into a Blob right away; it lives in browser memory only.
+ */
+export async function requestProductImage(url: string, signal?: AbortSignal): Promise<NormalizedPhoto> {
+  let res: Response;
+  try {
+    res = await fetch("/api/product-image", {
+      method: "POST", signal, body: JSON.stringify({ url, rightsConfirmed: true }),
+      headers: { "Content-Type": "application/json", "X-Request-Id": crypto.randomUUID() },
+    });
+  } catch {
+    throw new PreflightError("UPSTREAM_UNAVAILABLE", "The app server could not be reached. Try again.");
+  }
+  const body: unknown = await res.json().catch(() => null);
+  if (!res.ok) {
+    const err = ErrorResponse.safeParse(body);
+    if (err.success) throw new PreflightError(err.data.error.code, err.data.error.message);
+    throw new PreflightError(res.status >= 500 ? "UPSTREAM_UNAVAILABLE" : "INVALID_REQUEST",
+      "The product photo could not be fetched.");
+  }
+  const parsed = ProductImageResponse.safeParse(body);
+  if (!parsed.success) throw new PreflightError("SCHEMA_INVALID", "The server answer had an unexpected shape.");
+  const { image } = parsed.data;
+  const blob = await (await fetch(image.dataUrl)).blob();
+  return { blob, width: image.width, height: image.height, hash: image.hash, warnings: [] };
 }

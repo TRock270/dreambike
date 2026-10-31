@@ -8,7 +8,7 @@ import {
   attachFitResponse, deleteProject, getLastOpenProject, getShopSettings, getStoredImage, getStoredMask, listProjects, readCachedFit, loadProject, loadSettings,
   setLastOpenProject, snapshotSources, type DreamDb,
 } from "@/lib/db";
-import { children, exportPlan, projectSnapshot, type PendingRef, type SnapshotResult } from "@/lib/project";
+import { activeItems, children, exportPlan, projectSnapshot, type PendingRef, type SnapshotResult } from "@/lib/project";
 import {
   folderErrorText, folderImportErrorText, folderPermission, isFolderExportSupported, pickFolder, pickProjectFolderForImport,
   readProjectFolder, rememberedFolder, saveProjectToFolder,
@@ -46,6 +46,7 @@ import { InstructionPreview } from "./InstructionPreview";
 import { PaintForm } from "./PaintForm";
 import { ShopSettingsForm } from "./ShopSettingsForm";
 import { PartSelector, type BoxTarget, type PointTarget } from "./PartSelector";
+import type { PartSearchFlags } from "./ProductFields";
 import { ReferenceDropzone } from "./ReferenceDropzone";
 import { ProjectList, type ProjectListState } from "./ProjectList";
 import { UploadDropzone } from "./UploadDropzone";
@@ -97,14 +98,16 @@ const PREVIEW_DISCARDED = "The preview was discarded because the version shown c
 /** Header, photo area, edit panel and history. Projects are saved in this browser (SPEC 9). */
 /** What a pending render remembers: which project and head it was made for, and the IDs an accept will use. */
 type RenderEntry = { key: string; state: RenderState; newMask: BinaryMask | null; ref: PendingRef | null; ids: AcceptIds;
-  /** Hash of the reference photo this render used (memory only), or null for text and paint. */ referenceHash: string | null };
+  /** Hash of the reference photo this render used (memory only), or null for text and paint. */ referenceHash: string | null;
+  /** The reference was a shop product photo. Kept here because the reference is cleared around accept; the accept passes it on as rights "external_runtime". */
+  webReference: boolean };
 
 /** Facing only changes the derived parts when a front/rear phrase was actually detected on this photo. */
 function facingChangesParts(m: PartMapState): boolean {
   return Object.keys(PAIRED_SLOTS).some((phrase) => m.requests[phrase] === "done");
 }
 
-export function Workspace({ referenceEnabled, appMode }: { referenceEnabled: boolean; appMode: AppMode }) {
+export function Workspace({ referenceEnabled, appMode, partSearch }: { referenceEnabled: boolean; appMode: AppMode; partSearch: PartSearchFlags }) {
   const [noticeAccepted, setNoticeAccepted] = useState(false);
   const [photo, setPhoto] = useState<NormalizedPhoto | null>(null);
   const [map, setMap] = useState<PartMapState>(() => emptyPartMap());
@@ -116,6 +119,7 @@ export function Workspace({ referenceEnabled, appMode }: { referenceEnabled: boo
   const [pointBusy, setPointBusy] = useState(false);
   // Counts every paid request that has ended (any outcome). It is part of the budget banner's refresh key,
   // so background calls such as the bike recut after an accept refresh the banner too.
+  const [searchBusy, setSearchBusy] = useState(false); // a part search is running (query search is paid)
   const [paidSettled, setPaidSettled] = useState(0);
   const noteSettled = () => setPaidSettled((n) => n + 1);
   const pointAbort = useRef<AbortController | null>(null);
@@ -127,7 +131,7 @@ export function Workspace({ referenceEnabled, appMode }: { referenceEnabled: boo
   const [editMode, setEditMode] = useState<"text" | "paint" | "reference">("text");
   // The reference photo lives in browser memory only: never in IndexedDB, never in the project, never in an export.
   // It is tied to the part it was added for, so a front-wheel crop can never be sent for the rear wheel.
-  const [refState, setRefState] = useState<{ key: string; photo: NormalizedPhoto } | null>(null);
+  const [refState, setRefState] = useState<{ key: string; photo: NormalizedPhoto; web: boolean } | null>(null);
   // Set when a route answers FEATURE_DISABLED: the server's own message, shown instead of the tab.
   const [referenceOff, setReferenceOff] = useState<string | null>(null);
   // A prepared instruction belongs to one part of one photo; anything else is stale.
@@ -938,6 +942,12 @@ export function Workspace({ referenceEnabled, appMode }: { referenceEnabled: boo
   // An absent part is added by describing it: paint and reference photos are not offered.
   const mode = paintOnly ? "paint" : absent ? "text" : editMode === "reference" && !referenceOffered ? "text" : editMode;
   const reference = mode === "reference" && refState && refState.key === selectionKey ? refState.photo : null;
+  const referenceIsWeb = reference !== null && refState?.web === true;
+  // The product photo is offered only with reference mode, only when the server allows it, and only when the
+  // part's active build item has a product with a photo link.
+  const shownHead = session ? headVersion(session) : null; // `head` is declared further down
+  const productImageUrl = partSearch.photo && referenceOffered && shownHead && selected
+    ? activeItems(shownHead).find((it) => it.slot === selected.slot)?.product?.imageUrl ?? null : null;
   // The key includes the bike as sent, so editing the bike makes an older preview stale.
   // It also includes the shown version, so a preview never carries over to another head.
   // The reference hash is part of the key too: swapping the reference makes an instruction prepared for the
@@ -973,13 +983,15 @@ export function Workspace({ referenceEnabled, appMode }: { referenceEnabled: boo
     renderAbort.current = controller;
     const key = prepKey, base = photo, part = selected, instruction = current.instruction;
     const refPhoto = mode === "reference" ? reference : null;
+    // "Retry blend" keeps the flag of the render that made the cached image; a new render takes it from its reference.
+    const webReference = reuse ? renderEntry?.webReference === true : refPhoto !== null && referenceIsWeb;
     // Every preview is tied to the project and head it was made for, with fresh IDs for its accept.
     const ref: PendingRef | null = session ? { projectId: session.project.id, expectedHeadId: session.project.headVersionId } : null;
     const ids = newAcceptIds();
     const bikeBox = view.bike?.box ?? null;
     let generated: Generated | null = reuse ? cached : null;
     const put = (state: RenderState, newMask: BinaryMask | null = null) => {
-      if (!controller.signal.aborted) setRender({ key, state, newMask, ref, ids, referenceHash: refPhoto?.hash ?? null });
+      if (!controller.signal.aborted) setRender({ key, state, newMask, ref, ids, referenceHash: refPhoto?.hash ?? null, webReference });
     };
     try {
       if (!generated) {
@@ -1042,7 +1054,7 @@ export function Workspace({ referenceEnabled, appMode }: { referenceEnabled: boo
       try {
         const out = await acceptEdit(ready.h, saved, {
           ref: entry.ref, ids: entry.ids, slot: selected.slot, mode, instruction: current.instruction,
-          result, refreshed: part,
+          result, refreshed: part, webReference: entry.webReference,
         });
         if (out.status === "refused") {
           // Refused before any write: the preview is dropped and nothing is repeated automatically.
@@ -1267,7 +1279,7 @@ export function Workspace({ referenceEnabled, appMode }: { referenceEnabled: boo
 
   // The budget banner fetches again whenever one of these flips: a paid call (segment, identify, instruction,
   // render, fit check) has started or ended. A GET costs nothing, so an extra fetch at the start is harmless.
-  const budgetKey = [renderRunning, fitBusy, pointBusy, map.done, identify.status, prepared?.state ?? "none", paidSettled].join("|");
+  const budgetKey = [renderRunning, fitBusy, searchBusy, pointBusy, map.done, identify.status, prepared?.state ?? "none", paidSettled].join("|");
   const showDemo = demoOpen && !photo;
   const demoDb = storage?.status === "ready" && !storage.readOnly ? storage.h : null;
   const demoBlockedReason = storage === null ? "Local storage is still opening."
@@ -1333,6 +1345,9 @@ export function Workspace({ referenceEnabled, appMode }: { referenceEnabled: boo
           {panel === "sheet" && (
             <BuildSheet head={session && head ? head : null} readOnlyReason={sheetReason} blockedReason={sheetBlocked}
               saving={sheetSaving} onSave={saveSheetChange} onClose={() => setPanel("edit")}
+              partSearch={{ flags: partSearch, bike: bikeRevision?.confirmed ? bikeRevision : null,
+                preferredDomains: shopSettings?.preferredShopDomains ?? [] }}
+              onPaidSearch={(running) => { setSearchBusy(running); if (!running) noteSettled(); }}
               fit={fitSupport} onFitRunning={(running) => { setFitBusy(running); if (!running) noteSettled(); }} />
           )}
           {panel === "estimate" && (
@@ -1423,7 +1438,8 @@ export function Workspace({ referenceEnabled, appMode }: { referenceEnabled: boo
                   {mode === "reference" && (
                     <ReferenceDropzone key={`r-${selectionKey}`} partLabel={selected.label} reference={reference} initialText={prefillFor(selectionKey)}
                       busy={current?.state === "busy"} onPrepare={prepareByUser}
-                      onReference={(p) => setRefState(p && selectionKey ? { key: selectionKey, photo: p } : null)} />
+                      productImageUrl={productImageUrl} webReference={referenceIsWeb}
+                      onReference={(p, source) => setRefState(p && selectionKey ? { key: selectionKey, photo: p, web: source?.web === true } : null)} />
                   )}
                   {current?.state === "busy" && <p role="status" className="text-text-secondary text-[13px]">Preparing the change…</p>}
                   {current?.state === "error" && (

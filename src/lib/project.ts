@@ -292,6 +292,59 @@ export function manualProduct(
   return { ok: true, product: parsed.data };
 }
 
+// ------------------------------------------------------- picked product (UI)
+
+/** Euro cents as the price field shows them: "1234,56", "" for unknown. */
+export const priceCentsText = (c: number | null): string =>
+  c === null ? "" : `${Math.floor(c / 100)},${String(c % 100).padStart(2, "0")}`;
+
+export type ProductFormValues = {
+  name: string; url: string; brand: string; partNumber: string; approval: ProductData["approval"];
+  approvalText: string; priceText: string; taxBasis: ProductData["taxBasis"];
+};
+
+/** The form values for a product the server found. Unknown price becomes "", never "0,00". */
+export function pickedProductFields(product: ProductData): ProductFormValues {
+  return {
+    name: product.name, url: product.url, brand: product.brand ?? "", partNumber: product.partNumber ?? "",
+    approval: product.approval, approvalText: product.approvalText ?? "",
+    priceText: priceCentsText(product.priceEurCents), taxBasis: product.taxBasis,
+  };
+}
+
+const orNullText = (t: string | null | undefined) => (t && t.trim() !== "" ? t.trim() : null);
+
+// Both sides are normalized (trim, "" = null) so a schema-valid server product with "" or padded
+// values still counts as unchanged when its own form values come back.
+function sameProductFields(p: ProductData, f: ProductFormValues): boolean {
+  return p.name.trim() === f.name.trim() && p.url.trim() === f.url.trim() &&
+    orNullText(p.brand) === orNullText(f.brand) && orNullText(p.partNumber) === orNullText(f.partNumber) &&
+    p.approval === f.approval && orNullText(p.approvalText) === orNullText(f.approvalText);
+}
+
+/**
+ * Decide which product to save from the typed fields. Unchanged picked fields keep the product
+ * exactly as the server returned it (source, accessedAt, linkState, imageUrl); unchanged old fields
+ * keep the old one (only typed price text may change); anything else is a manual product.
+ * Empty name and link means no product (null).
+ */
+export function productToSave(input: {
+  old: ProductData | null; picked: ProductData | null; fields: ProductFormValues;
+  priceTextChanged: boolean; stamp: { id: string; now: Date };
+}): { ok: true; product: ProductData | null } | { ok: false; message: string } {
+  const { old, picked, fields, priceTextChanged, stamp } = input;
+  if (fields.name.trim() === "" && fields.url.trim() === "") return { ok: true, product: null };
+  // The product record is the listing as the server returned it (priceText and priceEurCents stay
+  // as listed, possibly null). The mechanic's price lives in the item (partPriceCents).
+  if (picked && sameProductFields(picked, fields)) return { ok: true, product: picked };
+  if (old && sameProductFields(old, fields)) {
+    // A manual product (no listed cents) may still carry the typed text; a listing never does.
+    const retext = priceTextChanged && old.priceEurCents === null;
+    return { ok: true, product: retext ? { ...old, priceText: orNullText(fields.priceText) } : old };
+  }
+  return manualProduct({ ...fields }, stamp);
+}
+
 // ------------------------------------------------------------ money text
 
 /** Parse typed euros to integer cents. No rounding: anything unclear is refused. */

@@ -384,6 +384,7 @@ describe("fix-until-green keeps Opus wherever review-changes calls security-revi
   // variants, because some rules there have no end anchor.
   const SECURITY_PATHS = [
     "budget/reserve.lua", "src/lib/server/budget.ts", "src/lib/server/config.ts", "src/lib/server/fetch-product.ts",
+    "src/lib/server/searchPolicy.ts", "tests/search-parts.test.ts",
     "src/lib/server/meta.ts", "src/lib/server/http.ts", "src/lib/server/paid.ts", "tests/budget.test.ts",
     "src/app/api/edit/route.ts", "spike/ledger.py", "spike/common.py", "spike/deployment.py", "spike/run_all.py",
     "spike/responses_sam.py", "spike/responses_spark.py", "spike/images_edits.py", "spike/asr_transcribe.py",

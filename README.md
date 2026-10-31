@@ -23,12 +23,13 @@ Every item below is built and was checked in its ticket (see TASKS.md).
 - Owned reference photo mode: a reference photo you own or may use can serve as the reference for an edit.
 - Projects live in the browser (IndexedDB). You can save and open a project in a folder.
 - Build sheet with manual product input; fit check and German paperwork pre-check (Muse Spark with web search; sources are shown only when the model cites them, and when evidence is missing the answer is "verify", never "ok"). The cached demo check found no citable source, so every item there says verify.
+- Part lookup in the server's list of allowed shop websites: paste a product link and the server reads that page and asks Muse Spark for the product; a text search with web search runs only on a local development machine. Price, approval, shipping region and product photo are kept only when the fetched product page itself shows them; otherwise they say unknown, and each shop that gave nothing usable is named with the reason. A product photo can serve as the reference photo after you confirm you may use it; renders made with it stay out of the PDF and the folder save.
 - Shop settings, an example shop, an estimate in integer EUR cents with 19% VAT and inspection fees.
 - Client-side estimate PDF with before/after images and a paperwork summary (pdf-lib, IBM Plex fonts).
 - Cached demo project with precomputed results, and an atomic budget ledger (Upstash Redis, Lua scripts) that caps paid calls.
 - Deployment on Vercel and `spike/deployment.py` checks against the live origin.
 
-Not built: part search and product images, voice input, German PDF, mobile layout, accounts.
+Not built: voice input, German PDF, mobile layout, accounts.
 
 ## Meta models
 
@@ -37,10 +38,10 @@ The app uses three Meta models through the Meta Model API. Only `src/lib/server/
 | Model | Used by | What for |
 | --- | --- | --- |
 | `sam-3.1` | `/api/segment` | Bike and part masks from a part name (concept prompts). Point clicks work only offline and in mock mode until the mask placement check (U01) is cleared; a box makes no SAM call |
-| `muse-spark-1.3-contributor` | `/api/identify`, `/api/instruction`, `/api/check` | Bike identification, edit instruction text, and the fit and paperwork pre-check (the check uses web search; off on the public site) |
+| `muse-spark-1.3-contributor` | `/api/identify`, `/api/instruction`, `/api/check`, `/api/search-parts` | Bike identification, edit instruction text, the fit and paperwork pre-check, and part lookup (the check and the text search use web search; both are off on the public site; link lookup reads the fetched page without web search) |
 | `muse-image-1.0` | `/api/edit` | One edited image per click, including the owned-reference mode |
 
-No model is called by `/api/normalize`, `/api/composite` (local sharp image code), `/api/budget` or `/api/health`. Voice input is not used. Contributor mode means Meta may train on submitted content.
+No model is called by `/api/normalize`, `/api/composite` (local sharp image code), `/api/product-image` (fetches a product photo from a listed shop), `/api/budget` or `/api/health`. Voice input is not used. Contributor mode means Meta may train on submitted content.
 
 ## Architecture
 
@@ -106,7 +107,8 @@ Live edits on the public site run only from 2026-11-05 to 2026-11-09, US Eastern
 - HEIC photos are rejected; export a JPEG first.
 - Spending caps apply: $5 per day in total and $0.50 per visitor per day on the public site, and a $100 project hard cap.
 - One image render per explicit click; renders can differ from the photo, which is why the drift check and your accept step exist.
-- Not built: part search and product images, voice input, German PDF, accounts.
+- Part lookup works only with the shops in the server's shop list (PUBLIC_SHOP_DOMAINS); without that list it is off. The list is not set on the public site yet, so part lookup is currently off there; the 2026-10-30 check ran on a local development server. Text search with web search runs only on a local development machine. Product photos are often served from another host than the shop's own, so they are left out unless that host is in the list. In the 2026-10-30 check one link lookup found the product with the price unknown, because that page shows no price, and one text search found no matching product.
+- Not built: voice input, German PDF, accounts.
 
 ## Provenance: what was built when
 
@@ -130,7 +132,7 @@ Disclosure: DreamBike was built during the hackathon, from Oct 27, 2026. The cod
 - MIT license for our original code only (`LICENSE`). It does not cover photos, demo images, fonts, dependencies, or Meta services and models.
 - `CREDITS.md` lists fonts, every direct dependency with its license, and every photo with date and consent coverage.
 - Background signage and trademarks in the photos are incidental and belong to their owners. DreamBike is not endorsed by Meta, BMW, TÜV or any shop; brand names only describe bikes and parts.
-- No shop product images are included or fetched in this build.
+- No shop product image is included in the repository, the public assets, fixtures, the cached demo, a PDF or a folder save. The optional part lookup can fetch a product photo from a listed shop into the visitor's own browser project, only after the visitor confirms they may use it; the server does not store it. Renders made with it carry rights external_runtime and are left out of the PDF and the folder save.
 
 ## Commands
 

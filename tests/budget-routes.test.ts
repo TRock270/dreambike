@@ -10,6 +10,8 @@ import { POST as identifyPOST } from "@/app/api/identify/route";
 import { POST as instructionPOST } from "@/app/api/instruction/route";
 import { POST as normalizePOST } from "@/app/api/normalize/route";
 import { POST as segmentPOST } from "@/app/api/segment/route";
+import { POST as searchPartsPOST } from "@/app/api/search-parts/route";
+import { POST as productImagePOST } from "@/app/api/product-image/route";
 import { BudgetResponse, ErrorResponse, HealthResponse } from "@/lib/contracts";
 import { SESSION_COOKIE, SESSION_MAX_AGE_S, issueSession, readSession } from "@/lib/server/http";
 import { clearStatusCache } from "@/lib/server/budget";
@@ -59,7 +61,7 @@ const setCookieOf = (res: Response) => res.headers.get("set-cookie");
 const cookieValueOf = (res: Response) => /db_session=([^;]+)/.exec(setCookieOf(res) ?? "")?.[1] ?? null;
 
 describe("POSTs need a valid session cookie", () => {
-  const routes = { normalizePOST, compositePOST, segmentPOST, identifyPOST, instructionPOST, editPOST, checkPOST };
+  const routes = { normalizePOST, compositePOST, segmentPOST, identifyPOST, instructionPOST, editPOST, checkPOST, searchPartsPOST, productImagePOST };
   const cookies: Record<string, () => string | null> = {
     missing: () => null,
     forged: () => `${SESSION_COOKIE}=v1.${"A".repeat(22)}.${Math.floor(Date.now() / 1000)}.${"B".repeat(43)}`,
