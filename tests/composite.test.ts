@@ -55,7 +55,7 @@ describe("composite fallbacks and protection (SPEC 7)", () => {
     // The core of the part is fully the edited color.
     const core = (450 + 30) * W + 700;
     expect(Array.from(res.image.data.slice(core * 3, core * 3 + 3))).toEqual([200, 30, 30]);
-  });
+  }, 15_000); // full-size pixel loops; under parallel load this passed 5 s
 
   it("takes the documented full-image path in SPEC order", () => {
     const run = (o: Partial<{ enabled: boolean; intent: "paint" | "geometry"; gen: { width: number; height: number };

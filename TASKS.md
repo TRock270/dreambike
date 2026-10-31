@@ -1622,3 +1622,8 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Rebased onto main 1a75216 (eslint.config.mjs: kept main's `.claude/worktrees/**` ignore). After the rebase: lint pass, typecheck pass, `npm test` 1151 passed / 26 skipped, build pass. Known unrelated flake: tests/composite.test.ts can hit its 5 s timeout under heavy CPU load.
 - Allow line for the targeted client-boundary test run: added by the owner (60e2f92).
 - Still open: deploy, then `spike/deployment.py` against the live URL.
+
+### Composite test timeout and SEC2 merge — 2026-10-31, about 19:30 ET (lead, owner go)
+
+- tests/composite.test.ts: the full-size "outside the feather support" test gets a 15 s timeout (it hit the 5 s default under parallel load, 5.7 s in the post-merge run; alone it passes). Assertions unchanged. /review-changes quick (imaging, general): green, one minor (30 s was too loose) taken.
+- SEC2 reached main by fast-forward (03ce306, 90938af). SEC1's uncommitted tests/edit.test.ts change was set aside for the merge and restored; the one-line import conflict keeps both sides. SEC1's other uncommitted files were not touched. Worktree and branch sec2/frontend-keys removed.
