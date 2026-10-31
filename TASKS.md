@@ -211,6 +211,14 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 - Work and exact done-when items: in the local, gitignored security-notes.md (not part of the repo) until the fix is deployed (owner request 2026-10-31: no open findings in the public repo). The SEC1 gate takes its items from there.
 - Done when (summary): both major input validation gaps from the 2026-10-31 check are closed with tests that prove it; normal composite, folder round trip and project open still pass. Run build, lint, types, tests and the image checks.
 
+## SEC2 — Guard the server-secret boundary against regressions (owner follow-up, 2026-10-31)
+
+- Priority: owner request ("Behebe Lücken", after the "Kein API-Key im Frontend" check, see log). Estimate: 1h. Depends on: T1, T13. No paid calls. Built in worktree branch sec2/frontend-keys while SEC1 ran on main.
+- Status: DONE 2026-10-31 (see log).
+- Files: src/lib/types.ts, src/lib/server/config.ts, src/components/ModeBanner.tsx, src/components/ExportButton.tsx, src/components/EstimatePreview.tsx, src/components/Workspace.tsx, src/lib/pdf.ts, src/lib/browser/pdfExport.ts, tests/pdf.test.ts, src/lib/server/sse.ts, src/lib/server/meta.ts, tests/edit.test.ts, eslint.config.mjs, tests/client-boundary.test.ts.
+- Work: AppMode lives in src/lib/types.ts, so browser code imports nothing from src/lib/server; every src/lib/server module is marked server-only; ESLint rules (core rules, no new dependency) keep process.env and server imports out of browser code, keep secret names inside the six server modules SPEC 3 allows, and keep whole or dynamic process.env out of rendered app files; readJsonLimited maps a dropped body stream to UPSTREAM_UNAVAILABLE.
+- Done when: lint passes on the current code; tests/client-boundary.test.ts runs the real ESLint config on in-memory snippets and shows each rule firing and the allowed forms passing, and that every "use client" file gets the browser rules; a test asserts the server-only marker in every src/lib/server module; a dropped body stream gives UPSTREAM_UNAVAILABLE and the reservation stays as conservative as before. Run build, lint, types and tests.
+
 ## Completion log template
 
 For each completed ticket append actual date/time ET, files changed, checks and observations, cost ledger total, remaining U-gates, actual hours, and commit hash. For a cut/blocked ticket record the concrete fallback or missing input. A checkbox alone is not evidence. The final README and video use this actual log, not the estimates above.
@@ -1603,3 +1611,14 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 
 - Owner request: remove the open security findings from the public repo. Details of R1–R7, K1–K6, the input validation findings, the SEC1 work/done-when and the SEC1 resume steps moved verbatim to the local, gitignored security-notes.md; TASKS.md keeps neutral entries (checks, agents, verdicts). Earlier commits on origin/main still hold the old text; history is not rewritten (commit-history rule), owner informed.
 - /review-changes quick (security, release, general): green, four minors: SEC1 card got a summary done-when; history note recorded here.
+
+### SEC2 — 2026-10-31, from about 14:00 ET, paused in between, done about 19:10 ET (lead, worktree branch sec2/frontend-keys, build-ticket wf_a8154882-ba1)
+
+- Owner go after the "Kein API-Key im Frontend" check: regression guards for the server-secret boundary (no leak in the current code). Built in a separate worktree because SEC1 was in progress on main; paused and resumed at the owner's request.
+- `/build-ticket SEC2`, 3 units (AppMode move, server-only marker and body-stream error, ESLint rules with tests), each with security-reviewer: all approved, gate 6/6. Lead follow-ups after two `/review-changes` quick runs (security, general; both green, minors only): the rules also cover destructured, computed, dynamic and globalThis forms of process.env in rendered app files; the allowed secret modules are tested one by one; a test fails when a "use client" file falls outside the browser rules (mutation check: dropping src/components from the list fails 7 tests).
+- Reservation check: an UPSTREAM_UNAVAILABLE after dispatch still settles as unknown and keeps the reservation (paid.ts releases only on RATE_LIMITED; tests/paid.test.ts covers it).
+- Consultant: PAL chat nim-nemotron35, 1 call (eslint.config.mjs, tests/client-boundary.test.ts). Taken: dynamic process.env keys in rendered files. Not taken: misread selectors (the browser block already flags process.env in layout and error files), variable dynamic imports (not bundled, no secret path), next/server in a client (the build fails anyway), route handlers (strict Zod JSON, no RSC), the rest speculative. Gemini not used.
+- Left out on purpose: React taint APIs (experimental flag).
+- Rebased onto main 1a75216 (eslint.config.mjs: kept main's `.claude/worktrees/**` ignore). After the rebase: lint pass, typecheck pass, `npm test` 1151 passed / 26 skipped, build pass. Known unrelated flake: tests/composite.test.ts can hit its 5 s timeout under heavy CPU load.
+- Allow line for the targeted client-boundary test run: added by the owner (60e2f92).
+- Still open: deploy, then `spike/deployment.py` against the live URL.
