@@ -1688,7 +1688,7 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Checks (working tree, after the repairs): `npm run typecheck` exit 0; `npm run lint` exit 0; `npm test` 1396 passed / 24 skipped; `npm run build` exit 0.
 - Remaining: Phase B (fit check, history export, README note), then deploy on owner go.
 
-### SEC4 Phase B — 2026-11-01, about 01:40–02:05 ET (lead, build-ticket wf_83c0a83e-723)
+### SEC4 Phase B — 2026-11-01, about 01:35–01:50 ET (lead, build-ticket wf_83c0a83e-723)
 
 - Files: src/lib/server/fitPolicy.ts, tests/fit-policy.test.ts, src/app/api/check/route.ts, tests/check.test.ts, src/lib/project.ts, tests/project.test.ts, README.md. Item details stay in the local security-notes.md. No contract change; stored fit and product data keep their shape.
 - Run: 3 units approved (U1 after 2 rounds, U2 and U3 in round 1); Verify green; done-when gate: all 5 items met, no cross-unit problems.
@@ -1697,3 +1697,9 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Consultant: PAL chat nim-nemotron35 on fitPolicy.ts: no review, it asked for more files instead (counted as the second PAL call of this ticket; not continued). Review subagents carry the review. Gemini not asked.
 - Checks (working tree, after the repair): `npm run typecheck` exit 0; `npm run lint` exit 0; `npm test` 1411 passed / 24 skipped; `npx --no-install vitest run tests/input-validation.test.ts` 175 passed; `npm run build` exit 0.
 - Remaining: deploy (owner go given 2026-11-01 for push after green) and the free live check.
+
+### Live check after the SEC4 deploy — 2026-11-01, about 01:50–02:00 ET (lead, owner go 2026-11-01 for push after green)
+
+- Pushed d27dc7e..6bd91d5 (includes e4b91c7, the settings allow line 6ebd96a and both SEC4 phases). Deploy identified without Vercel CLI: the new history.md escape code is present in a live JS chunk (GitHub lists no deployments for this repo).
+- `.venv/bin/python spike/deployment.py --origin https://dreambike-pied.vercel.app`: 30 passed, 0 failed, 0 skipped (403/413 probes on all 10 POST routes, secret scan of 10 JS files: 0 value hits, 0 name hits).
+- Codex review package for SEC4 prepared locally (gitignored, details only there); not waited for. Phase B time in the entry above corrected in this commit (was written before the run ended).
