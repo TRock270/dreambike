@@ -151,7 +151,8 @@ describe("postValidate downgrades", () => {
   });
 
   it("any grounded page on a law or authority host is general and cannot keep ok", () => {
-    for (const url of ["https://www.gesetze-im-internet.de/stvzo_2012/__19.html", "https://www.gesetze-im-internet.de/stvzo_2012/__72.html?x=1", "https://www.tuv.com/landingpage/de/other"]) {
+    for (const url of ["https://www.gesetze-im-internet.de/stvzo_2012/__19.html", "https://www.gesetze-im-internet.de/stvzo_2012/__72.html?x=1", "https://www.tuv.com/landingpage/de/other",
+    "https://eur-lex.europa.eu/legal-content/DE/TXT/?uri=CELEX:32013R0168", "https://unece.org/transport/vehicle-regulations"]) {
       const itemId = id();
       const r = run(itemId, "seat", claimsOk(itemId, { sources: [{ url, title: "Law", supports: "law" }] }), known, [url]);
       expect(r.sources).toHaveLength(1);

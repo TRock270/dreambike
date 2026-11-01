@@ -529,10 +529,12 @@ export type ExportPlan = {
 /**
  * Free text on one line, so a newline cannot fake a heading in history.md, and with Markdown
  * link, image and HTML characters backslash-escaped. The backslash is escaped first so an
- * existing one cannot cancel a later escape.
+ * existing one cannot cancel a later escape. GitHub-style bare links ("https://…", "www.…",
+ * "a@b.de") are broken up the same way: an escaped ":" before "//", "." after "www" and "@".
  */
 const oneLine = (text: string) =>
-  text.replace(/[\r\n]+/g, " ").replace(/\\/g, "\\\\").replace(/[`\[\]()!<>]/g, "\\$&");
+  text.replace(/[\r\n]+/g, " ").replace(/\\/g, "\\\\").replace(/[`\[\]()!<>@]/g, "\\$&")
+    .replace(/:(?=\/\/)/g, "\\:").replace(/\b(www)\./gi, "$1\\.");
 
 /** Filesystem-safe folder name plus the first 8 id characters so same-name projects differ. */
 function exportFolderName(name: string, projectId: string): string {

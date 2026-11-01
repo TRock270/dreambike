@@ -341,8 +341,18 @@ describe("exportPlan", () => {
     expect(md).not.toMatch(/(^|[^\\])!\[/);
     expect(md).not.toMatch(/(^|[^\\])\]\(/);
     expect(md).not.toMatch(/(^|[^\\])<img/);
-    expect(md).toContain("\\!\\[x\\]\\(https://tracker.example/p.png\\) \\<img src=x\\>");
+    expect(md).toContain("\\!\\[x\\]\\(https\\://tracker.example/p.png\\) \\<img src=x\\>");
     expect(md).toContain("Full image, not blended (\\!");
+  });
+
+  it("breaks up bare links in free text of history.md", () => {
+    const bare = "https://tracker.example/p.png www.tracker.example mail@tracker.example";
+    const a = mk("a", r0, 1, "tank", { items: [{ ...mk("a", r0, 1).items[0]!, title: bare }] });
+    const md = plan([r0, a], a.id, bare).historyMarkdown;
+    expect(md).not.toMatch(/https:\/\//);
+    expect(md).not.toMatch(/www\.tracker/);
+    expect(md).not.toMatch(/(^|[^\\])@/);
+    expect(md).toContain("https\\://tracker.example/p.png www\\.tracker.example mail\\@tracker.example");
   });
 
   it("keeps a plain title readable and a backslash from cancelling an escape", () => {

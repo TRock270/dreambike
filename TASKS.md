@@ -1703,3 +1703,12 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Pushed d27dc7e..6bd91d5 (includes e4b91c7, the settings allow line 6ebd96a and both SEC4 phases). Deploy identified without Vercel CLI: the new history.md escape code is present in a live JS chunk (GitHub lists no deployments for this repo).
 - `.venv/bin/python spike/deployment.py --origin https://dreambike-pied.vercel.app`: 30 passed, 0 failed, 0 skipped (403/413 probes on all 10 POST routes, secret scan of 10 JS files: 0 value hits, 0 name hits).
 - Codex review package for SEC4 prepared locally (gitignored, details only there); not waited for. Phase B time in the entry above corrected in this commit (was written before the run ended).
+
+### SEC4 Codex follow-up — 2026-11-01, about 10:25–11:00 ET (lead, inline repairs; Codex read-only review run by the owner on 6bd91d5)
+
+- Files: src/lib/server/searchPolicy.ts, tests/search-parts.test.ts, src/lib/server/fitPolicy.ts, tests/fit-policy.test.ts, src/lib/project.ts, tests/project.test.ts. Item details stay in the local security-notes.md. No contract change.
+- Codex report: 4 major, 4 minor. Lead checked each at the code: 2 major and 2 minor confirmed and fixed; 2 major and 2 minor rejected with code evidence (one recorded as accepted residual risk, to revisit after 5.11 with real search results).
+- New tests fail on 6bd91d5 and pass after the fix. Each legit case named in the fix keeps its result (tests).
+- /review-changes quick three times (wf_57ff9a70-0fe, wf_28b4b6ab-ea1, wf_09b26b73-6c5; security on Opus): all green, no blocker/major. Two review minors adopted (tighter E-number ending, more wordings); the last run's wording suggestions are left as a known limit of a word list (no regression, fit stays a pre-check).
+- Checks (working tree): `npm run typecheck` exit 0; `npm run lint` exit 0; `npm test` 1413 passed / 24 skipped (one earlier run had 7 timeouts in unrelated image/PDF/budget tests while review agents ran in parallel; the rerun alone passed); `npm run build` exit 0.
+- Consultants: none beyond Codex (PAL limit for SEC4 used up). Gemini not asked.

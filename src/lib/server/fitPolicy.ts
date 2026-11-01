@@ -79,7 +79,8 @@ export function normalizeUrl(raw: string): string | null {
 }
 
 // Law and authority sites prove no product fit: any page on these hosts counts as general.
-const GENERAL_HOSTS = ["gesetze-im-internet.de", "tuv.com", "dekra.de", "kba.de", "bmv.de", "bmdv.bund.de", "tuvsud.com", "tuev-nord.de"];
+const GENERAL_HOSTS = ["gesetze-im-internet.de", "tuv.com", "dekra.de", "kba.de", "bmv.de", "bmdv.bund.de", "tuvsud.com", "tuev-nord.de",
+  "europa.eu", "unece.org"];
 const GENERAL_URLS = new Set(LEGAL_SEED.sources.map((s) => normalizeUrl(s.url)));
 function isGeneralSource(url: string): boolean {
   const n = normalizeUrl(url);

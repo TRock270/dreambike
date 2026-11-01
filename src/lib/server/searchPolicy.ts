@@ -228,12 +228,20 @@ function verifiedPartNumber(c: Candidate, page: FetchedPage | null): string | nu
 }
 
 // Approval wording that must appear inside the model's quote, which itself must be on the page at word edges.
-// Word boundaries keep a short code from matching inside a word ("ABE", "ECE", "E13").
+// Word boundaries keep a short code from matching inside a word ("ABE", "ECE", "E13"). An E-number may be
+// followed by punctuation ("E13, zugelassen") but not by a letter, digit, "_" or a dot/comma that continues a word
+// or number ("E1234", "E1,5", "e1.de").
 const APPROVAL_KEYWORDS: Record<"abe" | "e_mark" | "teilegutachten" | "none", RegExp> = {
   abe: /\bABE\b|Allgemeine Betriebserlaubnis/i,
-  e_mark: /E-Prüfzeichen|E-Kennzeichnung|e-mark|\bECE\b|\be\d{1,2}\b(?=[\s\-*)]|$)/i,
+  e_mark: /E-Prüfzeichen|E-Kennzeichnung|e-mark|\bECE\b|\be\d{1,2}(?![\p{L}\p{N}_]|[.,][\p{L}\p{N}])/iu,
   teilegutachten: /Teilegutachten/i,
-  none: /ohne ABE|keine ABE|not road legal|nicht für den Straßenverkehr|(?:ohne|keine) Straßenzulassung|off-?road only|nur für den Rennsport/i,
+  none: new RegExp([
+    "ohne ABE", "keine ABE", "StVZO nicht (?:zugelassen|zulässig)", "nicht stra(?:ß|ss)en(?:zugelassen|tauglich)",
+    "nicht für den (?:öffentlichen )?Stra(?:ß|ss)enverkehr", "(?:ohne|keine) Stra(?:ß|ss)enzulassung",
+    "keine Zulassung für den (?:öffentlichen )?Stra(?:ß|ss)enverkehr", "nur für den (?:Renn|Motor)sport",
+    "not (?:street|road)[- ]legal", "not legal for (?:road|street) use", "not for (?:public )?(?:road|street) use",
+    "off[- ]?road(?: use)? only", "(?:racing|competition)(?: use| purposes)? only", "closed[- ]course",
+  ].join("|"), "i"),
 };
 
 const NL = "\n";

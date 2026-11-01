@@ -665,6 +665,30 @@ describe("search policy", () => {
     expect(verifiedApproval(c("abe", "mit ABE"), page({ text: "Lenker mit ABE. Aber ohne ABE geht nichts. Und mit ABE!" })).approval).toBe("abe");
   });
 
+  it("vetoes more not-road-legal wordings and keeps legit street-legal and E-number pages", () => {
+    const c = (approval: "abe" | "e_mark" | "none", approvalText: string) => SearchModelOutput.parse(
+      { products: [candidate({ approval, approvalText })], warnings: [] }).products[0]!;
+    const emark = c("e_mark", "mit E-Prüfzeichen");
+    for (const text of ["Sportauspuff mit E-Prüfzeichen, not street legal.", "Sportauspuff mit E-Prüfzeichen, not road-legal.",
+      "Sportauspuff mit E-Prüfzeichen, nicht für den öffentlichen Straßenverkehr.", "Sportauspuff mit E-Prüfzeichen, for off-road use only.",
+      "Sportauspuff mit E-Prüfzeichen, not for public road use.", "Sportauspuff mit E-Prüfzeichen, racing use only.",
+      "Sportauspuff mit E-Prüfzeichen, im Geltungsbereich der StVZO nicht zugelassen.", "Sportauspuff mit E-Prüfzeichen, nicht straßenzugelassen.",
+      "Sportauspuff mit E-Prüfzeichen, keine Zulassung für den Straßenverkehr.", "Sportauspuff mit E-Prüfzeichen, off road only.",
+      "Sportauspuff mit E-Prüfzeichen, not legal for road use.", "Sportauspuff mit E-Prüfzeichen, nur für den Motorsport.",
+      "Sportauspuff mit E-Prüfzeichen, for racing purposes only.", "Sportauspuff mit E-Prüfzeichen, for closed-course use."]) {
+      expect(verifiedApproval(emark, page({ text })).approval, text).toBe("unknown");
+    }
+    expect(verifiedApproval(c("none", "not street legal"), page({ text: "Sportauspuff, not street legal." })).approval).toBe("none");
+    // Legit pages keep their approval.
+    expect(verifiedApproval(emark, page({ text: "Sportauspuff mit E-Prüfzeichen, street legal." })).approval).toBe("e_mark");
+    expect(verifiedApproval(c("e_mark", "Kennzeichnung: E13, zugelassen"), page({ text: "E-Prüfzeichen vorhanden. Kennzeichnung: E13, zugelassen." })).approval).toBe("e_mark");
+    expect(verifiedApproval(c("e_mark", "Prüfnummer E4."), page({ text: "Blinker, Prüfnummer E4." })).approval).toBe("e_mark");
+    // An E-number cut out of a longer number or a decimal is not an approval.
+    expect(verifiedApproval(c("e_mark", "Maß E1,5 mm"), page({ text: "Spiegel, Maß E1,5 mm" })).approval).toBe("unknown");
+    expect(verifiedApproval(c("e_mark", "Kontakt e1.de"), page({ text: "Spiegel. Kontakt e1.de" })).approval).toBe("unknown");
+    expect(verifiedApproval(c("e_mark", "Code e13_x"), page({ text: "Spiegel. Code e13_x" })).approval).toBe("unknown");
+  });
+
   it("caps warnings at eight and 2000 characters", () => {
     const many = Array.from({ length: 13 }, (_, i) => `note ${i}`);
     const capped = capWarnings(many);
