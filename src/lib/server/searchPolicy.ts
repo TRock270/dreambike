@@ -6,7 +6,7 @@ import "server-only";
 import { z } from "zod";
 import type { ProductCandidate, SearchModelOutput } from "../contracts";
 import type { BikeData, ProductData, SearchRequestData } from "../types";
-import { FetchError, linkStateOf, type FetchedPage, type LinkState } from "./fetch-product";
+import { checkShopUrl, FetchError, linkStateOf, type FetchedPage, type LinkState } from "./fetch-product";
 
 type Candidate = z.infer<typeof ProductCandidate>;
 type ModelOutput = z.infer<typeof SearchModelOutput>;
@@ -132,52 +132,160 @@ function confirmingOffers(page: FetchedPage) {
     && o.currency !== null && o.currency.trim().toUpperCase() === "EUR");
 }
 
-/** Euro amounts written within 400 characters after the first mention of the product name (or its first 40 characters). */
-function amountsNearName(text: string, name: string): Set<number> {
-  const hay = text.toLowerCase();
-  const needle = name.trim().toLowerCase();
-  const at = needle === "" ? -1 : hay.indexOf(needle.slice(0, 40));
-  if (at < 0) return new Set();
-  const from = at + Math.min(needle.length, 40);
-  return euroAmountsIn(text.slice(from, from + 400));
+/** True when the shop URL passes the same check the fetcher uses (https, no port or userinfo, no IP, allowed host). */
+function shopUrlOk(url: string, shopDomains: ReadonlySet<string>): boolean {
+  try {
+    checkShopUrl(url, shopDomains);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const MIN_NAME = 4;
+const ANCHOR_CHARS = 40;
+const WINDOW_CHARS = 400;
+const MAX_ANCHORS = 3;
+
+/** The page's own product names in trust order: h1, JSON-LD product names, title. Folded, empty ones dropped. */
+function pageNames(page: FetchedPage): { name: string; isH1: boolean }[] {
+  const fromPage = (n: string | null, isH1: boolean) => ({ name: n === null ? "" : fold(n), isH1 });
+  return [
+    fromPage(page.h1, true),
+    ...page.jsonLdOffers.filter((o) => o.kind === "product").map((o) => fromPage(o.name, false)),
+    fromPage(page.pageTitle, false),
+  ].filter((n) => n.name !== "");
 }
 
 /**
- * The model's price survives only if the fetched page of that product confirms it. A JSON-LD EUR offer of kind
- * product or variant decides alone (visible text cannot override it). Only a page with no such offer may confirm
- * through visible text, and only an amount next to the product name. Other currencies are never used.
+ * Visible-text confirmation, used only when no JSON-LD offer confirms. The model's name must sit inside one of the
+ * page's own names (one direction only). The text is then searched in a window after where the PAGE's name starts
+ * (never the model's name), so a planted "Name 19,90 EUR" far from the real title and h1 does not count.
+ */
+function textConfirms(modelName: string, cents: number, page: FetchedPage): boolean {
+  const wanted = fold(modelName);
+  if (wanted.length < MIN_NAME) return false;
+  const all = pageNames(page).filter((n) => n.name.includes(wanted));
+  // A matching h1 is the strongest anchor: then the title and JSON-LD windows (start of the page) are not used.
+  const matching = all.some((n) => n.isH1) ? all.filter((n) => n.isH1) : all;
+  // Distinct anchors; an anchor counts as the h1 when any of its names is the h1.
+  const anchors = new Map<string, boolean>();
+  for (const n of matching) {
+    const a = n.name.slice(0, ANCHOR_CHARS);
+    anchors.set(a, (anchors.get(a) ?? false) || n.isH1);
+  }
+  // Anchors are found in a lowercased copy; amounts are read from the cased copy ("EUR" is case-sensitive).
+  // A lowercase copy of a different length (rare Unicode cases) would misalign the windows: no confirmation then.
+  const cased = page.text.replace(/\s+/g, " ").trim();
+  const text = cased.toLowerCase();
+  if (text.length !== cased.length) return false;
+  // The text usually starts with the page title, so the h1's first hit there is the title, not the heading: skip it.
+  // Only for the h1, whose text is visible on the page. A JSON-LD name need not be visible, so its next hit after the
+  // title could sit in a review; it keeps its first hit.
+  const title = page.pageTitle === null ? "" : fold(page.pageTitle);
+  const titleEnd = title !== "" && text.startsWith(title) ? title.length : 0;
+  for (const [anchor, isH1] of [...anchors].slice(0, MAX_ANCHORS)) {
+    let at = text.indexOf(anchor);
+    if (at >= 0 && at < titleEnd && isH1) at = text.indexOf(anchor, titleEnd);
+    if (at < 0) continue;
+    const from = at + anchor.length;
+    if (euroAmountsIn(cased.slice(from, from + WINDOW_CHARS)).has(cents)) return true;
+  }
+  return false;
+}
+
+/**
+ * The model's price survives only if the fetched page states the same amount: a JSON-LD EUR offer of kind product or
+ * variant, or, without any confirming offer, visible euro text close to the page's own product name (textConfirms).
+ * Other currencies are never used. The shown text is always written from the confirmed cents.
  */
 function verifyPrice(c: Candidate, page: FetchedPage | null): PriceVerdict {
   // 0 is never a price: mini-carts ("Warenkorb 0,00 €") and "price on request" placeholders show it.
   if (page === null || c.priceEurCents === null || c.priceEurCents <= 0) return NO_PRICE;
   const cents = c.priceEurCents;
   const offers = confirmingOffers(page);
-  const ok = offers.length > 0
-    ? offers.some((o) => dotDecimalCents(o.price) === cents)
-    : amountsNearName(page.text, c.name).has(cents);
-  if (!ok) return NO_PRICE;
-  // Keep the model's wording only when it states the same amount; else write it from the verified cents.
-  const text = c.priceText !== null && euroAmountsIn(c.priceText).has(cents) ? c.priceText : formatEurGerman(cents);
-  return { priceEurCents: cents, priceText: text, confirmed: true };
+  const jsonLd = offers.some((o) => dotDecimalCents(o.price) === cents);
+  // A confirming-kind offer with another amount is a contradiction, not "no offer": text must not override it.
+  const contradicted = offers.length > 0 && !jsonLd;
+  if (!jsonLd && (contradicted || !textConfirms(c.name, cents, page))) return NO_PRICE;
+  return { priceEurCents: cents, priceText: formatEurGerman(cents), confirmed: true };
 }
 
-// Approval wording the page must contain besides the model's own quote. Case-sensitive where a short code
-// could hide inside a word ("ABE", "ECE", "E13").
+/** Part number only when the page itself carries it (JSON-LD sku/mpn of a product or variant, or visible text). */
+function verifiedPartNumber(c: Candidate, page: FetchedPage | null): string | null {
+  if (page === null || c.partNumber === null) return null;
+  const alnum = (t: string) => t.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+  const want = alnum(c.partNumber);
+  if (want.length < 3) return null;
+  const inLd = page.jsonLdOffers.some((o) => (o.kind === "product" || o.kind === "variant")
+    && [o.sku, o.mpn].some((v) => v !== null && alnum(v) === want));
+  if (inLd) return c.partNumber;
+  // In the text the number must stand alone: whole token at letter/digit edges, with at most one "-", ".", "/" or
+  // space between its characters ("600157" in "Art.-Nr.: 600-157"), so "123" does not match "1,23 EUR" or "M1234".
+  const chars = [...want].map((ch) => ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const re = new RegExp(`(?<![\\p{L}\\p{N}])${chars.join("[-./ ]?")}(?![\\p{L}\\p{N}])`, "iu");
+  return re.test(page.text) ? c.partNumber : null;
+}
+
+// Approval wording that must appear inside the model's quote, which itself must be on the page at word edges.
+// Word boundaries keep a short code from matching inside a word ("ABE", "ECE", "E13").
 const APPROVAL_KEYWORDS: Record<"abe" | "e_mark" | "teilegutachten" | "none", RegExp> = {
   abe: /\bABE\b|Allgemeine Betriebserlaubnis/i,
   e_mark: /E-Prüfzeichen|E-Kennzeichnung|e-mark|\bECE\b|\be\d{1,2}\b(?=[\s\-*)]|$)/i,
   teilegutachten: /Teilegutachten/i,
-  none: /ohne ABE|keine ABE|not road legal|nicht für den Straßenverkehr/i,
+  none: /ohne ABE|keine ABE|not road legal|nicht für den Straßenverkehr|(?:ohne|keine) Straßenzulassung|off-?road only|nur für den Rennsport/i,
 };
+
+const NL = "\n";
+
+/** Page text with blanks collapsed but newlines kept (a newline ends a sentence), lowercased. */
+const sentenceText = (t: string) => t.replace(/[^\S\n]+/g, " ").toLowerCase();
+
+// The quote must sit on the page at word edges: a cut-off quote like "abe" (from "aber") or "E12" (from
+// "E1234") would otherwise satisfy the keyword regex by itself. Edges that are not letters/digits need no check.
+// Returns every [start, end) of the quote in the text; a space in the quote also matches a newline.
+function quoteSpans(quote: string, text: string): [number, number][] {
+  const escaped = quote.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/ /g, "[ \\n]");
+  const before = /^[\p{L}\p{N}]/u.test(quote) ? "(?<![\\p{L}\\p{N}])" : "";
+  const after = /[\p{L}\p{N}]$/u.test(quote) ? "(?![\\p{L}\\p{N}])" : "";
+  return [...text.matchAll(new RegExp(before + escaped + after, "gu"))].map((m) => [m.index, m.index + m[0].length]);
+}
+
+/** Sentences as [start, end): they end at . ! ? followed by whitespace, or at a newline. */
+function sentenceBounds(text: string): [number, number][] {
+  const out: [number, number][] = [];
+  let start = 0;
+  for (const m of text.matchAll(/[.!?](?=\s)|\n/g)) {
+    out.push([start, m.index + (m[0] === NL ? 0 : 1)]);
+    start = m.index + 1;
+  }
+  out.push([start, text.length]);
+  return out;
+}
+
+/** Does any sentence that overlaps an occurrence of the quote carry a "not road legal" wording? */
+function noneNearQuote(spans: [number, number][], text: string): boolean {
+  return sentenceBounds(text).some(([a, b]) =>
+    spans.some(([s, e]) => a < e && s < b) && APPROVAL_KEYWORDS.none.test(text.slice(a, b)));
+}
 
 /** Approval and its quote are kept only when the non-redirected product page says the same thing. */
 export function verifiedApproval(c: Candidate, page: FetchedPage | null): { approval: Candidate["approval"]; approvalText: string | null } {
   const unknown = { approval: "unknown" as const, approvalText: null };
   if (page === null || c.approval === "unknown" || c.approvalText === null) return unknown;
   const quote = fold(c.approvalText);
-  if (quote === "" || !fold(page.text).includes(quote)) return unknown;
-  const keyword = APPROVAL_KEYWORDS[c.approval];
-  if (!keyword.test(page.text.replace(/\s+/g, " "))) return unknown;
+  if (quote === "") return unknown;
+  const text = sentenceText(page.text);
+  const spans = quoteSpans(quote, text);
+  if (spans.length === 0) return unknown;
+  const quoteText = c.approvalText.replace(/\s+/g, " ");
+  if (c.approval === "none") {
+    return APPROVAL_KEYWORDS.none.test(quoteText) ? { approval: c.approval, approvalText: c.approvalText } : unknown;
+  }
+  if (!APPROVAL_KEYWORDS[c.approval].test(quoteText)) return unknown;
+  // "ohne ABE" in the quote or in a sentence around it vetoes a positive approval, so a quote like the product
+  // name next to "ohne ABE" cannot turn a not-road-legal part into an approved one.
+  if (APPROVAL_KEYWORDS.none.test(quoteText) || noneNearQuote(spans, text)) return unknown;
   return { approval: c.approval, approvalText: c.approvalText };
 }
 
@@ -197,8 +305,7 @@ export function verifiedRegion(c: Candidate, page: FetchedPage | null): Candidat
 function verifiedImage(c: Candidate, page: FetchedPage | null, shopDomains: ReadonlySet<string>): string | null {
   if (page === null) return null;
   const allowed = page.imageUrls.filter((u) => {
-    const h = hostOf(u);
-    return u.length <= MAX_URL && u.startsWith("https://") && h !== null && shopDomains.has(h);
+    return u.length <= MAX_URL && shopUrlOk(u, shopDomains);
   });
   if (c.imageUrl !== null) {
     const want = normalizeSearchUrl(c.imageUrl);
@@ -257,7 +364,7 @@ function screen(output: ModelOutput, ctx: SearchContext): { kept: Kept[]; droppe
   for (const c of output.products) {
     const host = shown(hostOf(c.url));
     const key = normalizeSearchUrl(c.url);
-    const hostOk = hostOf(c.url) !== null && ctx.shopDomains.has(hostOf(c.url)!);
+    const hostOk = shopUrlOk(c.url, ctx.shopDomains);
     if (!hostOk || key === null) { dropped.push({ host, why: "not on the allowed shop list" }); continue; }
     if (normalizeSearchUrl(c.source.url) !== key) { dropped.push({ host, why: "the source link did not match the product link" }); continue; }
     if (ctx.mode === "query" ? !found.has(key) : key !== finalKey && key !== requestedKey) {
@@ -323,7 +430,7 @@ export function postValidateSearch(output: ModelOutput, ctx: SearchContext, page
     const linkState: LinkState = check && !redirected ? linkStateOf(check.ok ? null : check.error) : "unchecked";
     const approval = verifiedApproval(c, fetched);
     products.push({
-      id: newId(), name: c.name, brand: c.brand, partNumber: c.partNumber, url: k.url,
+      id: newId(), name: c.name, brand: c.brand, partNumber: verifiedPartNumber(c, fetched), url: k.url,
       imageUrl: verifiedImage(c, fetched, ctx.shopDomains),
       priceText: verdict.priceText, priceEurCents: verdict.priceEurCents,
       taxBasis: verifiedTaxBasis(c, verdict, fetched), approval: approval.approval, approvalText: approval.approvalText,
@@ -343,7 +450,8 @@ export function postValidateSearch(output: ModelOutput, ctx: SearchContext, page
   } else if (products.length === 0) {
     warnings.push("No product could be confirmed on that page. Enter the product by hand.");
   }
-  warnings.push(...dropped.map((d) => `${d.host}: ${d.why}`), ...notes, ...output.warnings);
+  warnings.push(...dropped.map((d) => `${d.host}: ${d.why}`), ...notes,
+    ...output.warnings.filter((w) => w.trim() !== "").map((w) => `Model note: ${w}`));
   return { products, warnings: capWarnings(warnings) };
 }
 

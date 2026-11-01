@@ -3,7 +3,7 @@ import { POST as identifyPOST } from "@/app/api/identify/route";
 import { POST as instructionPOST } from "@/app/api/instruction/route";
 import { applySuggestion, confirmBike, editField, emptyBikeForm, parseYear, unknownBike } from "@/lib/bikeForm";
 import { ErrorResponse, IdentifyResponse, InstructionPayload, InstructionResponse, modelJsonSchema } from "@/lib/contracts";
-import { absentAllowed, bikeLimitations, enforceIntent, modeAllowed, paintRequestText, retargetPaintText } from "@/lib/editPolicy";
+import { absentAllowed, bikeLimitations, withBikeWarnings, enforceIntent, modeAllowed, paintRequestText, retargetPaintText } from "@/lib/editPolicy";
 import { AppError } from "@/lib/errors";
 import { fetchSparkJson, promptBody, promptText, readSparkResponse, sparkBody, sparkCharge, sparkChargeGrounded } from "@/lib/server/meta";
 import type { InstructionData } from "@/lib/types";
@@ -453,5 +453,21 @@ describe("grounded Spark (fit check, T9)", () => {
     expect(sparkChargeGrounded(undefined, 2, p)).toBeNull();
     expect(sparkChargeGrounded({ input_tokens: 5 }, 2, p)).toBeNull();
     expect(sparkCharge(usage, p)).toBe(200); // the ungrounded charge is unchanged
+  });
+});
+
+describe("withBikeWarnings keeps the unknown-bike notes first", () => {
+  const eight = Array.from({ length: 8 }, (_, i) => `model warning ${i}`);
+  it("keeps both limitation notes ahead of 8 model warnings, total 8", () => {
+    const bike = { ...unknownBike(), make: "Harley-Davidson", model: "Sportster", abs: "no" as const, facing: "left" as const };
+    const out = withBikeWarnings({ ...ins("geometry"), warnings: eight }, bike).warnings;
+    expect(out.slice(0, 2)).toEqual(["Model year unknown: part applicability may differ by year.", "Engine generation unknown."]);
+    expect(out).toHaveLength(8);
+  });
+  it("keeps all 5 notes of an all-unknown bike", () => {
+    const bike = unknownBike();
+    const out = withBikeWarnings({ ...ins("geometry"), warnings: eight }, bike).warnings;
+    expect(out.slice(0, 5)).toEqual(bikeLimitations(bike));
+    expect(out).toHaveLength(8);
   });
 });

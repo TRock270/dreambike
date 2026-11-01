@@ -6,7 +6,7 @@ import { POST } from "@/app/api/product-image/route";
 import { ErrorResponse, ProductImageResponse } from "@/lib/contracts";
 import {
   checkShopUrl, extractImageUrls, sniffImage, extractJsonLdOffers, FetchError, fetchImage, fetchPage, humanReason, isPublicAddress, linkStateOf, pinnedLookup,
-  toAppError, visibleText, type PinnedRequest, type Resolver, type Transport, type TransportResponse,
+  pageHeadings, toAppError, visibleText, type PinnedRequest, type Resolver, type Transport, type TransportResponse,
 } from "@/lib/server/fetch-product";
 import { FREE_FETCH_PER_MINUTE, resetQuotaLimitersForTests } from "@/lib/server/paid";
 import { withSession } from "./support/session";
@@ -593,5 +593,33 @@ describe("POST /api/product-image", () => {
     expect(body.image.width).toBeGreaterThanOrEqual(256);
     expect(fn).not.toHaveBeenCalled();
     expect(metaSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("pageHeadings", () => {
+  it("reads the first title and h1 with entities decoded, nested tags stripped and uppercase tags", () => {
+    const html = "<HTML><HEAD><TITLE> Tall bar &amp; clamp\n | Shop </TITLE></HEAD><BODY><H1 class=x>Tall <span>bar</span> 25&nbsp;mm &euro;</H1><h1>Second</h1></BODY>";
+    expect(pageHeadings(html)).toEqual({ pageTitle: "Tall bar & clamp | Shop", h1: "Tall bar 25 mm €" });
+  });
+  it("gives null when missing or empty and caps at 300 chars", () => {
+    expect(pageHeadings("<p>nothing</p>")).toEqual({ pageTitle: null, h1: null });
+    expect(pageHeadings("<title> </title><h1><b></b></h1>")).toEqual({ pageTitle: null, h1: null });
+    expect(pageHeadings(`<h1>${"a".repeat(900)}</h1>`).h1).toHaveLength(300);
+  });
+  it("ignores headings inside script, style, noscript, template and svg", () => {
+    const html = `<script>var s = "<h1>Fake</h1><title>Fake</title>";</script><template><h1>T</h1></template><svg><title>S</title></svg><h1>Real</h1>`;
+    expect(pageHeadings(html)).toEqual({ pageTitle: null, h1: "Real" });
+  });
+  it("stays fast with many unclosed h1 openers", () => {
+    const start = performance.now();
+    const out = pageHeadings("<h1 ".repeat(250_000));
+    pageHeadings("<h1>".repeat(250_000));
+    expect(performance.now() - start).toBeLessThan(1500);
+    expect(out.pageTitle).toBeNull();
+  });
+  it("fetchPage returns both fields", async () => {
+    const { transport } = scripted(() => html("<title>A</title><h1>B</h1><p>Preis 5,00 €</p>"));
+    const page = await fetchPage("https://shop.example/p", SHOPS, { resolve: resolverFor(ok.shop), transport });
+    expect(page).toMatchObject({ pageTitle: "A", h1: "B" });
   });
 });

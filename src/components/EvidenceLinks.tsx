@@ -4,6 +4,15 @@ import { localDay as day } from "@/lib/project";
 
 type SourceData = z.infer<typeof Source>;
 
+/** Hostname of a source URL, or null when it cannot be parsed (new URL throws on bad input). */
+function hostOf(url: string): string | null {
+  try {
+    return new URL(url).hostname || null;
+  } catch {
+    return null;
+  }
+}
+
 /** The sources behind a fit result. Links open in a new tab; the accessed date shows next to each. */
 export function EvidenceLinks({ sources }: { sources: readonly SourceData[] }) {
   if (sources.length === 0) {
@@ -16,6 +25,7 @@ export function EvidenceLinks({ sources }: { sources: readonly SourceData[] }) {
           <a href={s.url} target="_blank" rel="noopener noreferrer" className="text-primary-ink underline underline-offset-2">
             {s.title}<span className="sr-only"> (opens in a new tab)</span>
           </a>
+          {hostOf(s.url) && <span className="ml-2 text-text-muted">{hostOf(s.url)}</span>}
           <span className="ml-2 text-text-muted">accessed <span className="tabular">{day(s.accessedAt)}</span></span>
           {s.supports && <p className="text-text-secondary">{s.supports}</p>}
         </li>

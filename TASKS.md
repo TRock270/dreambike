@@ -231,7 +231,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 
 - Priority: owner go after the 2026-10-31 prompt-injection check, before the live window. Estimate: 1.5h. Depends on: nothing; the fit and history.md items of that check wait for SEC3. No paid calls.
 - Status: IN PROGRESS 2026-10-31.
-- Files: src/lib/server/searchPolicy.ts, tests/search-parts.test.ts, src/lib/editPolicy.ts, tests/spark.test.ts.
+- Files: Phase A: src/lib/server/searchPolicy.ts, tests/search-parts.test.ts, src/lib/editPolicy.ts, tests/spark.test.ts, src/lib/server/fetch-product.ts, tests/fetch-product.test.ts, src/components/EvidenceLinks.tsx. Phase B: src/lib/server/fitPolicy.ts, tests/fit-policy.test.ts, src/app/api/check/route.ts, tests/check.test.ts, src/lib/project.ts, tests/project.test.ts, README.md.
 - Work and exact done-when items: in the local, gitignored security-notes.md, as for SEC1.
 - Done when (summary): each listed item is fixed with a test that proves it; normal flows still pass. Run build, lint, types and tests.
 
@@ -1658,6 +1658,12 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Deploy identified without Vercel CLI or gh: a string that SEC1 added to the browser code is present in 1 of the 10 live JS chunks.
 - `.venv/bin/python spike/deployment.py --origin https://dreambike-pied.vercel.app`: 30 passed, 0 failed, 0 skipped (demo_only, 403/413 probes on all 10 POST routes, secret scan of 10 JS files: 0 value hits, 0 name hits).
 
+### Security check "Prompt Injection" — 2026-10-31, about 18:45–19:05 ET (lead, 2 read-only agents + PAL chat, no code change)
+
+- Checked: whether untrusted text (user free text, shop pages, search hits, photo text) can steer model output into wrong prices, wrong fit or approval claims, foreign links, extra spend, data loss, or script/HTML in UI or PDF. Prompts, server policies, the five model routes and the UI/PDF sinks.
+- Reviewers: models-reviewer and security-reviewer (read-only; `npm test` 1173 passed / 24 skipped in both). Consultant: PAL chat nim-nemotron35 on two policy files, answered; about 6 of 22 points held, all already found by the reviewers.
+- Result: 0 blocker, 4 major, 6 minor. Details stay in the local security-notes.md. Owner go: fixes in SEC4 now; the fit and history.md items after SEC3.
+
 ### SEC3 — 2026-10-31, about 19:00–19:42 ET, and 2026-11-01, about 01:25–01:55 ET (lead, build-ticket wf_385411b6-23c and wf_e7536acb-18a, paused in between)
 
 - Files: src/lib/server/meta.ts, src/lib/server/fitPolicy.ts, src/lib/server/budget.ts, src/app/api/segment/route.ts, src/app/api/edit/route.ts, src/lib/db.ts, src/lib/project.ts, src/lib/pdf.ts, src/lib/contracts.ts, src/lib/browser/folderExport.ts and their tests (masks, fit-policy, budget, edit, db, project, pdf, contracts, folderexport); new tests/input-validation.test.ts (817 lines, input-boundary regression test). Item details stay in the local security-notes.md.
@@ -1671,3 +1677,13 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 
 - Pushed d8eb3f3..d27dc7e (SEC3). Deploy identified without Vercel CLI: a string that SEC3 added to the browser code is present in a live JS chunk (found on the 4th poll, about 1 minute after the push).
 - `.venv/bin/python spike/deployment.py --origin https://dreambike-pied.vercel.app`: 30 passed, 0 failed, 0 skipped (403/413 probes on all 10 POST routes, secret scan of 10 JS files: 0 value hits, 0 name hits).
+
+### SEC4 Phase A — 2026-10-31, about 19:10–20:30 ET, and 2026-11-01, about 00:50–01:35 ET (lead, build-ticket wf_68f06a34-f75, wf_a2034633-258, wf_2a4896bb-f5a; paused in between)
+
+- Files: src/lib/server/searchPolicy.ts, tests/search-parts.test.ts, src/lib/server/fetch-product.ts, tests/fetch-product.test.ts, src/lib/editPolicy.ts, tests/spark.test.ts, src/components/EvidenceLinks.tsx. Item details stay in the local security-notes.md.
+- Run 1 (before the pause): 2 units approved. Owner then asked for the full fix of one item and a refinement of another. Run 2: the first plan check stopped on a done-when item that contradicted its own test; the lead rewrote it (wf_a2034633-258, no code written). Second run: 3 units approved (U1 and U3 in round 1, U2 in round 2); Verify green; done-when gate: all 9 items met, 3 minors.
+- Lead decisions: (1) the gate's note that editPolicy.ts/spark.test.ts were outside run 2's units: they were reviewed and approved in run 1 (models + general) and unchanged since. (2) A title-prefix skip that one legit test needs is accepted as part of the item and kept for the h1 only. (3) Newline sentence ends only matter for synthetic test text (fetched text has no newlines); the effect is conservative, kept. (4) One known residual case is recorded in security-notes.md (page text has no element positions).
+- Lead repairs after the run (inline, reviewed): a minor from models-reviewer and the one Nemotron point that held (title/JSON-LD windows not used when the h1 matches), stricter part-number text match (whole token), three more "not road legal" wordings. Tests fail on the previous code. /review-changes quick twice (wf_8bcbfb77-d29, wf_7e3e7bc2-abc, security on Opus): green, the second with no findings.
+- Consultant: PAL chat nim-nemotron35 on searchPolicy.ts, answered (files embedded). About 12 points: 1 held (adopted above); rejected with code evidence: several offers where one matches (accepted earlier), sentence-split and other-wording vetoes (owner decision on the veto scope; wording list extended), offer at 0.00 blocks text (same as before this ticket), NBSP (JS \s matches it), regex cost (linear, bounded windows). Gemini not asked.
+- Checks (working tree, after the repairs): `npm run typecheck` exit 0; `npm run lint` exit 0; `npm test` 1396 passed / 24 skipped; `npm run build` exit 0.
+- Remaining: Phase B (fit check, history export, README note), then deploy on owner go.

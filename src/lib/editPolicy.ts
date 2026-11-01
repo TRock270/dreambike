@@ -62,9 +62,12 @@ export function bikeLimitations(bike: BikeData): string[] {
   return out;
 }
 
-/** Add instruction warnings for the bike details that are unknown (bounded to the schema's 8). */
+/**
+ * Bike limitations come first, then the model's warnings (untrusted, so they
+ * can never push the unknown-bike notes out); deduped, bounded to the schema's 8.
+ */
 export function withBikeWarnings(instruction: InstructionData, bike: BikeData): InstructionData {
-  const warnings = [...new Set([...instruction.warnings, ...bikeLimitations(bike)])].slice(0, 8);
+  const warnings = [...new Set([...bikeLimitations(bike), ...instruction.warnings])].slice(0, 8);
   return { ...instruction, warnings };
 }
 

@@ -346,6 +346,8 @@ export type JsonLdOffer = {
 };
 export type FetchedPage = {
   finalUrl: string; status: number; text: string; jsonLdOffers: JsonLdOffer[];
+  /** Text of the first <title> and the first <h1> (outside script/style/etc.), at most 300 chars; null when absent or empty. */
+  pageTitle: string | null; h1: string | null;
   /** At most 10 distinct https image URLs (og:image, twitter:image, JSON-LD Product image), data only. */
   imageUrls: string[];
 };
@@ -418,6 +420,75 @@ export function visibleText(html: string): string {
     pos = gt + 1;
   }
   return decodeEntities(pieces.join("")).replace(/\s+/g, " ").trim().slice(0, TEXT_CAP_CHARS);
+}
+
+const HEADING_CAP_CHARS = 300;
+const HEADING_RAW_CAP = 2_000; // raw characters kept per heading before entity decoding
+
+/** Text of the first <title> and first <h1>, tags stripped, one forward pass (same scanner style as visibleText). */
+export function pageHeadings(html: string): { pageTitle: string | null; h1: string | null } {
+  const done: Record<"title" | "h1", string | null> = { title: null, h1: null };
+  const seen = new Set<string>();
+  let capturing: "title" | "h1" | null = null;
+  let buffer = "";
+  const addText = (text: string): void => {
+    if (capturing && buffer.length < HEADING_RAW_CAP) buffer += text.slice(0, HEADING_RAW_CAP - buffer.length);
+  };
+  const finish = (): void => {
+    if (!capturing) return;
+    const text = decodeEntities(buffer).replace(/\s+/g, " ").trim().slice(0, HEADING_CAP_CHARS);
+    done[capturing] = text === "" ? null : text;
+    capturing = null;
+    buffer = "";
+  };
+  let noGtFrom = Infinity;
+  const gtFrom = (from: number): number => {
+    if (from >= noGtFrom) return -1;
+    const at = html.indexOf(">", from);
+    if (at < 0) noGtFrom = from;
+    return at;
+  };
+  let pos = 0;
+  while (pos < html.length) {
+    const lt = html.indexOf("<", pos);
+    if (lt < 0) { addText(html.slice(pos)); break; }
+    addText(html.slice(pos, lt));
+    if (html.startsWith("<!--", lt)) {
+      addText(" ");
+      const end = html.indexOf("-->", lt + 4);
+      if (end < 0) break;
+      pos = end + 3;
+      continue;
+    }
+    const next = html[lt + 1] ?? "";
+    if (!/[a-zA-Z!?/]/.test(next)) { addText("<"); pos = lt + 1; continue; }
+    TAG_NAME.lastIndex = lt + 1;
+    const named = TAG_NAME.exec(html);
+    const name = named ? named[2]!.toLowerCase() : "";
+    const closing = named ? named[1] === "/" : false;
+    const gt = gtFrom(lt + 1);
+    if (named && !closing && DROPPED_TAGS.has(name)) {
+      addText(" ");
+      if (gt < 0) break;
+      if (html[gt - 1] === "/") { pos = gt + 1; continue; }
+      const closer = DROPPED_CLOSERS.get(name)!;
+      closer.lastIndex = gt + 1;
+      const close = closer.exec(html);
+      if (!close) break;
+      pos = close.index + close[0].length;
+      continue;
+    }
+    if (gt < 0) { addText(html.slice(lt)); break; }
+    if (named && (name === "title" || name === "h1")) {
+      if (closing && capturing === name) finish();
+      else if (!closing && !capturing && !seen.has(name)) { seen.add(name); capturing = name; buffer = ""; }
+      else addText(" ");
+    } else addText(" ");
+    if (done.title !== null && done.h1 !== null) break;
+    pos = gt + 1;
+  }
+  finish();
+  return { pageTitle: done.title, h1: done.h1 };
 }
 
 const MAX_LD_BLOCKS = 10;
@@ -622,7 +693,7 @@ export async function fetchPage(url: string, shopDomains: ReadonlySet<string> | 
   const html = decodeBody(raw.bytes, raw.charset);
   const ld = extractJsonLd(html);
   return {
-    finalUrl: raw.finalUrl.href, status: raw.status, text: visibleText(html), jsonLdOffers: ld.offers,
+    finalUrl: raw.finalUrl.href, status: raw.status, text: visibleText(html), jsonLdOffers: ld.offers, ...pageHeadings(html),
     imageUrls: cleanImageUrls([...metaImageCandidates(html), ...ld.imageUrls], raw.finalUrl),
   };
 }
