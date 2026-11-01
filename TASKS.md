@@ -1712,3 +1712,9 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - /review-changes quick three times (wf_57ff9a70-0fe, wf_28b4b6ab-ea1, wf_09b26b73-6c5; security on Opus): all green, no blocker/major. Two review minors adopted (tighter E-number ending, more wordings); the last run's wording suggestions are left as a known limit of a word list (no regression, fit stays a pre-check).
 - Checks (working tree): `npm run typecheck` exit 0; `npm run lint` exit 0; `npm test` 1413 passed / 24 skipped (one earlier run had 7 timeouts in unrelated image/PDF/budget tests while review agents ran in parallel; the rerun alone passed); `npm run build` exit 0.
 - Consultants: none beyond Codex (PAL limit for SEC4 used up). Gemini not asked.
+
+### Live check after the SEC4 Codex follow-up deploy — 2026-11-01 (lead, owner pushed 95efd9d..3645275)
+
+- Deploy identified without Vercel CLI: the new history.md bare-link escape is present in a live JS chunk.
+- `.venv/bin/python spike/deployment.py --origin https://dreambike-pied.vercel.app`: 30 passed, 0 failed, 0 skipped (403/413 probes on all 10 POST routes, secret scan of 10 JS files: 0 value hits, 0 name hits).
+- This log entry is committed locally only (a push for it alone would trigger another deploy); it goes out with the next push.
