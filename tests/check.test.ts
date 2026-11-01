@@ -154,6 +154,47 @@ describe("live path (fake Upstash and Meta)", () => {
     expect(env.settles).toEqual([["unknown", "0"]]); // query count not reported: reservation stays
   });
 
+  it("passes the product's approval and URL to postValidate: a sourceless answer keeps only the product's approval", async () => {
+    const env = live();
+    const product = { id: crypto.randomUUID(), name: "Bar", brand: null, partNumber: null, url: "https://shop.example/bar",
+      imageUrl: null, priceText: null, priceEurCents: null, taxBasis: "unknown", approval: "abe", approvalText: null,
+      fulfillmentRegion: "eu", source: { url: "https://shop.example/bar", title: "Shop", accessedAt: "2026-10-29T12:00:00.000Z", supports: "listing" },
+      linkState: "reachable" };
+    const it1 = { ...item(), product } as unknown as ReturnType<typeof item>;
+    env.answer(reply([{ ...modelResult(it1.id, []), approval: "abe" }]));
+    const out = CheckResponse.parse(await (await post(body([it1]))).json());
+    const r = out.results[0]!;
+    expect(r.status).toBe("verify");
+    expect(r.approval).toBe("abe"); // equals the product's approval
+    expect(r.documentCoverage).toBe("unknown");
+    expect(r.inspection).toBe("unknown");
+    // the same answer for an item without a product loses the approval claim too
+    const it2 = item();
+    env.answer(reply([modelResult(it2.id, [])]));
+    const out2 = CheckResponse.parse(await (await post(body([it2]))).json());
+    expect(out2.results[0]!.approval).toBe("unknown");
+  });
+
+  it("passes the product URL: a source on the product's own host (also with www.) does not make ok", async () => {
+    const env = live();
+    const product = { id: crypto.randomUUID(), name: "Lamp", brand: null, partNumber: null, url: "https://www.example-parts.de/p/9",
+      imageUrl: null, priceText: null, priceEurCents: null, taxBasis: "unknown", approval: "e_mark", approvalText: null,
+      fulfillmentRegion: "eu", source: { url: "https://www.example-parts.de/p/9", title: "Shop", accessedAt: "2026-10-29T12:00:00.000Z", supports: "listing" },
+      linkState: "reachable" };
+    const headlight = (extra: object = {}) => ({ ...item("headlight"), ...extra }) as unknown as ReturnType<typeof item>;
+    const answer = (id: string) => reply([{ ...modelResult(id), approval: "e_mark", inspection: "none", eintragung: "not_required", carryDocuments: "not_required" }]);
+    const withProduct = headlight({ product });
+    env.answer(answer(withProduct.id));
+    const r1 = CheckResponse.parse(await (await post(body([withProduct]))).json()).results[0]!;
+    expect(r1.status).toBe("verify");
+    expect(r1.sources.map((s) => s.url)).toContain(SPECIFIC); // stays listed
+    // the same answer without a product stays ok
+    const plain = headlight();
+    env.answer(answer(plain.id));
+    const r2 = CheckResponse.parse(await (await post(body([plain]))).json()).results[0]!;
+    expect(r2.status).toBe("ok");
+  });
+
   it("refuses a completed answer without a completed web_search_call, with no ok result", async () => {
     const env = live();
     const it1 = item();

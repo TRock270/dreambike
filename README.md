@@ -95,7 +95,7 @@ Before any paid call:
 
 ## Live AI edits on the public site
 
-Live edits on the public site run only from 2026-11-05 to 2026-11-09, US Eastern time. In that window the site spends at most $5 per day in total and $0.50 per visitor per day. Outside it, or when a limit is reached, the cached demo keeps working and makes no AI calls. The live path was built and tested during the event: on 2026-10-30 one real edit on the public site (part mask, instruction, image) took under 30 seconds and cost $0.013, and the daily limit refused a further edit. See `docs/submission.md`.
+Live edits on the public site run only from 2026-11-05 to 2026-11-09, US Eastern time. In that window the site spends at most $5 per day in total and $0.50 per visitor per day. The $5 daily cap is shared by all visitors; once it is used up, the site makes no AI calls for the rest of that day (US Eastern time) and the cached demo keeps working. Outside the window, or when a limit is reached, the cached demo also keeps working and makes no AI calls. The live path was built and tested during the event: on 2026-10-30 one real edit on the public site (part mask, instruction, image) took under 30 seconds and cost $0.013, and the daily limit refused a further edit. See `docs/submission.md`.
 
 ## Limitations
 

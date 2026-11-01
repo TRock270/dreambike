@@ -230,7 +230,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 ## SEC4 — Prompt-injection follow-ups in shop search and instruction warnings (owner follow-up, 2026-10-31)
 
 - Priority: owner go after the 2026-10-31 prompt-injection check, before the live window. Estimate: 1.5h. Depends on: nothing; the fit and history.md items of that check wait for SEC3. No paid calls.
-- Status: IN PROGRESS 2026-10-31.
+- Status: DONE 2026-11-01 (see log).
 - Files: Phase A: src/lib/server/searchPolicy.ts, tests/search-parts.test.ts, src/lib/editPolicy.ts, tests/spark.test.ts, src/lib/server/fetch-product.ts, tests/fetch-product.test.ts, src/components/EvidenceLinks.tsx. Phase B: src/lib/server/fitPolicy.ts, tests/fit-policy.test.ts, src/app/api/check/route.ts, tests/check.test.ts, src/lib/project.ts, tests/project.test.ts, README.md.
 - Work and exact done-when items: in the local, gitignored security-notes.md, as for SEC1.
 - Done when (summary): each listed item is fixed with a test that proves it; normal flows still pass. Run build, lint, types and tests.
@@ -1687,3 +1687,13 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Consultant: PAL chat nim-nemotron35 on searchPolicy.ts, answered (files embedded). About 12 points: 1 held (adopted above); rejected with code evidence: several offers where one matches (accepted earlier), sentence-split and other-wording vetoes (owner decision on the veto scope; wording list extended), offer at 0.00 blocks text (same as before this ticket), NBSP (JS \s matches it), regex cost (linear, bounded windows). Gemini not asked.
 - Checks (working tree, after the repairs): `npm run typecheck` exit 0; `npm run lint` exit 0; `npm test` 1396 passed / 24 skipped; `npm run build` exit 0.
 - Remaining: Phase B (fit check, history export, README note), then deploy on owner go.
+
+### SEC4 Phase B — 2026-11-01, about 01:40–02:05 ET (lead, build-ticket wf_83c0a83e-723)
+
+- Files: src/lib/server/fitPolicy.ts, tests/fit-policy.test.ts, src/app/api/check/route.ts, tests/check.test.ts, src/lib/project.ts, tests/project.test.ts, README.md. Item details stay in the local security-notes.md. No contract change; stored fit and product data keep their shape.
+- Run: 3 units approved (U1 after 2 rounds, U2 and U3 in round 1); Verify green; done-when gate: all 5 items met, no cross-unit problems.
+- Lead repair after the run (inline, reviewed): a minor from models- and security-reviewer: subdomains of the shop's own site no longer count as an independent source (grouping by the last two host labels, three under co.uk-style suffixes; it can only make a result verify, never ok). Test fails on the previous code. /review-changes quick (wf_090e8303-41d): green, no findings.
+- Owner decisions applied (2026-11-01): the approval kind the product itself carries is kept on a result without a specific source; the README now says that the daily cap is shared by all visitors.
+- Consultant: PAL chat nim-nemotron35 on fitPolicy.ts: no review, it asked for more files instead (counted as the second PAL call of this ticket; not continued). Review subagents carry the review. Gemini not asked.
+- Checks (working tree, after the repair): `npm run typecheck` exit 0; `npm run lint` exit 0; `npm test` 1411 passed / 24 skipped; `npx --no-install vitest run tests/input-validation.test.ts` 175 passed; `npm run build` exit 0.
+- Remaining: deploy (owner go given 2026-11-01 for push after green) and the free live check.

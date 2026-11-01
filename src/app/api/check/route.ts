@@ -86,7 +86,8 @@ export async function POST(req: Request): Promise<Response> {
     if (!output.searched) throw new AppError("NO_RESULT", "The check found no web evidence. Try again later.");
     const validated = postValidate(ids, output.json, { citations: output.citations, results: output.results },
       Date.now(), request.inputHash, {
-        items: request.items.map((i) => ({ id: i.id, slot: i.slot, approvalText: i.product?.approvalText ?? null })),
+        items: request.items.map((i) => ({ id: i.id, slot: i.slot, approvalText: i.product?.approvalText ?? null,
+          productApproval: i.product?.approval ?? null, productUrl: i.product?.url ?? null })),
         bike: request.bike,
       });
     if (!validated.ok) throw new AppError("SCHEMA_INVALID");

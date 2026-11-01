@@ -526,8 +526,13 @@ export type ExportPlan = {
   historyMarkdown: string;
 };
 
-/** Free text on one line, so a newline in a name or instruction cannot fake a heading in history.md. */
-const oneLine = (text: string) => text.replace(/[\r\n]+/g, " ");
+/**
+ * Free text on one line, so a newline cannot fake a heading in history.md, and with Markdown
+ * link, image and HTML characters backslash-escaped. The backslash is escaped first so an
+ * existing one cannot cancel a later escape.
+ */
+const oneLine = (text: string) =>
+  text.replace(/[\r\n]+/g, " ").replace(/\\/g, "\\\\").replace(/[`\[\]()!<>]/g, "\\$&");
 
 /** Filesystem-safe folder name plus the first 8 id characters so same-name projects differ. */
 function exportFolderName(name: string, projectId: string): string {
@@ -596,7 +601,7 @@ export function exportPlan(input: {
     if (v.change) {
       md.push(`Instruction: ${oneLine(v.change.instruction)}`, `Mode: ${v.change.mode}`);
       if (v.kind === "visual" && !v.composed) {
-        md.push(`Full image, not blended${v.fallbackReason ? ` (${v.fallbackReason})` : ""}`);
+        md.push(`Full image, not blended${v.fallbackReason ? ` (${oneLine(v.fallbackReason)})` : ""}`);
       }
     }
     md.push(file ? `File: ${file}` : "File: image not exported (external image)");

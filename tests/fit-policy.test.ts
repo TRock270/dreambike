@@ -1,7 +1,7 @@
 // Server fit post-validation: model outputs that claim "ok" must not survive without evidence.
 import { describe, expect, it } from "vitest";
 import { bikeLimitations } from "@/lib/editPolicy";
-import { FIT_PRECHECK_NOTE, LEGAL_SEED, buildFitTask, legalAsOf, normalizeUrl, postValidate, type FitContext } from "@/lib/server/fitPolicy";
+import { FIT_PRECHECK_NOTE, LEGAL_SEED, buildFitTask, legalAsOf, normalizeUrl, postValidate, siteOf, type FitContext } from "@/lib/server/fitPolicy";
 import type { BikeData, BuildItemData } from "@/lib/types";
 
 const id = () => crypto.randomUUID();
@@ -173,6 +173,117 @@ describe("postValidate downgrades", () => {
     ]) {
       expect(run(itemId, "seat", claimsOk(itemId, over), known).status, JSON.stringify(over)).toBe("verify");
     }
+  });
+});
+
+// Product-host and sourceless rules (SEC4 P3, P4).
+describe("specific sources and sourceless claims", () => {
+  const SHOP = "https://www.Shop-Example.de/p/123";
+  const MAKER = "https://maker.example/lights/h4";
+  const runItem = (itemId: string, slot: FitContext["items"][number]["slot"], output: Record<string, unknown>,
+    product: Partial<FitContext["items"][number]> = {}, urls = [MAKER], b = bike()) => {
+    const context: FitContext = { items: [{ id: itemId, slot, ...product }], bike: b };
+    const r = postValidate([itemId], { results: [output] }, evidenceFor(...urls), NOW, HASH, context);
+    if (!r.ok) throw new Error(r.message);
+    return r.response.results[0]!;
+  };
+  const src = (url: string) => [{ url, title: "Page", supports: "fit" }];
+  const lamp = (itemId: string, over: Record<string, unknown> = {}) => claimsOk(itemId, {
+    approval: "e_mark", inspection: "none", carryDocuments: "not_required", sources: src(MAKER), ...over });
+
+  it("an exhaust is never ok, even with ABE, covered, none and a maker source on another host", () => {
+    const itemId = id();
+    const r = runItem(itemId, "exhaust", claimsOk(itemId, { carryDocuments: "not_required", sources: src(MAKER) }), { productUrl: SHOP });
+    expect(r.status).toBe("verify");
+    expect(r.reasons.join(" ")).toMatch(/inspector review/i);
+    expect(r.inspection).toBe("unknown"); // the server's exhaust conditions name Teilegutachten and an inspector
+  });
+
+  it("a headlight with E-mark and a maker source on another host stays ok (legit)", () => {
+    const itemId = id();
+    const r = runItem(itemId, "headlight", lamp(itemId), { productUrl: SHOP, productApproval: "e_mark" });
+    expect(r.status).toBe("ok");
+    expect(r.approval).toBe("e_mark");
+    expect(r.inspection).toBe("none");
+    expect(r.carryDocuments).toBe("not_required");
+  });
+
+  it("a source only on the product host (also the www. variant) does not make ok", () => {
+    for (const url of ["https://shop-example.de/p/9", "https://www.shop-example.de/p/9", "https://SHOP-EXAMPLE.de/other",
+      "https://blog.shop-example.de/review"]) {
+      const itemId = id();
+      const r = runItem(itemId, "headlight", lamp(itemId, { sources: src(url) }), { productUrl: SHOP }, [url]);
+      expect(r.sources, url).toHaveLength(1); // stays listed
+      expect(r.status, url).toBe("verify");
+    }
+  });
+
+  it("groups hosts by site: subdomains are one site, co.uk-style suffixes keep the shop name", () => {
+    expect(siteOf("blog.shop-example.de")).toBe("shop-example.de");
+    expect(siteOf("shop-example.de")).toBe("shop-example.de");
+    expect(siteOf("www.parts.co.uk")).toBe("parts.co.uk");
+    expect(siteOf("maker.co.uk")).toBe("maker.co.uk");
+    // Legit: a maker on its own domain stays a separate site from the shop.
+    expect(siteOf("docs.maker-lights.com")).not.toBe(siteOf("shop-example.de"));
+  });
+
+  it("with no product any non-general grounded source counts, as before", () => {
+    const itemId = id();
+    expect(runItem(itemId, "headlight", lamp(itemId), {}).status).toBe("ok");
+  });
+
+  it("a sourceless verify answer resets every positive claim to unknown and says so once", () => {
+    const itemId = id();
+    const r = runItem(itemId, "seat", claimsOk(itemId, { status: "verify", carryDocuments: "not_required", sources: [] }), {}, []);
+    expect([r.approval, r.documentCoverage, r.inspection, r.eintragung, r.carryDocuments])
+      .toEqual(["unknown", "unknown", "unknown", "unknown", "unknown"]);
+    const notes = r.reasons.filter((t) => /reset to unknown/.test(t));
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatch(/approval.*documentCoverage.*inspection.*eintragung.*carryDocuments/);
+  });
+
+  it("the product's own approval stays when it equals the model's, the rest is reset", () => {
+    const itemId = id();
+    const r = runItem(itemId, "seat", claimsOk(itemId, { status: "verify", carryDocuments: "not_required", sources: [] }),
+      { productApproval: "abe" }, []);
+    expect(r.approval).toBe("abe");
+    expect([r.documentCoverage, r.inspection, r.eintragung, r.carryDocuments]).toEqual(["unknown", "unknown", "unknown", "unknown"]);
+    expect(r.reasons.join(" ")).not.toMatch(/reset to unknown:.*approval/);
+  });
+
+  it("a different model approval than the product's is reset", () => {
+    const itemId = id();
+    const r = runItem(itemId, "seat", claimsOk(itemId, { status: "verify", sources: [] }), { productApproval: "e_mark" }, []);
+    expect(r.approval).toBe("unknown");
+  });
+
+  it("negative values and problem status are never touched", () => {
+    const itemId = id();
+    const r = runItem(itemId, "seat", claimsOk(itemId, {
+      status: "problem", approval: "none", documentCoverage: "not_covered", inspection: "einzelabnahme",
+      eintragung: "required", carryDocuments: "required", sources: [] }), {}, []);
+    expect(r.status).toBe("problem");
+    expect([r.approval, r.documentCoverage, r.inspection, r.eintragung, r.carryDocuments])
+      .toEqual(["none", "not_covered", "einzelabnahme", "required", "required"]);
+    expect(r.reasons.join(" ")).not.toMatch(/reset to unknown/);
+  });
+
+  it("a result with a specific source keeps its positive claims", () => {
+    const itemId = id();
+    const r = runItem(itemId, "seat", claimsOk(itemId, { status: "verify", sources: src(MAKER) }), { productUrl: SHOP }, [MAKER]);
+    expect([r.approval, r.documentCoverage, r.inspection, r.eintragung]).toEqual(["abe", "covered", "none", "not_required"]);
+  });
+});
+
+describe("server notes survive a full set of model reasons", () => {
+  it("exhaust ok with no sources and 12 model reasons still shows the inspector review and the reset note", () => {
+    const itemId = id();
+    const reasons = Array.from({ length: 12 }, (_, i) => `Fits, no inspection needed ${i}`);
+    const r = run(itemId, "exhaust", claimsOk(itemId, { sources: [], reasons }), bike(), []);
+    expect(r.status).toBe("verify");
+    expect(r.reasons).toHaveLength(12);
+    expect(r.reasons.some((x) => /inspector review/.test(x))).toBe(true);
+    expect(r.reasons.some((x) => /reset to unknown/.test(x))).toBe(true);
   });
 });
 

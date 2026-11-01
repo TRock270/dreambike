@@ -53,9 +53,14 @@ export type FitEvidence = {
   /** web_search_call results. */
   results: { url: string; title?: string | null }[];
 };
+export type FitContextItem = {
+  id: string; slot: SlotId; approvalText?: string | null;
+  /** The product's own approval claim and URL (page data, not evidence). Absent for no product. */
+  productApproval?: FitData["approval"] | null; productUrl?: string | null;
+};
 export type FitContext = {
   /** Slot of every requested item id, for the slot-specific limitations. */
-  items: { id: string; slot: SlotId; approvalText?: string | null }[];
+  items: FitContextItem[];
   bike: BikeData;
 };
 export type PostValidation =
@@ -82,6 +87,31 @@ function isGeneralSource(url: string): boolean {
   if (GENERAL_URLS.has(n)) return true;
   const host = new URL(n).hostname;
   return GENERAL_HOSTS.some((g) => host === g || host.endsWith("." + g));
+}
+
+/** Hostname, lowercase, without a leading "www.". Null for text that is not an absolute URL. */
+export function hostOf(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  try {
+    return new URL(raw).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return null;
+  }
+}
+
+// Second-level labels under a two-letter country code that are not the shop's own name ("shop.co.uk").
+const SHARED_SLD = new Set(["co", "com", "org", "net", "gov", "ac", "or", "ne"]);
+
+/**
+ * The site a host belongs to, without a public-suffix list: its last two labels, or three under co.uk-style
+ * suffixes. "blog.shop.de" and "shop.de" are one site. When unsure it lumps hosts together, which only makes a
+ * source count as the shop's own (verify instead of ok), never the other way round.
+ */
+export function siteOf(host: string): string {
+  const labels = host.split(".");
+  const tld = labels[labels.length - 1] ?? "";
+  const take = tld.length === 2 && SHARED_SLD.has(labels[labels.length - 2] ?? "") ? 3 : 2;
+  return labels.slice(-take).join(".");
 }
 
 /** Keep only sources whose exact URL (normalized) was a citation or search result. */
@@ -149,8 +179,9 @@ function withAdded(existing: readonly string[], addedAll: readonly string[], max
 /** Apply the downgrade rules to one model result. */
 function validateResult(
   model: z.infer<typeof FitModelOutput>["results"][number], slot: SlotId | undefined, bike: BikeData,
-  approvalText: string | null | undefined, evidence: FitEvidence, accessedAt: string,
+  item: FitContextItem | undefined, evidence: FitEvidence, accessedAt: string,
 ): FitData {
+  const approvalText = item?.approvalText;
   const sources = groundedSources(model.sources, evidence, accessedAt);
   const r: FitData = { ...model, sources };
   const notes: string[] = [];
@@ -161,8 +192,15 @@ function validateResult(
     notes.push('Inspection "none" was not accepted: no approval document is established for this part.');
   }
 
+  if (slot) {
+    const add = slotAdditions(slot, bike, r);
+    r.toMeasure = withAdded(r.toMeasure, add.measure, 12);
+    r.conditions = withAdded(r.conditions, add.conditions, 12);
+  }
+
   // Inspection "none" next to any inspection or registration wording (the model's own conditions
-  // and reasons, or the product's approval text) cannot be trusted: an ABE with an Auflage is not "none".
+  // and reasons, the server's added conditions, or the product's approval text) cannot be trusted:
+  // an ABE with an Auflage is not "none". Runs after slotAdditions so the server's text counts.
   if (r.inspection === "none") {
     const wording = /abnahme|eintrag|inspect|tüv|tuev|dekra|gutachten|auflage|§\s?(19|21)/i;
     if (has([...r.conditions, ...r.reasons, approvalText ?? ""], wording)) {
@@ -171,14 +209,18 @@ function validateResult(
     }
   }
 
-  if (slot) {
-    const add = slotAdditions(slot, bike, r);
-    r.toMeasure = withAdded(r.toMeasure, add.measure, 12);
-    r.conditions = withAdded(r.conditions, add.conditions, 12);
-  }
+  // A source is specific if it is grounded, not a law/authority page, and not on the product's own
+  // shop host: the product page only repeats what the shop claims (P3).
+  const productHost = hostOf(item?.productUrl);
+  const productSite = productHost === null ? null : siteOf(productHost);
+  const sourceSite = (url: string) => { const h = hostOf(url); return h === null ? null : siteOf(h); };
+  const specific = sources.filter((s) => !isGeneralSource(s.url) && (productSite === null || sourceSite(s.url) !== productSite));
 
+  // All server notes are collected and written with one withAdded call, so a model that sends the
+  // maximum number of reasons cannot push the server's explanation out.
+  const serverNotes: string[] = [];
   if (r.status === "ok") {
-    const specific = sources.filter((s) => !isGeneralSource(s.url));
+    if (slot === "exhaust") notes.push("An exhaust always needs an inspector review; this is not a plain ok.");
     if (r.toMeasure.length > 0) notes.push("Measurements are still open.");
     if (r.documentCoverage !== "covered") notes.push("Document coverage for this vehicle and part is not confirmed.");
     if (r.inspection === "unknown") notes.push("Whether an inspection is needed is unknown.");
@@ -187,14 +229,32 @@ function validateResult(
     }
     if (r.eintragung === "unknown") notes.push("Whether an Eintragung is needed is unknown.");
     if (r.approval === "unknown" || r.approval === "none") notes.push("No approval document is established.");
-    if (specific.length === 0) notes.push("No source specific to this part or vehicle was found; a general StVZO or TÜV link does not prove fit.");
+    if (specific.length === 0) notes.push("No source specific to this part or vehicle was found; a general StVZO or TÜV link or the product's own shop page does not prove fit.");
     if (notes.length > 0) {
       r.status = "verify";
-      r.reasons = withAdded(r.reasons, [`Downgraded from ok to verify: ${notes.join(" ")}`], 12);
+      serverNotes.push(`Downgraded from ok to verify: ${notes.join(" ")}`);
     }
-  } else if (notes.length > 0) {
-    r.reasons = withAdded(r.reasons, notes, 12);
+  } else {
+    serverNotes.push(...notes);
   }
+
+  // Without a specific source the model's positive claims are unsupported (P4): clear them to
+  // unknown. Negative values (none, required) stay, they only make the result more careful.
+  if (specific.length === 0) {
+    const cleared: string[] = [];
+    const productApproval = item?.productApproval ?? null;
+    if ((r.approval === "abe" || r.approval === "e_mark" || r.approval === "teilegutachten") && r.approval !== productApproval) {
+      r.approval = "unknown"; cleared.push("approval");
+    }
+    if (r.documentCoverage === "covered") { r.documentCoverage = "unknown"; cleared.push("documentCoverage"); }
+    if (r.inspection === "none") { r.inspection = "unknown"; cleared.push("inspection"); }
+    if (r.eintragung === "not_required") { r.eintragung = "unknown"; cleared.push("eintragung"); }
+    if (r.carryDocuments === "not_required") { r.carryDocuments = "unknown"; cleared.push("carryDocuments"); }
+    if (cleared.length > 0) {
+      serverNotes.push(`No source specific to this part or vehicle backs these claims, so they were reset to unknown: ${cleared.join(", ")}.`);
+    }
+  }
+  if (serverNotes.length > 0) r.reasons = withAdded(r.reasons, serverNotes, 12);
   return r;
 }
 
@@ -219,6 +279,6 @@ export function postValidate(
   const checkedAt = new Date(now).toISOString();
   const slots = new Map(context.items.map((i) => [i.id, i]));
   const byId = new Map(parsed.data.results.map((r) => [r.itemId, r]));
-  const results = requestIds.map((id) => validateResult(byId.get(id)!, slots.get(id)?.slot, context.bike, slots.get(id)?.approvalText, evidence, checkedAt));
+  const results = requestIds.map((id) => validateResult(byId.get(id)!, slots.get(id)?.slot, context.bike, slots.get(id), evidence, checkedAt));
   return { ok: true, response: { inputHash, checkedAt, results } };
 }

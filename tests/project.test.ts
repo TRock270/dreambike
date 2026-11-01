@@ -333,6 +333,25 @@ describe("exportPlan", () => {
     expect(md.match(/Full image, not blended/g)).toHaveLength(1);
   });
 
+  it("escapes Markdown link, image and HTML forms in free text of history.md", () => {
+    const evil = "![x](https://tracker.example/p.png) <img src=x>";
+    const a = mk("a", r0, 1, "tank", { composed: false, fallbackReason: evil as never });
+    const withTitle: Version = { ...a, change: { ...a.change!, instruction: evil }, items: a.items.map((it) => ({ ...it, title: evil })) };
+    const md = plan([r0, withTitle], withTitle.id, evil).historyMarkdown;
+    expect(md).not.toMatch(/(^|[^\\])!\[/);
+    expect(md).not.toMatch(/(^|[^\\])\]\(/);
+    expect(md).not.toMatch(/(^|[^\\])<img/);
+    expect(md).toContain("\\!\\[x\\]\\(https://tracker.example/p.png\\) \\<img src=x\\>");
+    expect(md).toContain("Full image, not blended (\\!");
+  });
+
+  it("keeps a plain title readable and a backslash from cancelling an escape", () => {
+    const a = mk("a", r0, 1, "tank", { items: [{ ...mk("a", r0, 1).items[0]!, title: "Bar-end mirror 2024" }] });
+    expect(plan([r0, a], a.id).historyMarkdown).toContain("Tank: Bar-end mirror 2024 (");
+    const b = mk("b", r0, 1, "tank", { items: [{ ...a.items[0]!, title: "x\\[y" }] });
+    expect(plan([r0, b], b.id).historyMarkdown).toContain("x\\\\\\[y");
+  });
+
   it("throws on a cycle", () => {
     const a = { ...r0, id: vid("a"), parentId: vid("b") as string | null, createdAt: 1 };
     const b = { ...r0, id: vid("b"), parentId: a.id as string | null, createdAt: 2 };
