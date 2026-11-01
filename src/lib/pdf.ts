@@ -281,17 +281,18 @@ class Ctx {
 
   /**
    * Text the font can draw. NFC first (so decomposed umlauts become one letter), then code point by code point:
-   * a newline stays, tab and other control characters become a space, invisible characters go, a symbol
-   * without a glyph gets an ASCII stand-in, anything else becomes "?" and sets `replaced`.
+   * a newline stays (only when `multiline`; single-line text turns every line break into a space), tab and other
+   * control characters become a space, invisible characters go, a symbol without a glyph gets an ASCII
+   * stand-in, anything else becomes "?" and sets `replaced`.
    */
-  clean(font: FontKey, raw: string): string {
+  clean(font: FontKey, raw: string, multiline = false): string {
     const set = this.charset(font);
     // Zl and Zp are the Unicode line and paragraph separators; NEL is the old mainframe newline.
-    const text = raw.normalize("NFC").replace(/\r\n?|[\p{Zl}\p{Zp}]|\u0085/gu, "\n");
+    const text = raw.normalize("NFC").replace(/\r\n?|[\p{Zl}\p{Zp}]|\u0085/gu, multiline ? "\n" : " ");
     let out = "";
     for (const ch of text) {
       const cp = ch.codePointAt(0)!;
-      if (ch === "\n") { out += ch; continue; }
+      if (ch === "\n" && multiline) { out += ch; continue; }
       if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f) || SPACE_CODES.has(cp)) { out += " "; continue; }
       if (INVISIBLE_CODES.has(cp)) continue;
       if (set.has(cp)) { out += ch; continue; }
@@ -439,8 +440,8 @@ function segWidth(c: Ctx, seg: Seg): number {
 }
 
 /** Wraps `raw` (cleaned for the font) into cell lines. The icon and chip go on the first line only. */
-function textLines(c: Ctx, raw: string, style: Style, width: number, deco: Deco = {}): CellLine[] {
-  const text = c.clean(style.font, raw);
+function textLines(c: Ctx, raw: string, style: Style, width: number, deco: Deco = {}, multiline = false): CellLine[] {
+  const text = c.clean(style.font, raw, multiline);
   const lines = c.wrap(style, text, Math.max(width - decoWidth(deco), 1));
   const indent = (deco.chip ? CHIP_PAD : 0) + (deco.icon ? ICON + ICON_GAP : 0);
   return lines.map((line, i) => ({
@@ -1208,7 +1209,7 @@ function closingBlocks(c: Ctx, input: EstimatePdfInput, info: Info): Block[] {
   const valueW = CONTENT_W - LABEL_W;
   const note = (label: string, text: string): FlowLine[] => rowLines(c, [
     { x: M, width: LABEL_W, lines: textLines(c, label, labelStyle, LABEL_W) },
-    { x: M + LABEL_W, width: valueW, lines: textLines(c, text, sans("--nl-text"), valueW) },
+    { x: M + LABEL_W, width: valueW, lines: textLines(c, text, sans("--nl-text"), valueW, {}, true) },
   ], "note");
   const review = input.inspectionReview;
   // A review belongs to one build. When the bike, parts or shop rules changed since, it no longer counts.

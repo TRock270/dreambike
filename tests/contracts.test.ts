@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  Bike, BikeChecked, Box, BudgetResponse, CheckRequest, ErrorResponse, FitResult, HealthResponse,
+  Bike, BikeChecked, BikeRevision, Box, CacheEntry, DemoFileName, SnapshotImage, SnapshotMask, StoredMask, BudgetResponse, CheckRequest, ErrorResponse, FitResult, HealthResponse,
   Fee, Instruction, Project, Version, InstructionPayload, MODEL_FORMATS, SegmentPayload, SegmentResponse, Settings,
   modelJsonSchema,
 } from "@/lib/contracts";
@@ -209,5 +209,73 @@ describe("Version part boxes and ids", () => {
     expect(ok({ parts: [part("a", [0, 0, 10, 10]), part("a", [1, 1, 5, 5])] })).toBe(true);
     expect(ok({ fees: [fee(uuid), fee(id2)] })).toBe(true);
     expect(ok({ fees: [fee(uuid), fee(uuid)] })).toBe(false);
+  });
+});
+
+describe("input boundaries (SEC3)", () => {
+  const rev = (over: Record<string, unknown>, bikeOver: Record<string, unknown> = {}) => ({
+    id: uuid, bike: { ...bike, ...bikeOver }, confirmed: true, revision: 1, confirmedAt: 1, ...over,
+  });
+
+  it("refuses a confirmed bike revision with yearFrom > yearTo, also inside a Project", () => {
+    expect(BikeRevision.safeParse(rev({}, { yearFrom: 2020, yearTo: 2018 })).success).toBe(false);
+    expect(BikeRevision.safeParse(rev({}, { yearFrom: 2018, yearTo: 2020 })).success).toBe(true);
+    expect(BikeRevision.safeParse(rev({}, { yearFrom: 2018, yearTo: 2018 })).success).toBe(true);
+    expect(BikeRevision.safeParse(rev({}, { yearFrom: 2020, yearTo: null })).success).toBe(true);
+    const project = { id: uuid, name: "B", rootVersionId: uuid, headVersionId: uuid, settingsId: "default",
+      createdAt: 0, updatedAt: 0 };
+    expect(Project.safeParse({ ...project, bikeRevision: rev({}, { yearFrom: 2020, yearTo: 2018 }) }).success).toBe(false);
+    expect(Project.safeParse({ ...project, bikeRevision: rev({}, { yearFrom: 2018, yearTo: 2020 }) }).success).toBe(true);
+  });
+
+  it("lets an unconfirmed revision keep a year typed mid-edit (the withdraw-confirmation save)", () => {
+    expect(BikeRevision.safeParse(rev({ confirmed: false, confirmedAt: null }, { yearFrom: 2020, yearTo: 2018 })).success).toBe(true);
+  });
+
+  it("refuses DEL, C1 and line/paragraph separators in snapshot and demo file names", () => {
+    const img = { id: uuid, hash, width: 10, height: 10, bytes: 10, rights: "owner" as const };
+    const ok = (file: string) => SnapshotImage.safeParse({ ...img, file }).success;
+    expect(ok("a b.webp")).toBe(true);
+    for (const bad of ["a\u007Fb", "a\u0080b", "a\u009Fb", "a\u2028b", "a\u2029b"]) {
+      expect(ok(bad)).toBe(false);
+      expect(DemoFileName.safeParse(bad).success).toBe(false);
+    }
+    expect(DemoFileName.safeParse("00-start.webp").success).toBe(true);
+  });
+
+  it("bounds every createdAt/updatedAt so new Date(x).toISOString() cannot throw", () => {
+    const max = 8.64e15;
+    const project = { id: uuid, name: "B", rootVersionId: uuid, headVersionId: uuid, settingsId: "default",
+      bikeRevision: rev({ confirmed: false, confirmedAt: null }), createdAt: 0, updatedAt: 0 };
+    expect(Project.safeParse({ ...project, createdAt: max, updatedAt: max }).success).toBe(true);
+    expect(Project.safeParse({ ...project, createdAt: max + 1 }).success).toBe(false);
+    expect(Project.safeParse({ ...project, updatedAt: max + 1 }).success).toBe(false);
+    expect(BikeRevision.safeParse(rev({ confirmedAt: max + 1 })).success).toBe(false);
+    const mask = { id: uuid, imageHash: hash, width: 2, height: 2, pixels: new Uint8Array(4), createdAt: max + 1 };
+    expect(StoredMask.safeParse({ ...mask, createdAt: max }).success).toBe(true);
+    expect(StoredMask.safeParse(mask).success).toBe(false);
+    const snapMask = { id: uuid, imageHash: hash, width: 2, height: 2, file: `${uuid}.bin`, createdAt: max };
+    expect(SnapshotMask.safeParse(snapMask).success).toBe(true);
+    expect(SnapshotMask.safeParse({ ...snapMask, createdAt: max + 1 }).success).toBe(false);
+    const cache = { key: "k", blobIds: [], value: null, bytes: 1, createdAt: max, lastAccessedAt: 1, expiresAt: null };
+    expect(CacheEntry.safeParse(cache).success).toBe(true);
+    expect(CacheEntry.safeParse({ ...cache, createdAt: max + 1 }).success).toBe(false);
+  });
+
+  it("bounds Version.createdAt", () => {
+    const image = { id: uuid, hash, width: 10, height: 10, bytes: 10, rights: "owner" as const };
+    const v = { id: uuid, projectId: uuid, parentId: null, kind: "root", image, cutoutImageId: null, bikeMaskId: null,
+      parts: [], items: [], fees: [], inspectionReview: null, change: null,
+      composed: false, aligned: false, drift: null, fallbackReason: null, createdAt: 8.64e15 };
+    expect(Version.safeParse(v).success).toBe(true);
+    expect(Version.safeParse({ ...v, createdAt: 8.64e15 + 1 }).success).toBe(false);
+  });
+
+  it("InstructionPayload.text needs a non-space character", () => {
+    const p = { slot: "tank", bike, mode: "paint", box: [100, 100, 300, 200], width: 2048, height: 1536 };
+    expect(InstructionPayload.safeParse({ ...p, text: "gloss black" }).success).toBe(true);
+    for (const text of [" ", "   ", "\n\t ", "\u00A0\u2003"]) {
+      expect(InstructionPayload.safeParse({ ...p, text }).success).toBe(false);
+    }
   });
 });

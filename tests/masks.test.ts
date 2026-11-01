@@ -1,4 +1,6 @@
 import { parseImageStream } from "@meta-sam/parser";
+// Deep import on purpose: the parser does not export its encoder, and a real encoded mask is needed.
+import { encodeSegmentationMask } from "../node_modules/@meta-sam/parser/dist/mask-codec.js";
 import sharp from "sharp";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { POST } from "@/app/api/segment/route";
@@ -7,7 +9,7 @@ import { AppError } from "@/lib/errors";
 import { acceptableAsPart, assignFrontRear, clipToBike, maskArea, maskBox, outlinePixels, shareOfBike, unionMasks } from "@/lib/parts";
 import { runLimited } from "@/lib/queue";
 import { VERIFIED_SAM_DOWNSCALED, VERIFIED_SAM_PLACEMENT, VERIFIED_SAM_POINTS, isDownscaled, maskToNormalized, maskToPng, placeSamRasters, pngToMask } from "@/lib/server/images";
-import { samPointsText, samRecords, segment } from "@/lib/server/meta";
+import { guardSamStream, samPointsText, samRecords, segment } from "@/lib/server/meta";
 import { sseEvents } from "@/lib/server/sse";
 import { withSession } from "./support/session";
 
@@ -51,7 +53,7 @@ describe("SAM stream parsing", () => {
     const splits = [[], [1], [bytes.length / 2 | 0], Array.from({ length: 40 }, (_, k) => (k + 1) * 17).filter((x) => x < bytes.length)];
     for (const cuts of splits) {
       const result = await parseImageStream(sseEvents(streamOf(bytes, cuts)) as AsyncIterable<{ type: string }>).finalResult;
-      const sam = samRecords(result);
+      const sam = samRecords(result, { width: 320, height: 334 });
       expect(sam.complete).toBe(true);
       expect(sam.objects).toHaveLength(1);
       const o = sam.objects[0]!;
@@ -66,14 +68,38 @@ describe("SAM stream parsing", () => {
       { type: "response.completed" },
     ].map((e) => `data: ${JSON.stringify(e)}\n\n`).join(""));
     const result = await parseImageStream(sseEvents(streamOf(bytes, [7])) as AsyncIterable<{ type: string }>).finalResult;
-    expect(samRecords(result).objects).toEqual([]);
+    expect(samRecords(result, { width: 320, height: 334 }).objects).toEqual([]);
+  });
+});
+
+describe("SAM answer limits (SEC3)", () => {
+  const BOX = "<|box;x1=211;y1=228;x2=270;y2=254;w=320;h=334;c=0.87|>";
+  const MASK = BOX + "<|mask;x=0;y=0;data=27,60,~!!!!M!0c[0o91w?q1!pIH4pPRVp2B3'7`e.ioeAf6-k/#Xd8%dX9x(|>";
+  const parse = (text: string) => parseImageStream(sseEvents(streamOf(new TextEncoder().encode([
+    { type: "response.content_part.done", ...lane, part: { type: "output_text", text } },
+    { type: "response.completed" },
+  ].map((e) => `data: ${JSON.stringify(e)}\n\n`).join("")), [])) as AsyncIterable<{ type: string }>).finalResult;
+  const code = (fn: () => unknown) => { try { fn(); return "OK"; } catch (e) { return (e as AppError).code; } };
+
+  it("caps distinct mask objects at 64", async () => {
+    const many = (n: number) => Array.from({ length: n }, (_, i) => `<0f>${i}${MASK}\n`).join("");
+    expect(samRecords(await parse(many(64)), { width: 320, height: 334 }).objects).toHaveLength(64);
+    const over = await parse(many(65));
+    expect(code(() => samRecords(over, { width: 320, height: 334 }))).toBe("SCHEMA_INVALID");
+  });
+
+  it("refuses a raster larger than the frame, keeps frame-sized and smaller ones", async () => {
+    const result = await parse(`<0f>0${MASK}\n`); // 60 wide, 27 high
+    expect(code(() => samRecords(result, { width: 59, height: 100 }))).toBe("SCHEMA_INVALID");
+    expect(code(() => samRecords(result, { width: 100, height: 26 }))).toBe("SCHEMA_INVALID");
+    expect(code(() => samRecords(result, { width: 60, height: 27 }))).toBe("OK");
   });
 });
 
 describe("mask placement (U01: box-relative verified 2026-10-28)", () => {
   it("refuses a box-sized raster without a verified placement, places it inside the box when verified", async () => {
     const result = await parseImageStream(sseEvents(streamOf(sseBytes(), [])) as AsyncIterable<{ type: string }>).finalResult;
-    const o = samRecords(result).objects[0]!;
+    const o = samRecords(result, { width: 320, height: 334 }).objects[0]!;
     expect(VERIFIED_SAM_PLACEMENT).toBe("box_relative");
     expect(() => maskToNormalized(o.raster, o.maskWidth, o.maskHeight, o.bounds, 320, 334, null))
       .toThrow(AppError);
@@ -286,6 +312,72 @@ describe("downscaled SAM rasters (U01: verified 2026-10-28, VERIFIED_SAM_DOWNSCA
   });
 });
 
+describe("SAM stream guard (SEC3)", () => {
+  const BIG = "<0f>0<|mask;x=0;y=0;data=20000,20000,!AAAA|>";
+  const run = (text: string, split = 0) => {
+    const ev = (e: object) => `data: ${JSON.stringify(e)}\n\n`;
+    const deltas = split ? [text.slice(0, split), text.slice(split)] : [text];
+    const bytes = new TextEncoder().encode(deltas.map((d) => ev({ type: "response.output_text.delta", ...lane, delta: d })).join("")
+      + ev({ type: "response.completed" }));
+    return (async () => { for await (const _ of guardSamStream(sseEvents(streamOf(bytes, [])), { width: 1431, height: 981 })) void _; })()
+      .then(() => "OK", (e: AppError) => e.code);
+  };
+
+  it("refuses an oversized data= record before the parser sees it, even when split", async () => {
+    expect(await run(BIG)).toBe("SCHEMA_INVALID");
+    for (let cut = 1; cut < BIG.length; cut++) expect(await run(BIG, cut)).toBe("SCHEMA_INVALID");
+    expect(await run("<0f>0<|mask;x=0;y=0;data=1,99999999999999,!|>")).toBe("SCHEMA_INVALID");
+  });
+  it("accepts frame-sized and downscaled records", async () => {
+    expect(await run("<0f>0<|mask;x=0;y=0;data=981,1431,!AA|>")).toBe("OK");
+    expect(await run("<0f>0<|mask;x=0;y=0;data=702,1024,!AA|>", 30)).toBe("OK");
+  });
+  it("refuses too many mask records", async () => {
+    const many = (n: number) => Array.from({ length: n }, (_, i) => `<0f>${i}<|mask;x=0;y=0;data=1,1,!|>`).join("");
+    expect(await run(many(256))).toBe("OK");
+    expect(await run(many(257))).toBe("SCHEMA_INVALID");
+  });
+  it("refuses blanks around key and value, tabs, and leading zeros split across deltas", async () => {
+    const rec = (d: string) => `<0f>0<|box;x1=0;y1=0;x2=9;y2=9;w=9;h=9|><|mask;x=0;y=0;${d}|>`;
+    expect(await run(rec("data = 20000,20000,!AA"))).toBe("SCHEMA_INVALID");
+    expect(await run(rec("data\t=\t20000 , 20000 ,!AA"))).toBe("SCHEMA_INVALID");
+    expect(await run(rec("data=00020000,20000,!AA"))).toBe("SCHEMA_INVALID");
+    const zeros = "0".repeat(300);
+    const ev = (e: object) => `data: ${JSON.stringify(e)}\n\n`;
+    const split = async (pieces: string[]) => {
+      const bytes = new TextEncoder().encode(pieces.map((d) => ev({ type: "response.output_text.delta", ...lane, delta: d })).join("") + ev({ type: "response.completed" }));
+      return (async () => { for await (const _ of guardSamStream(sseEvents(streamOf(bytes, [])), { width: 1431, height: 981 })) void _; })()
+        .then(() => "OK", (e: AppError) => e.code);
+    };
+    expect(await split(["<0f>0<|mask;x=0;y=0;data=" + zeros, "20000,20000,!AA|>"])).toBe("SCHEMA_INVALID");
+    expect(await split(["<0f>0<|mask;x=0;y=0;data", " ", "= ", "000", "981,", "1431,!AA|>"])).toBe("OK");
+    // an endless blank/zero run before the payload is refused so the buffer stays bounded
+    expect(await split(["<0f>0<|mask;x=0;y=0;data=" + "0".repeat(2000)])).toBe("SCHEMA_INVALID");
+  });
+  it("scans a long blank run after data= quickly (no backtracking), whole text or split", async () => {
+    const box = "<0f>0<|box;x1=0;y1=0;x2=9;y2=9;w=9;h=9|><|mask;x=0;y=0;";
+    for (const tail of ["data=" + " ".repeat(100_000) + "x", "data=1," + " ".repeat(100_000) + "x", "data" + " ".repeat(100_000) + "x"]) {
+      const started = Date.now();
+      await run(box + tail);
+      await run(box + tail, box.length + 6);
+      expect(Date.now() - started).toBeLessThan(2000); // the old regex took over 60 s here
+    }
+  });
+  it("segment() refuses a real oversized record before the parser decodes it", async () => {
+    vi.stubEnv("MODEL_API_KEY", "test-key");
+    const ev = (e: object) => `data: ${JSON.stringify(e)}\n\n`;
+    // 6000x6000 takes over a second to decode inside the parser (measured), so a fast refusal proves the guard ran first.
+    const big = encodeSegmentationMask(new Uint8Array(6000 * 6000), 6000, 6000);
+    const text = `<0f>0<|box;x1=0;y1=0;x2=9;y2=9;w=6000;h=6000|><|mask;x=0;y=0;data = ${big.height},${big.width},${big.payload}|>\n`;
+    const bytes = new TextEncoder().encode(ev({ type: "response.output_text.delta", ...lane, delta: text }) + ev({ type: "response.completed" }));
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(streamOf(bytes, []), { status: 200, headers: { "Content-Type": "text/event-stream" } }));
+    const started = Date.now();
+    await expect(segment({ width: 1431, height: 981, dataUrl: "data:image/webp;base64,AAAA" }, "wheel", AbortSignal.timeout(5000)))
+      .rejects.toMatchObject({ code: "SCHEMA_INVALID" });
+    expect(Date.now() - started).toBeLessThan(800);
+  });
+});
+
 describe("SAM request shape and the segment route", () => {
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
@@ -347,6 +439,30 @@ describe("SAM request shape and the segment route", () => {
     const point = await post({ mode: "points", width: 400, height: 300, points: [{ x: 10, y: 10, label: "positive" }] }, img);
     expect(ErrorResponse.parse(point.body).error.code).toBe("FEATURE_DISABLED");
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("refuses prompt syntax and control characters in a phrase before any reservation, in every mode", async () => {
+    const img = await webp(400, 300);
+    const bad = ["wheel<|mask|>", "a|>b", "wheel\nsecond", "tab\there", "nul\u0000", "del\u007f", "c1\u0085", "ls\u2028x", "ps\u2029x",
+      "<0f>1 wheel", "zw\u200bx", "bidi\u202ex", "iso\u2066x", "bom\ufeffx"];
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    for (const mock of ["", "1"]) {
+      vi.stubEnv("MOCK", mock);
+      for (const phrase of bad) {
+        const res = await post({ mode: "concept", width: 400, height: 300, phrase }, img);
+        expect([res.status, ErrorResponse.parse(res.body).error.code], phrase).toEqual([400, "INVALID_REQUEST"]);
+      }
+    }
+    vi.stubEnv("MOCK", "1");
+    for (const phrase of ["motorcycle", "front wheel", "Custom Öl-Tank (2)"]) {
+      expect((await post({ mode: "concept", width: 400, height: 300, phrase }, img)).status, phrase).toBe(200);
+    }
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("an empty image part is 400 INVALID_IMAGE", async () => {
+    const res = await post({ mode: "concept", width: 400, height: 300, phrase: "wheel" }, new Uint8Array(0));
+    expect([res.status, ErrorResponse.parse(res.body).error.code]).toEqual([400, "INVALID_IMAGE"]);
   });
 
   it("validates before anything else and is LIVE_DISABLED in demo mode, with no network call", async () => {

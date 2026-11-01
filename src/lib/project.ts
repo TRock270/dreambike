@@ -699,6 +699,17 @@ export const FIT_PRECHECK_NOTE =
 
 /** Fit research older than this is stale. Same value as the fit cache expiry (cache.ts re-exports it). */
 export const FIT_TTL_MS = 24 * 60 * 60 * 1000;
+/**
+ * A check time this far ahead of the clock is tolerated; further ahead it would never expire, so it is stale.
+ * checkedAt is the server clock and now the browser clock, which can be hours off (wrong time zone), so the
+ * tolerance is one TTL: a future-dated check stays usable for at most two TTLs.
+ */
+export const FIT_FUTURE_SKEW_MS = FIT_TTL_MS;
+
+/** True when a check made at `checkedMs` is neither older than FIT_TTL_MS nor more than FIT_FUTURE_SKEW_MS in the future. */
+export function fitTimeFresh(checkedMs: number, now: number): boolean {
+  return Number.isFinite(checkedMs) && now - checkedMs <= FIT_TTL_MS && checkedMs - now <= FIT_FUTURE_SKEW_MS;
+}
 
 /** Stable JSON: object keys sorted, arrays kept in the order given. */
 export function stableJson(value: unknown): string {
@@ -792,8 +803,7 @@ export type FitStatus = "ok" | "verify" | "problem" | "stale" | "not_checked";
 export function fitStatusOf(item: BuildItemData, currentHash: string, now: number): FitStatus {
   if (item.fit === null) return "not_checked";
   if (item.fitInputHash !== currentHash || item.fitCheckedAt === null) return "stale";
-  const checked = Date.parse(item.fitCheckedAt);
-  if (!Number.isFinite(checked) || now - checked > FIT_TTL_MS) return "stale";
+  if (!fitTimeFresh(Date.parse(item.fitCheckedAt), now)) return "stale";
   return item.fit.status;
 }
 

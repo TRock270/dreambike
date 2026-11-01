@@ -115,6 +115,14 @@ describe("reserve error mapping", () => {
     expect(await codeOf(reserveWith(reply({ result: ["UNAVAILABLE", "caps_uninitialized"] })))).toBe("ACCOUNTING_UNAVAILABLE");
   });
 
+  it("a null, array or scalar REST body is ACCOUNTING_UNAVAILABLE, not a TypeError", async () => {
+    for (const body of [null, [], "x", 5, true]) {
+      expect(await codeOf(reserveWith(reply(body))), JSON.stringify(body)).toBe("ACCOUNTING_UNAVAILABLE");
+      expect(await codeOf(settle(redisCfg(reply(body)), { requestKey: "r", keys: [], amount: 1, namespace: NS }, "settled", 1)),
+        JSON.stringify(body)).toBe("ACCOUNTING_UNAVAILABLE");
+    }
+  });
+
   it("denies visitor and IP limits with the visitor text (429)", async () => {
     for (const bucket of ["visitor_day", "ip_day", "visitor_count", "ip_count"]) {
       const error = await reserveWith(reply({ result: ["DENIED", bucket] })).catch((e: unknown) => e) as AppError;

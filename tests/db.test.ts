@@ -363,6 +363,52 @@ describe("projects", () => {
     expect(await h.db.count("projects")).toBe(1);
   });
 
+  describe("the whole version tree is checked on load (SEC3 D1)", () => {
+    // A valid non-root version with a chosen parent; the root keeps parentId null, so a second root is a copy of it.
+    const extra = (base: Version, parentId: string | null, id = uuid()) => ({ ...base, id, parentId });
+
+    it("loads a normal tree with branches after undo, a branch edit and redo", async () => {
+      const { project, rootVersion } = await setup();
+      const a = prepare(rootVersion, "seat", "A", "b", 11);
+      await acceptVisual(h, project.id, rootVersion.id, a);
+      await undo(h, project.id, a.version.id);
+      const b = prepare(rootVersion, "seat", "B", "c", 12);
+      await acceptVisual(h, project.id, rootVersion.id, b); // a branch off the root
+      const loaded = await loadProject(h, project.id);
+      expect(loaded!.versions).toHaveLength(3);
+      expect(loaded!.project.headVersionId).toBe(b.version.id);
+    });
+
+    it("refuses an orphan whose parent is not stored, a second root, and a loop that is cut off from the root", async () => {
+      const { project, rootVersion } = await setup();
+      const child = prepare(rootVersion, "seat", "X", "b", 11).version;
+      const orphan = extra(child, uuid());
+      await h.db.put("versions", orphan as never);
+      await expect(loadProject(h, project.id)).rejects.toThrow(/parent is missing/i);
+      await h.db.delete("versions", orphan.id);
+
+      const secondRoot = extra(rootVersion, null);
+      await h.db.put("versions", secondRoot as never);
+      await expect(loadProject(h, project.id)).rejects.toBeInstanceOf(CorruptRecordError);
+      await expect(snapshotSources(h, project.id)).rejects.toBeInstanceOf(CorruptRecordError);
+      await h.db.delete("versions", secondRoot.id);
+
+      const x = uuid();
+      const y = uuid();
+      await h.db.put("versions", extra(child, y, x) as never);
+      await h.db.put("versions", extra(child, x, y) as never);
+      await expect(loadProject(h, project.id)).rejects.toThrow(/cycle|damaged/i);
+      expect(await h.db.count("versions")).toBe(3); // nothing was deleted
+    });
+
+    it("keeps a project whose head leaves no orphans after attachParts and sheet changes", async () => {
+      const { project, rootVersion } = await setup();
+      const a = prepare(rootVersion, "seat", "A", "b", 11);
+      await acceptVisual(h, project.id, rootVersion.id, a);
+      await expect(loadProject(h, project.id)).resolves.not.toBeNull();
+    });
+  });
+
   it("rejects a stored image whose blob is a base64 string", async () => {
     const { rootVersion } = await setup();
     await h.db.put("images", { ...(await h.db.get("images", rootVersion.image.id))!, blob: "AAAA" as never });
@@ -1196,6 +1242,14 @@ describe("attachFitResponse", () => {
       expect(await readCachedFit(h, f.inputHash, [real, mock], at(T1, HOUR))).toBeNull();
     });
 
+    it("misses a check dated more than 24 h in the future, hits at exactly 24 h (SEC3)", async () => {
+      const f = await fitSetup();
+      const a = uuid();
+      await cacheBatch(f, [a], T1);
+      expect(await readCachedFit(h, f.inputHash, [a], at(T1, -24 * HOUR))).not.toBeNull();
+      expect(await readCachedFit(h, f.inputHash, [a], at(T1, -24 * HOUR - 1))).toBeNull();
+    });
+
     it("misses past 24 h from checkedAt, also after a re-put renewed expiresAt", async () => {
       const f = await fitSetup();
       const [a, b] = [uuid(), uuid()];
@@ -1292,6 +1346,25 @@ describe("shop settings (T10)", () => {
     await expect(putShopSettings(h, "other", real, 2)).rejects.toBeInstanceOf(InvalidWriteError);
     await expect(loadSettings(h, "other")).rejects.toBeInstanceOf(InvalidWriteError);
     expect(await h.db.count("settings")).toBe(1);
+  });
+
+  it("does not trust a stored record whose rates or id do not match, and a save repairs it (SEC3 D7)", async () => {
+    await h.db.put("settings", { id: "default", updatedAt: 1, settings: { ...REAL_SETTINGS_DEFAULT, demoRates: true } });
+    await expect(loadSettings(h, "default")).rejects.toBeInstanceOf(CorruptRecordError);
+    await expect(getShopSettings(h, "default")).rejects.toBeInstanceOf(CorruptRecordError);
+    await h.db.put("settings", { id: "example", updatedAt: 1, settings: { ...EXAMPLE_SETTINGS, demoRates: false } });
+    await expect(loadSettings(h, "example")).rejects.toBeInstanceOf(CorruptRecordError);
+    // Matching records still load.
+    await h.db.put("settings", { id: "example", updatedAt: 1, settings: EXAMPLE_SETTINGS });
+    await h.db.put("settings", { id: "default", updatedAt: 1, settings: REAL_SETTINGS_DEFAULT });
+    expect((await loadSettings(h, "example")).settings).toEqual(EXAMPLE_SETTINGS);
+    expect((await loadSettings(h, "default")).settings).toEqual(REAL_SETTINGS_DEFAULT);
+  });
+
+  it("a mismatched record can be replaced by saving, so the owner is never locked out", async () => {
+    await h.db.put("settings", { id: "default", updatedAt: 1, settings: { ...REAL_SETTINGS_DEFAULT, demoRates: true } });
+    await putShopSettings(h, "default", real, 9);
+    expect((await loadSettings(h, "default")).settings).toEqual(real);
   });
 
   it("setProjectSettings changes the project and no version", async () => {

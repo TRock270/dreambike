@@ -22,7 +22,7 @@ import { adjustLedger, cacheKeys, cleanupSafeCache, getCache, putCache, collectR
 import { AppError } from "./errors";
 import { MOCK_LABEL } from "./mocks";
 import { EXAMPLE_SETTINGS, REAL_SETTINGS_DEFAULT } from "./quote";
-import { children, FIT_TTL_MS, fitInputCanonical, LEGAL_SEED, pathToRoot, sha256OfText, undoTarget } from "./project";
+import { children, fitInputCanonical, fitTimeFresh, LEGAL_SEED, pathToRoot, sha256OfText, undoTarget } from "./project";
 import type {
   BikeRevision, CacheEntry, ImageRef, MaskMeta, MetaRecordData, Part, Project, ProjectSnapshot, ShopSettings,
   StoredImage, StoredMask, Version,
@@ -313,19 +313,36 @@ export async function loadProject(h: DreamDb, projectId: string): Promise<Loaded
   return validateLoaded(rawProject, rawVersions, projectId);
 }
 
+/**
+ * The one rule set for a project's whole version tree, used for stored projects (validateLoaded) and
+ * imported ones (checkSnapshot): unique ids, exactly one root and it is the project's root, every version is
+ * this project's, every parent is present, no cycle, and the head is one of the versions. Null when whole.
+ */
+function versionTreeProblem(project: Project, versions: readonly Version[]): string | null {
+  const ids = new Set(versions.map((v) => v.id));
+  if (ids.size !== versions.length) return "Two versions share the same id.";
+  const roots = versions.filter((v) => v.parentId === null);
+  if (roots.length !== 1 || roots[0]?.id !== project.rootVersionId) {
+    return "The history must have exactly one root, and it must be the project's root.";
+  }
+  if (versions.some((v) => v.projectId !== project.id)) return "A version belongs to a different project.";
+  if (versions.some((v) => v.parentId !== null && !ids.has(v.parentId))) return "A version's parent is missing.";
+  if (!ids.has(project.headVersionId)) return "The head is not a version of this project.";
+  for (const v of versions) {
+    let path: Version[];
+    try { path = pathToRoot(versions, v.id); } catch (e) { return errText(e); }
+    if (path[path.length - 1]?.id !== project.rootVersionId) return "A version does not lead back to the root.";
+  }
+  return null;
+}
+
 /** Parse a project and its versions as stored and check that the tree is whole. */
 function validateLoaded(rawProject: unknown, rawVersions: unknown[], projectId: string): LoadedProject {
   const project = parseRecord(ProjectSchema, rawProject, "project", projectId);
   const versions = rawVersions.map((v) =>
     parseRecord(VersionSchema, v, "version", String((v as { id?: unknown }).id ?? "?")));
-  const byId = new Map(versions.map((v) => [v.id, v]));
-  const root = byId.get(project.rootVersionId);
-  if (!root || root.parentId !== null) throw new CorruptRecordError("project", projectId, "its root version is missing");
-  try {
-    pathToRoot(versions, project.headVersionId);
-  } catch (e) {
-    throw new CorruptRecordError("project", projectId, `its head does not lead back to the root (${errText(e)})`);
-  }
+  const problem = versionTreeProblem(project, versions);
+  if (problem) throw new CorruptRecordError("project", projectId, problem);
   return { project, versions };
 }
 
@@ -405,6 +422,11 @@ export async function getShopSettings(h: DreamDb, id: string): Promise<SettingsR
   const raw = await h.db.get("settings", id);
   if (!raw) return null;
   const rec = parseRecord(SettingsRecordSchema, raw, "settings", id);
+  // A record whose key and id differ, or whose rates belong to the other kind, is damaged, not trusted.
+  if (rec.id !== id) throw new CorruptRecordError("settings", id, "its id differs from its key");
+  if (id === "default" || id === "example") {
+    try { checkSettingsKind(id, rec.settings); } catch (e) { throw new CorruptRecordError("settings", id, errText(e)); }
+  }
   return rec;
 }
 
@@ -1004,8 +1026,7 @@ export async function readCachedFit(h: DreamDb, inputHash: string, itemIds: stri
   }
   const checkedAt = picked[0]!.checkedAt;
   if (picked.some((r) => r.checkedAt !== checkedAt)) return null;
-  const time = Date.parse(checkedAt);
-  if (!Number.isFinite(time) || now - time > FIT_TTL_MS) return null;
+  if (!fitTimeFresh(Date.parse(checkedAt), now)) return null;
   const parsed = CheckResponseSchema.safeParse({ inputHash, checkedAt, results: picked.map((r) => r.result) });
   return parsed.success ? parsed.data : null;
 }
@@ -1153,21 +1174,8 @@ function checkSnapshot(
   snap: ProjectSnapshot, blobsById: ReadonlyMap<string, Blob>, maskPixelsById: ReadonlyMap<string, Uint8Array>,
 ): ImportResult | null {
   const { project, versions } = snap;
-  const ids = new Set(versions.map((v) => v.id));
-  if (ids.size !== versions.length) return refuse("invalid_history", "Two versions share the same id.");
-  const roots = versions.filter((v) => v.parentId === null);
-  if (roots.length !== 1 || roots[0]?.id !== project.rootVersionId) {
-    return refuse("invalid_history", "The history must have exactly one root, and it must be the project's root.");
-  }
-  if (versions.some((v) => v.projectId !== project.id)) {
-    return refuse("invalid_history", "A version belongs to a different project.");
-  }
-  if (!ids.has(project.headVersionId)) return refuse("invalid_history", "The head is not a version of this project.");
-  for (const v of versions) {
-    let path: Version[];
-    try { path = pathToRoot(versions, v.id); } catch (e) { return refuse("invalid_history", errText(e)); }
-    if (path[path.length - 1]?.id !== project.rootVersionId) return refuse("invalid_history", "A version does not lead back to the root.");
-  }
+  const treeProblem = versionTreeProblem(project, versions);
+  if (treeProblem) return refuse("invalid_history", treeProblem);
 
   const imageById = new Map(snap.images.map((i) => [i.id, i]));
   if (imageById.size !== snap.images.length) return refuse("invalid_snapshot", "An image is listed twice.");

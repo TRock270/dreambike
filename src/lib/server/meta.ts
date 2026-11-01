@@ -66,7 +66,74 @@ export function upstreamError(status: number, retryAfter: string | null = null):
 
 /** One phrase per request (SPEC 6.1); the phrase is a short noun phrase, never a command. */
 export function samConceptText(phrase: string): string {
+  // SAM prompt syntax (`<|`, `|>`, the object prefix `<0f>`), control characters (C0, DEL, C1,
+  // line/paragraph separators) and invisible format characters (zero-width, bidi) are never a phrase.
+  if (phrase.includes("<|") || phrase.includes("|>") || /<\d+f>/.test(phrase)
+    || /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/.test(phrase)) {
+    throw new AppError("INVALID_REQUEST", "That part name contains characters that cannot be used.");
+  }
   return phrase;
+}
+
+/** Most distinct mask objects one answer may carry (evidence: 3 for "wheel"; the route returns 16). */
+export const MAX_SAM_OBJECTS = 64;
+
+/** Most `<|mask` records one answer may carry before parsing (revisions of one object count too). */
+export const MAX_SAM_MASK_RECORDS = 4 * MAX_SAM_OBJECTS;
+
+/**
+ * A `data` field that may still be growing at the end of a piece (spaces, zeros and digits are legal there).
+ * No two `\s*` can match the same blanks (digits or a comma sit between them), so a long blank run
+ * is matched in linear time instead of trying every split.
+ */
+const PENDING_DATA = /d(?:a(?:t(?:a\s*(?:=\s*(?:\d+\s*)?(?:,\s*(?:\d+\s*)?)?)?)?)?)?$/;
+const MAX_PENDING = 1024; // a real record never has this much space or zeros before its payload
+
+/**
+ * Scans answer text in pieces. The parser trims blanks around keys and values and accepts leading
+ * zeros, so the scan allows both; the kept tail holds a record cut across pieces, never more than
+ * MAX_PENDING characters.
+ */
+function samTextScanner(frame: { width: number; height: number }) {
+  let tail = "";
+  let masks = 0;
+  return (piece: string) => {
+    const text = tail + piece;
+    const fresh = tail.length; // only matches ending after this offset are new
+    for (const m of text.matchAll(/<\|mask/g)) {
+      if (m.index + m[0].length > fresh && ++masks > MAX_SAM_MASK_RECORDS) throw new AppError("SCHEMA_INVALID");
+    }
+    // data=H,W: the parser allocates H*W bytes as soon as it sees the record.
+    for (const m of text.matchAll(/data\s*=\s*(\d+)\s*,\s*(\d+)\s*,/g)) {
+      if (m.index + m[0].length <= fresh) continue;
+      if (Number(m[1]) > frame.height || Number(m[2]) > frame.width) throw new AppError("SCHEMA_INVALID");
+    }
+    const pending = PENDING_DATA.exec(text);
+    const keepFrom = Math.min(pending ? pending.index : text.length, Math.max(0, text.length - 5));
+    tail = text.slice(keepFrom);
+    if (tail.length > MAX_PENDING) throw new AppError("SCHEMA_INVALID");
+  };
+}
+
+/**
+ * Sits between the SSE reader and @meta-sam/parser: the parser decodes every mask record at full
+ * size while parsing, so oversized or too many records are refused here, before it sees them.
+ * Deltas share one scanner; completed text (a replay of the same answer) gets its own.
+ */
+export async function* guardSamStream(events: AsyncIterable<unknown>, frame: { width: number; height: number }): AsyncGenerator<unknown> {
+  // One scanner for all deltas: SAM streams a single text lane (output 0, content 0).
+  const deltas = samTextScanner(frame);
+  for await (const event of events) {
+    const e = event as { type?: unknown; delta?: unknown; text?: unknown; part?: { text?: unknown } } | null;
+    if (e && typeof e.type === "string") {
+      if (e.type === "response.output_text.delta" && typeof e.delta === "string") deltas(e.delta);
+      else if (e.type.endsWith(".done")) {
+        const text = e.part && typeof e.part.text === "string" ? e.part.text : e.text;
+        if (typeof text === "string") samTextScanner(frame)(text);
+      }
+    }
+    yield event;
+  }
 }
 
 /** Object prompt for point selection: one object (id 1), frame 0, via the parser's builder. */
@@ -96,10 +163,13 @@ export async function segment(image: NormalizedInput, text: string, signal: Abor
   }
   let result: ImageSegmentationResult;
   try {
-    result = await parseImageStream(sseEvents(res.body) as AsyncIterable<{ type: string }>).finalResult;
+    result = await parseImageStream(guardSamStream(sseEvents(res.body), image) as AsyncIterable<{ type: string }>).finalResult;
   } catch (error) {
     // The deadline covers body reading; a mid-stream abort is a timeout, not bad data.
     if (signal.aborted) throw new AppError("UPSTREAM_TIMEOUT");
+    // The guard's refusal comes back wrapped by the parser as a source error.
+    if (error instanceof AppError) throw error;
+    if (error instanceof ResponsesStreamSourceError && error.cause instanceof AppError) throw error.cause;
     if (error instanceof ResponsesStreamRefusalError || error instanceof ResponsesStreamFailedError) {
       throw new AppError("UPSTREAM_REJECTED");
     }
@@ -114,11 +184,11 @@ export async function segment(image: NormalizedInput, text: string, signal: Abor
   if (result.outcome.status === "incomplete" && result.outcome.reason === "eof") {
     throw new AppError("UPSTREAM_UNAVAILABLE");
   }
-  return samRecords(result);
+  return samRecords(result, { width: image.width, height: image.height });
 }
 
 /** Pair box and mask records by object ID (never by array index) and decode rasters. */
-export function samRecords(result: ImageSegmentationResult): SamResult {
+export function samRecords(result: ImageSegmentationResult, frame: { width: number; height: number }): SamResult {
   // An image is frame 0; image records carry no frame (frameIndexOf is undefined).
   const inFrame0 = (r: Parameters<typeof frameIndexOf>[0]) => (frameIndexOf(r) ?? 0) === 0;
   const boxes = new Map(recordsOfKind(result.records, "box").filter(inFrame0).map((b) => [b.objectId, b]));
@@ -127,7 +197,10 @@ export function samRecords(result: ImageSegmentationResult): SamResult {
   // A later mask revision for the same object replaces the earlier one.
   const latest = new Map<string, (typeof masks)[number]>();
   for (const m of masks) latest.set(m.objectId, m);
+  if (latest.size > MAX_SAM_OBJECTS) throw new AppError("SCHEMA_INVALID");
   for (const m of latest.values()) {
+    // Second line of defence: bounds the retained decode and placement (guardSamStream refuses earlier).
+    if (m.mask.width > frame.width || m.mask.height > frame.height) throw new AppError("SCHEMA_INVALID");
     let raster: Uint8Array;
     try {
       raster = decodeMaskToRaster(m.mask);
@@ -459,8 +532,12 @@ export function returnedImages(body: unknown): number | null {
 
 /** The first returned image's bytes; NO_RESULT when there is none. */
 export function firstImageBytes(body: unknown): Uint8Array {
-  const data = (body as { data?: { b64_json?: unknown }[] }).data;
-  const b64 = Array.isArray(data) ? data[0]?.b64_json : undefined;
+  const data = body && typeof body === "object" ? (body as { data?: unknown }).data : undefined;
+  const first = Array.isArray(data) ? data[0] : undefined;
+  const b64 = first && typeof first === "object" ? (first as { b64_json?: unknown }).b64_json : undefined;
   if (typeof b64 !== "string" || b64.length === 0) throw new AppError("NO_RESULT");
-  return new Uint8Array(Buffer.from(b64, "base64"));
+  const bytes = new Uint8Array(Buffer.from(b64, "base64"));
+  // sharp(empty) throws synchronously, which would surface as an unexpected 500.
+  if (bytes.length === 0) throw new AppError("NO_RESULT");
+  return bytes;
 }

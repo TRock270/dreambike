@@ -3,7 +3,7 @@
 // schema SPEC 9 fixes at v1). No React here, so the write logic runs in tests with fake handles.
 import { openDB } from "idb";
 import { ProjectSnapshot } from "../contracts";
-import { importProject, type DreamDb, type ImportRefusal } from "../db";
+import { importProject, TARGET_BYTES, type DreamDb, type ImportRefusal } from "../db";
 import type { ExportPlan, SnapshotResult } from "../project";
 import { sha256Hex } from "./renderClient";
 
@@ -282,6 +282,14 @@ async function decodeDimensions(blob: Blob): Promise<{ width: number; height: nu
   try { return { width: bitmap.width, height: bitmap.height }; } finally { bitmap.close(); }
 }
 
+/** A WebP file starts with "RIFF", four size bytes, then "WEBP". file.type only echoes the extension. */
+async function hasWebpSignature(file: Blob): Promise<boolean> {
+  const head = new Uint8Array(await file.slice(0, 12).arrayBuffer());
+  if (head.length < 12) return false;
+  const at = (offset: number) => String.fromCharCode(head[offset]!, head[offset + 1]!, head[offset + 2]!, head[offset + 3]!);
+  return at(0) === "RIFF" && at(8) === "WEBP";
+}
+
 const fail = (reason: FolderImportReason, message: string): FolderImportResult => ({ ok: false, reason, message });
 
 async function fileOrNull(dir: FileSystemDirectoryHandle, name: string): Promise<File | null> {
@@ -315,6 +323,7 @@ export async function readProjectFolder(
     if (!file) return fail("missing_file", `The file ${ref.file} is missing.`);
     if (file.type !== "image/webp") return fail("bad_file", `The file ${ref.file} is not a WebP image.`);
     if (file.size > MAX_IMAGE_BYTES || file.size !== ref.bytes) return fail("bad_file", `The file ${ref.file} has the wrong size.`);
+    if (!(await hasWebpSignature(file))) return fail("bad_file", `The file ${ref.file} is not a WebP image.`);
     if ((await sha256Hex(file)) !== ref.hash) return fail("bad_file", `The file ${ref.file} does not match its saved hash.`);
     let dims: { width: number; height: number };
     try { dims = await readDimensions(file); } catch { return fail("bad_file", `The file ${ref.file} cannot be read as an image.`); }
@@ -328,11 +337,21 @@ export async function readProjectFolder(
   if (snap.masks.length > 0) {
     let masksDir: FileSystemDirectoryHandle | null = null;
     try { masksDir = await dir.getDirectoryHandle("masks"); } catch { masksDir = null; }
+    // Look at every mask's size first: the declared image bytes (already checked against the real files)
+    // plus the mask files must fit the storage target before any mask content is read.
+    const maskFiles: { m: (typeof snap.masks)[number]; file: File }[] = [];
+    let totalBytes = snap.images.reduce((sum, ref) => sum + ref.bytes, 0);
     for (const m of snap.masks) {
       const file = masksDir ? await fileOrNull(masksDir, m.file) : null;
       if (!file) return fail("missing_file", `The file masks/${m.file} is missing.`);
       const expected = m.width * m.height;
       if (expected > MAX_MASK_BYTES || file.size !== expected) return fail("bad_file", `The file masks/${m.file} has the wrong size.`);
+      totalBytes += file.size;
+      if (totalBytes > TARGET_BYTES) return fail("bad_file", "The project is too large to open (over 200 MB of images and masks).");
+      maskFiles.push({ m, file });
+    }
+    for (const { m, file } of maskFiles) {
+      const expected = m.width * m.height;
       const bytes = new Uint8Array(await file.arrayBuffer());
       if (bytes.length !== expected || bytes.some((b) => b > 1)) {
         return fail("bad_file", `The file masks/${m.file} must contain only 0 and 1.`);

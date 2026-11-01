@@ -46,6 +46,9 @@ export async function POST(req: Request): Promise<Response> {
     const image = ImageFile.safeParse(form.get("image"));
     if (!payload.success || !image.success) throw new AppError("INVALID_REQUEST");
     const p = payload.data;
+    // The phrase check runs in every mode, before any reservation or fetch.
+    if (p.mode === "concept") samConceptText(p.phrase);
+    if (image.data.size === 0) throw new AppError("INVALID_IMAGE");
     const bytes = new Uint8Array(await image.data.arrayBuffer());
 
     // The declared size must equal the decoded WebP (one coordinate space).

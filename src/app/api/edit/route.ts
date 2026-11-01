@@ -86,15 +86,18 @@ export async function POST(req: Request): Promise<Response> {
 
     // The raw output size is recorded before bounded encoding (composition rules use it).
     const meta = await sharp(generated).metadata().catch(() => null);
-    if (!meta?.width || !meta.height) throw new AppError("INVALID_IMAGE", "The generated image could not be read.");
+    // Size in the EXIF-oriented frame: that is what normalize() produces (orientations 5-8 swap).
+    const oriented = meta?.autoOrient ?? meta;
+    const genW = oriented?.width, genH = oriented?.height;
+    if (!genW || !genH) throw new AppError("INVALID_IMAGE", "The generated image could not be read.");
     // Any problem with the model's own output is an invalid image, not a "photo" upload error.
     const bounded = await normalize(generated).catch(() => { throw new AppError("INVALID_IMAGE", "The generated image could not be used."); });
-    if (meta.width !== p.width || meta.height !== p.height) {
-      warnings.push(`The model returned ${meta.width} × ${meta.height} px instead of ${p.width} × ${p.height} px.`);
+    if (genW !== p.width || genH !== p.height) {
+      warnings.push(`The model returned ${genW} × ${genH} px instead of ${p.width} × ${p.height} px.`);
     }
     return jsonResponse(EditResponse.parse({
       image: { mime: "image/webp", dataUrl: toDataUrl("image/webp", bounded.bytes), width: bounded.width, height: bounded.height, hash: bounded.hash },
-      generatedWidth: meta.width, generatedHeight: meta.height, warnings: warnings.slice(0, 8),
+      generatedWidth: genW, generatedHeight: genH, warnings: warnings.slice(0, 8),
     }));
   } catch (error) {
     return errorResponse(error, requestId);

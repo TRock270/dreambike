@@ -174,9 +174,17 @@ afterEach(() => { closeDreamDb(h); });
 
 const W = 8;
 const H = 4;
+/** Bytes with a real RIFF....WEBP header (12 bytes) followed by filler; the import sniffs it. */
+function webpBytes(size: number, fill = 7): Uint8Array<ArrayBuffer> {
+  const b = new Uint8Array(Math.max(size, 12)).fill(fill);
+  b.set([..."RIFF"].map((ch) => ch.charCodeAt(0)), 0);
+  b.set([..."WEBP"].map((ch) => ch.charCodeAt(0)), 8);
+  return b;
+}
 /** A WebP-typed blob with real sha256 so the reader's hash check can pass. */
-async function realImage(c: string, size = 10): Promise<StoredImage> {
-  const blob = new Blob([new Uint8Array(size).fill(c.charCodeAt(0))], { type: "image/webp" });
+async function realImage(c: string, size = 16): Promise<StoredImage> {
+  const bytes = webpBytes(size, c.charCodeAt(0));
+  const blob = new Blob([bytes], { type: "image/webp" });
   return { id: uuid(), hash: await sha256Hex(blob), width: W, height: H, bytes: blob.size, rights: "owner", blob, lastAccessedAt: 1 };
 }
 const refOf = (i: StoredImage) => ({ id: i.id, hash: i.hash, width: i.width, height: i.height, bytes: i.bytes, rights: "owner" as const });
@@ -567,7 +575,7 @@ describe("readProjectFolder", () => {
   it("refuses a hash mismatch", async () => {
     const res = await refused((dir) => {
       const f = firstImageFile(dir);
-      dir.files.set(f, new Blob([new Uint8Array((dir.files.get(f) as Blob).size).fill(7)], { type: "image/webp" }));
+      dir.files.set(f, new Blob([webpBytes((dir.files.get(f) as Blob).size, 200)], { type: "image/webp" }));
     });
     expect(res.reason).toBe("bad_file");
     expect(res.message).toContain("hash");
@@ -595,6 +603,57 @@ describe("readProjectFolder", () => {
     });
     expect(res.reason).toBe("bad_file");
     expect(res.message).toContain("WebP");
+  });
+
+  it("refuses an image that is typed WebP but has no RIFF/WEBP signature", async () => {
+    const res = await refused((dir) => {
+      const f = firstImageFile(dir);
+      const bytes = webpBytes((dir.files.get(f) as Blob).size);
+      bytes.set([0x89, 0x50, 0x4e, 0x47]); // PNG magic where RIFF should be
+      dir.files.set(f, new Blob([bytes], { type: "image/webp" }));
+    });
+    expect(res.reason).toBe("bad_file");
+    expect(res.message).toContain("WebP");
+  });
+
+  it("refuses an image whose WEBP tag at bytes 8..11 is wrong", async () => {
+    const res = await refused((dir) => {
+      const f = firstImageFile(dir);
+      const bytes = webpBytes((dir.files.get(f) as Blob).size);
+      bytes.set([..."WAVE"].map((ch) => ch.charCodeAt(0)), 8);
+      dir.files.set(f, new Blob([bytes], { type: "image/webp" }));
+    });
+    expect(res.reason).toBe("bad_file");
+    expect(res.message).toContain("WebP");
+  });
+
+  it("refuses a folder whose images plus masks exceed the 200 MB target before reading any mask", async () => {
+    // Any arrayBuffer() call on a mask-sized blob means mask content was read.
+    const original = Blob.prototype.arrayBuffer;
+    const bigReads: number[] = [];
+    const spy = vi.spyOn(Blob.prototype, "arrayBuffer").mockImplementation(function (this: Blob) {
+      if (this.size === 2048 * 2048) bigReads.push(this.size);
+      return original.call(this);
+    });
+    const res = await refused((dir) => {
+      const j = jsonOf(dir);
+      j.masks[0].width = 2048; j.masks[0].height = 2048; // 4 MB each; 60 masks pass the cap
+      const first = j.masks[0];
+      j.masks = Array.from({ length: 60 }, (_, i) => {
+        const id = i === 0 ? first.id : uuid();
+        return { ...first, id, file: `${id}.bin` };
+      });
+      putJson(dir, j);
+      const masks = dir.dirs.get("masks")!;
+      masks.files.clear();
+      for (const m of j.masks) {
+        masks.files.set(m.file, new Blob([new Uint8Array(2048 * 2048)]));
+      }
+    });
+    expect(res.reason).toBe("bad_file");
+    expect(res.message).toContain("200 MB");
+    spy.mockRestore();
+    expect(bigReads).toEqual([]);
   });
 
   it("refuses a wrong mask length", async () => {

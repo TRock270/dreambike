@@ -675,6 +675,10 @@ describe("fitBatches and fitStatusOf", () => {
     expect(fitStatusOf(tank, hash("d"), checked + 1000)).toBe("stale");
     expect(fitStatusOf(tank, hash("e"), checked + FIT_TTL_MS)).toBe("ok");
     expect(fitStatusOf(tank, hash("e"), checked + FIT_TTL_MS + 1)).toBe("stale");
+    // A check dated up to one TTL ahead is clock skew (server vs browser); further ahead it would never expire, so it is stale.
+    expect(fitStatusOf(tank, hash("e"), checked - 3 * 60 * 60_000)).toBe("ok");
+    expect(fitStatusOf(tank, hash("e"), checked - FIT_TTL_MS)).toBe("ok");
+    expect(fitStatusOf(tank, hash("e"), checked - FIT_TTL_MS - 1)).toBe("stale");
     expect(fitStatusOf({ ...tank, fit: { ...tank.fit!, status: "problem" } }, hash("e"), checked)).toBe("problem");
     expect(fitStatusOf({ ...tank, fit: null, fitInputHash: null, fitCheckedAt: null }, hash("e"), checked)).toBe("not_checked");
   });

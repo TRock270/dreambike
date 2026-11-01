@@ -4,6 +4,7 @@
 import "server-only";
 import { z } from "zod";
 import { CheckResponse, FitModelOutput, type CheckRequest } from "../contracts";
+import { bikeLimitations } from "../editPolicy";
 import { FIT_PRECHECK_NOTE, LEGAL_SEED } from "../project";
 import type { BikeData, FitData, SlotId } from "../types";
 import { dayET } from "./budget";
@@ -27,7 +28,8 @@ export function legalAsOf(now: Date = new Date()): string {
  */
 export function buildFitTask(request: Request, now: Date = new Date()) {
   return {
-    bike: request.bike,
+    // Limitations come from the bike fields, never from the client's free text (it is model input).
+    bike: { ...request.bike, limitations: bikeLimitations(request.bike) },
     items: request.items.map((it) => ({
       id: it.id, slot: it.slot, title: it.title, spec: it.spec.map((s) => ({ key: s.key, value: s.value })),
       intent: it.intent,

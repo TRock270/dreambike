@@ -219,6 +219,22 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 - Work: AppMode lives in src/lib/types.ts, so browser code imports nothing from src/lib/server; every src/lib/server module is marked server-only; ESLint rules (core rules, no new dependency) keep process.env and server imports out of browser code, keep secret names inside the six server modules SPEC 3 allows, and keep whole or dynamic process.env out of rendered app files; readJsonLimited maps a dropped body stream to UPSTREAM_UNAVAILABLE.
 - Done when: lint passes on the current code; tests/client-boundary.test.ts runs the real ESLint config on in-memory snippets and shows each rule firing and the allowed forms passing, and that every "use client" file gets the browser rules; a test asserts the server-only marker in every src/lib/server module; a dropped body stream gives UPSTREAM_UNAVAILABLE and the reservation stays as conservative as before. Run build, lint, types and tests.
 
+## SEC3 — Input validation follow-ups and regression test (owner follow-up, 2026-10-31)
+
+- Priority: owner request ("mache das", after SEC1: the remaining minor items of the 2026-10-31 input validation check, plus a kept regression test). Estimate: 1.5h. Depends on: SEC1. No paid calls.
+- Status: DONE 2026-11-01 (see log).
+- Files: src/lib/server/meta.ts, src/lib/server/fitPolicy.ts, src/lib/server/budget.ts, src/app/api/segment/route.ts, src/app/api/edit/route.ts, src/lib/db.ts, src/lib/project.ts, src/lib/pdf.ts, src/lib/contracts.ts, src/lib/browser/folderExport.ts, tests/masks.test.ts, tests/fit-policy.test.ts, tests/budget.test.ts, tests/edit.test.ts, tests/db.test.ts, tests/project.test.ts, tests/pdf.test.ts, tests/contracts.test.ts, tests/folderexport.test.ts, tests/input-validation.test.ts (new; targeted runs need an owner allow line in .claude/settings.json, npm test covers it already).
+- Work and exact done-when items: in the local, gitignored security-notes.md, as for SEC1. The SEC3 gate takes its items from there.
+- Done when (summary): each listed minor item is fixed with a test that proves it, or recorded with a reason; tests/input-validation.test.ts keeps the strongest input-boundary cases from the check and passes; normal flows still pass. Run build, lint, types and tests.
+
+## SEC4 — Prompt-injection follow-ups in shop search and instruction warnings (owner follow-up, 2026-10-31)
+
+- Priority: owner go after the 2026-10-31 prompt-injection check, before the live window. Estimate: 1.5h. Depends on: nothing; the fit and history.md items of that check wait for SEC3. No paid calls.
+- Status: IN PROGRESS 2026-10-31.
+- Files: src/lib/server/searchPolicy.ts, tests/search-parts.test.ts, src/lib/editPolicy.ts, tests/spark.test.ts.
+- Work and exact done-when items: in the local, gitignored security-notes.md, as for SEC1.
+- Done when (summary): each listed item is fixed with a test that proves it; normal flows still pass. Run build, lint, types and tests.
+
 ## Completion log template
 
 For each completed ticket append actual date/time ET, files changed, checks and observations, cost ledger total, remaining U-gates, actual hours, and commit hash. For a cut/blocked ticket record the concrete fallback or missing input. A checkbox alone is not evidence. The final README and video use this actual log, not the estimates above.
@@ -1641,3 +1657,12 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Owner pushed 1a75216..b27c89a (SEC2 03ce306 and 90938af, composite timeout 9be1405, SEC1 b27c89a). Pre-push on that HEAD: lint pass, typecheck pass, `npm test` 1173 passed / 24 skipped, build pass.
 - Deploy identified without Vercel CLI or gh: a string that SEC1 added to the browser code is present in 1 of the 10 live JS chunks.
 - `.venv/bin/python spike/deployment.py --origin https://dreambike-pied.vercel.app`: 30 passed, 0 failed, 0 skipped (demo_only, 403/413 probes on all 10 POST routes, secret scan of 10 JS files: 0 value hits, 0 name hits).
+
+### SEC3 — 2026-10-31, about 19:00–19:42 ET, and 2026-11-01, about 01:25–01:55 ET (lead, build-ticket wf_385411b6-23c and wf_e7536acb-18a, paused in between)
+
+- Files: src/lib/server/meta.ts, src/lib/server/fitPolicy.ts, src/lib/server/budget.ts, src/app/api/segment/route.ts, src/app/api/edit/route.ts, src/lib/db.ts, src/lib/project.ts, src/lib/pdf.ts, src/lib/contracts.ts, src/lib/browser/folderExport.ts and their tests (masks, fit-policy, budget, edit, db, project, pdf, contracts, folderexport); new tests/input-validation.test.ts (817 lines, input-boundary regression test). Item details stay in the local security-notes.md.
+- Run 1: U2 and U3 approved; U1 open after 3 rounds (one major found in round 3). Lead repaired it inline with a test that fails on the previous code; /review-changes quick on the U1 files green (security on Opus). Run 2 (U4, resumed after the pause): approved after 3 rounds; done-when gate: all 4 items met (gate checked every item test against b27c89a: fails there, passes with SEC3).
+- Lead decisions: (1) the future-timestamp tolerance for fit checks is one TTL (24 h), not 5 minutes, because the check time comes from the server clock and is compared with the browser clock, which can be hours off; a tighter bound would mark fresh fits stale and trigger paid rechecks. /review-changes quick green. (2) Ordered model years are required only for confirmed bike revisions: withdrawing a confirmation saves an unconfirmed revision with the years being edited, and confirmBike already refuses reversed years. (3) The regression test stays at 817 lines instead of about 700; cutting further would drop a whole class of cases.
+- Consultant: PAL chat nim-nemotron35, 2 calls. Call 1 (SAM stream guard, segment and edit routes): 7 points, none held (checked at code and tests). Call 2 (persisted data and import diff): the clock point was adopted as decision (1); the other points did not hold (cycle check exists, the Date bound works, the settings check exists). Gemini not asked.
+- Checks (working tree, run 2 Verify): `npm test` 1381 passed / 24 skipped; `npm run typecheck` pass; `npm run lint` pass; `npm run build` pass. Gate also ran tests, typecheck and lint on b27c89a plus only the SEC3 files: pass.
+- Not in this commit: the paused SEC4 edits (searchPolicy.ts, editPolicy.ts and their tests) and the prompt-injection log entry belong to another session. Still open: deploy (push needs owner go); the allow line for tests/input-validation.test.ts in .claude/settings.json (owner).

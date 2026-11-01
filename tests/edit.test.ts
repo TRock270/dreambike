@@ -14,7 +14,7 @@ vi.mock("@/lib/server/images", async (original) => {
   return { ...mod, decodeRgb: (...args: Parameters<typeof mod.decodeRgb>) => { decodeCalls.count += 1; return mod.decodeRgb(...args); } };
 });
 const { maskToPng } = images;
-import { fetchImageEdit, readJsonLimited, renderTemplate as rt } from "@/lib/server/meta";
+import { fetchImageEdit, firstImageBytes, readJsonLimited, renderTemplate as rt } from "@/lib/server/meta";
 import { withSession } from "./support/session";
 
 const W = 1536, H = 1152;
@@ -192,6 +192,31 @@ describe("POST /api/edit", () => {
     expect(await errorOf(await edit(p))).toEqual([422, "NO_RESULT"]);
     expect(settles[2]).toEqual(["unknown", "0"]);
   });
+  it("reports the generated size in the EXIF-oriented frame (orientation 6 swaps it)", async () => {
+    const REDIS = "https://redis.invalid";
+    for (const [k, v] of Object.entries({ LIVE_API_ENABLED: "true", MODEL_API_KEY: "k", UPSTASH_REDIS_REST_URL: REDIS,
+      UPSTASH_REDIS_REST_TOKEN: "t", PRICING_VERIFIED_AT: "2026-10-28", VISITOR_HASH_SECRET: "s".repeat(32), BUDGET_TICKET: "T5", MOCK: "0", VERCEL_ENV: "" })) vi.stubEnv(k, v);
+    const answer: { data: { b64_json: string }[] } = { data: [] };
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      if (String(url) === REDIS) {
+        const settle = (JSON.parse(String(init!.body)) as string[])[1]!.includes("budget settlement");
+        return Response.json({ result: settle ? ["OK"] : ["OK", "10000"] });
+      }
+      return Response.json(answer);
+    });
+    // Stored 300x400 with orientation 6: displayed 400x300, which is the requested size.
+    const stored = await solid(300, 400, { r: 5, g: 5, b: 5 }).withMetadata({ orientation: 6 }).webp().toBuffer();
+    answer.data = [{ b64_json: Buffer.from(stored).toString("base64") }];
+    const ok = EditResponse.parse(await (await edit({ ...p, mode: "text", intent: "paint" })).json());
+    expect([ok.generatedWidth, ok.generatedHeight]).toEqual([400, 300]);
+    expect(ok.warnings.join(" ")).not.toMatch(/instead of/);
+    // Stored 400x300 with orientation 6: displayed 300x400, so the size warning still fires.
+    const turned = await solid(400, 300, { r: 5, g: 5, b: 5 }).withMetadata({ orientation: 6 }).webp().toBuffer();
+    answer.data = [{ b64_json: Buffer.from(turned).toString("base64") }];
+    const off = EditResponse.parse(await (await edit({ ...p, mode: "text", intent: "paint" })).json());
+    expect([off.generatedWidth, off.generatedHeight]).toEqual([300, 400]);
+    expect(off.warnings.join(" ")).toMatch(/returned 300 × 400 px instead of 400 × 300 px/);
+  });
   describe("reference mode", () => {
     const rp = { slot: "wheel_front", prompt: "Gold multi-spoke wheel with chrome hub on the front wheel.", mode: "reference", intent: "geometry", quality: "high", width: 400, height: 300 };
     const refBytes = () => webp(solid(400, 300, { r: 200, g: 20, b: 20 }));
@@ -319,6 +344,13 @@ describe("upstream and upload guards", () => {
       pull(c) { controller.abort(); c.error(new TypeError("terminated")); },
     })));
     await expect(fetchImageEdit({}, controller.signal)).rejects.toMatchObject({ code: "UPSTREAM_TIMEOUT" });
+  });
+  it("firstImageBytes: a malformed answer is NO_RESULT, never a TypeError; a valid one decodes", () => {
+    for (const body of [null, undefined, 5, "x", [], {}, { data: null }, { data: [null] }, { data: [5] }, { data: ["x"] },
+      { data: [{ b64_json: "" }] }, { data: [{ b64_json: "=" }] }, { data: [{ b64_json: 7 }] }]) {
+      expect(() => firstImageBytes(body), JSON.stringify(body)).toThrow(expect.objectContaining({ code: "NO_RESULT" }));
+    }
+    expect(Array.from(firstImageBytes({ data: [{ b64_json: "AQID" }] }))).toEqual([1, 2, 3]);
   });
   it("refuses an animated WebP in composite", async () => {
     const frame = (r: number) => sharp({ create: { width: W, height: H, channels: 3, background: { r, g: 0, b: 0 } } }).png().toBuffer();

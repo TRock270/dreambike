@@ -84,6 +84,8 @@ async function command(redis: RedisRest, args: (string | number)[]): Promise<unk
   } catch {
     throw new AppError("ACCOUNTING_UNAVAILABLE");
   }
+  // A null or non-object body (or an array) is not a Redis REST answer.
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw new AppError("ACCOUNTING_UNAVAILABLE");
   if (!res.ok || body.error !== undefined) throw new AppError("ACCOUNTING_UNAVAILABLE");
   return body.result;
 }

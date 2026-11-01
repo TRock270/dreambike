@@ -1006,6 +1006,15 @@ describe("estimate behavior", () => {
     expect(textOf(real)).toContain("Real Shop GmbH");
   });
 
+  it("line separators, NEL, CR and control characters in single-line text become a space in the footer (SEC3)", async () => {
+    const layout = layoutOf(await completeScenario(photos, { ...REAL_SETTINGS_DEFAULT, shopConfirmed: true, hourlyRateNetCents: 10000, shopName: "Real\u2028Shop\u2029GmbH\u0085X\rY\u0007Z" }));
+    for (const page of layout.pages) {
+      const footer = page.boxes.filter((b): b is TextBox => b.role === "footer" && b.kind === "text").map((b) => b.text);
+      expect(footer.some((t) => t.includes("Real Shop GmbH X Y Z"))).toBe(true);
+      expect(footer.some((t) => /[\n\r\u2028\u2029\u0085\u0007]/.test(t))).toBe(false);
+    }
+  });
+
   it("the mock label shows for appMode 'mock' and for a mock fit result", async () => {
     const mockMode = layoutOf(await scenario({ items: [{ slot: "tank" }], fees: coverAll, appMode: "mock", images: photos }));
     expect(textOf(mockMode, 1)).toContain(MOCK_LABEL);
@@ -1215,7 +1224,8 @@ describe("table start", () => {
     // enough room for the header and the first two lines of the first row but not for the whole row.
     let windowHits = 0;
     for (let lines = 1; lines <= 45; lines++) {
-      const name = Array.from({ length: lines }, (_, i) => `Line ${i + 1}`).join("\n");
+      // One long word per line: a project name is single-line text, so wrapping (not a newline) makes the lines.
+      const name = Array.from({ length: lines }, (_, i) => `${i % 10}${"w".repeat(70)}`).join(" ");
       const layout = layoutOf(await scenario({ items: [{ slot: "tank", title: "Blue tank paint" }], fees: coverAll, images: photos, projectName: name }));
       const { page, hasRow } = firstTablePage(layout);
       expect(hasRow, `${lines} lines: the header on page ${page.number} has its first row`).toBe(true);

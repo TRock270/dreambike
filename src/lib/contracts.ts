@@ -43,6 +43,9 @@ export const Source = z.object({
   url: HttpsUrl, title: Short, accessedAt: z.iso.datetime(), supports: Note,
 }).strict();
 
+/** A time in ms that `new Date(x).toISOString()` can format (the JS Date limit is 8.64e15). */
+const Millis = z.number().int().min(0).max(8.64e15);
+
 export const Bike = z.object({
   make: Short.nullable(), model: Short.nullable(),
   family: z.enum(["sportster", "softail", "dyna", "touring", "street", "other", "unknown"]),
@@ -133,7 +136,7 @@ export const StoredImage = ImageRef.extend({
 /** pixels holds exactly width * height bytes, each 0 or 1. */
 export const StoredMask = z.object({
   id: Id, imageHash: Hash, width: Dimension, height: Dimension,
-  pixels: z.instanceof(Uint8Array), createdAt: z.number().int().min(0),
+  pixels: z.instanceof(Uint8Array), createdAt: Millis,
 }).strict().superRefine((m, ctx) => {
   if (m.pixels.length !== m.width * m.height) {
     ctx.addIssue({ code: "custom", path: ["pixels"], message: "pixels length must be width*height" });
@@ -154,10 +157,18 @@ export const Part = z.object({
   absent: z.boolean().optional(),
 }).strict();
 
+/** A bike is a plausible one only when its years are ordered. */
+function yearsOrdered(b: { yearFrom: number | null; yearTo: number | null }): boolean {
+  return b.yearFrom === null || b.yearTo === null || b.yearFrom <= b.yearTo;
+}
+
+// Only a confirmed bike must have ordered years. The form saves an unconfirmed bike when the mechanic
+// withdraws a confirmation, and a year typed mid-edit may be briefly reversed; confirmBike refuses it.
 export const BikeRevision = z.object({
   id: Id, bike: Bike, confirmed: z.boolean(),
-  revision: z.number().int().min(0), confirmedAt: z.number().int().min(0).nullable(),
-}).strict();
+  revision: z.number().int().min(0), confirmedAt: Millis.nullable(),
+}).strict().refine((r) => !r.confirmed || yearsOrdered(r.bike),
+  { message: "yearFrom cannot exceed yearTo", path: ["bike", "yearFrom"] });
 
 const uniqueSlots = (items: readonly { slot: string }[]) =>
   new Set(items.map((i) => i.slot)).size === items.length;
@@ -171,7 +182,7 @@ export const Version = z.object({
     slot: Slot, itemId: Id, instruction: z.string().min(1).max(4000), mode: EditMode,
   }).strict().nullable(),
   composed: z.boolean(), aligned: z.boolean(), drift: z.number().min(0).max(1).nullable(),
-  fallbackReason: Note.nullable(), createdAt: z.number().int().min(0),
+  fallbackReason: Note.nullable(), createdAt: Millis,
 }).strict().superRefine((v, ctx) => {
   const bad = (path: string, message: string) => ctx.addIssue({ code: "custom", path: [path], message });
   if (!uniqueSlots(v.items)) bad("items", "at most one item per slot");
@@ -196,7 +207,7 @@ export const Version = z.object({
 
 export const Project = z.object({
   id: Id, name: Short, rootVersionId: Id, headVersionId: Id, bikeRevision: BikeRevision,
-  settingsId: z.enum(["default", "example"]), createdAt: z.number().int().min(0), updatedAt: z.number().int().min(0),
+  settingsId: z.enum(["default", "example"]), createdAt: Millis, updatedAt: Millis,
 }).strict();
 
 // ------------------------------------------- project.json snapshot (SPEC 9, OF1)
@@ -207,9 +218,9 @@ export const MAX_SNAPSHOT_VERSIONS = 500;
 export const MAX_SNAPSHOT_IMAGES = 1000; // version images plus cutouts
 export const MAX_SNAPSHOT_MASKS = 5000;
 
-/** A plain file name: no slash, no backslash, no "..", no control characters. */
+/** A plain file name: no slash, no backslash, no "..", no control characters (C0, DEL, C1, line/paragraph separators). */
 const SnapshotFileName = z.string().min(1).max(200)
-  .regex(/^[^/\\\u0000-\u001F]+$/, "file must be a plain file name")
+  .regex(/^[^/\\\u0000-\u001F\u007F-\u009F\u2028\u2029]+$/, "file must be a plain file name")
   .refine((f) => !f.includes("..") && f !== ".", "file must not contain '..'");
 
 export const SnapshotImage = ImageRef.extend({ file: SnapshotFileName }).strict();
@@ -217,7 +228,7 @@ export const SnapshotImage = ImageRef.extend({ file: SnapshotFileName }).strict(
 /** A mask without its pixels; the bytes live in masks/<id>.bin (one byte per pixel, 0 or 1). */
 export const SnapshotMask = z.object({
   id: Id, imageHash: Hash, width: Dimension, height: Dimension,
-  createdAt: z.number().int().min(0), file: SnapshotFileName,
+  createdAt: Millis, file: SnapshotFileName,
 }).strict().refine((m) => m.file === `${m.id}.bin`, { message: "mask file must be '<id>.bin'", path: ["file"] });
 
 export const ProjectSnapshot = z.object({
@@ -330,7 +341,7 @@ export const DemoManifest = z.object({
 
 export const CacheEntry = z.object({
   key: z.string().min(1).max(500), blobIds: z.array(Id).max(20), value: z.unknown(),
-  bytes: z.number().int().min(0), createdAt: z.number().int().min(0),
+  bytes: z.number().int().min(0), createdAt: Millis,
   lastAccessedAt: z.number().int().min(0), expiresAt: z.number().int().min(0).nullable(),
 }).strict();
 
@@ -379,10 +390,6 @@ export function boxInside(box: readonly number[], width: number, height: number)
   return r > l && b > t && r <= width && b <= height;
 }
 
-function yearsOrdered(b: { yearFrom: number | null; yearTo: number | null }): boolean {
-  return b.yearFrom === null || b.yearTo === null || b.yearFrom <= b.yearTo;
-}
-
 /** Bike as accepted from routes and storage (adds the year-order check). */
 export const BikeChecked = Bike.refine(yearsOrdered, {
   message: "yearFrom cannot exceed yearTo", path: ["yearFrom"],
@@ -421,7 +428,7 @@ export const IdentifyResponse = z.object({ bike: BikeChecked }).strict();
 
 export const InstructionPayload = z.object({
   slot: Slot, box: Box, bike: BikeChecked, mode: EditMode,
-  text: z.string().min(1).max(2000), width: Dimension, height: Dimension,
+  text: z.string().min(1).max(2000).refine((t) => t.trim() !== "", "text must contain a non-space character"), width: Dimension, height: Dimension,
   /** True when the part is not on the bike yet and the box marks where to add it. */
   absent: z.boolean().default(false),
 }).strict().refine((p) => boxInside(p.box, p.width, p.height),
