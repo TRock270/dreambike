@@ -1666,3 +1666,8 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Consultant: PAL chat nim-nemotron35, 2 calls. Call 1 (SAM stream guard, segment and edit routes): 7 points, none held (checked at code and tests). Call 2 (persisted data and import diff): the clock point was adopted as decision (1); the other points did not hold (cycle check exists, the Date bound works, the settings check exists). Gemini not asked.
 - Checks (working tree, run 2 Verify): `npm test` 1381 passed / 24 skipped; `npm run typecheck` pass; `npm run lint` pass; `npm run build` pass. Gate also ran tests, typecheck and lint on b27c89a plus only the SEC3 files: pass.
 - Not in this commit: the paused SEC4 edits (searchPolicy.ts, editPolicy.ts and their tests) and the prompt-injection log entry belong to another session. Still open: deploy (push needs owner go); the allow line for tests/input-validation.test.ts in .claude/settings.json (owner).
+
+### Live check after the SEC3 deploy — 2026-11-01, about 02:00 ET (lead, owner go "push")
+
+- Pushed d8eb3f3..d27dc7e (SEC3). Deploy identified without Vercel CLI: a string that SEC3 added to the browser code is present in a live JS chunk (found on the 4th poll, about 1 minute after the push).
+- `.venv/bin/python spike/deployment.py --origin https://dreambike-pied.vercel.app`: 30 passed, 0 failed, 0 skipped (403/413 probes on all 10 POST routes, secret scan of 10 JS files: 0 value hits, 0 name hits).
