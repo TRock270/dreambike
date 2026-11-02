@@ -101,6 +101,17 @@ The owner viewed and cleared all 58 files in `public/demo` on 2026-10-29, and
 Video tools: Canva (free plan; no templates, music or stock elements) for the cut,
 and ffmpeg for the offline crop and plate blur. Neither is part of the app.
 
+Demo video (https://youtu.be/BC1Q0AY_HWk, not in the repo): screen recordings of
+the app and the owner's own voice, no music or stock media. The owner cut it in
+iMovie. OpenAI Codex then post-produced it locally with FFmpeg (LGPL/GPL, used
+as an external tool) and Python (subtitles, zooms on the UI, noise reduction and
+loudness levelling, end card). The subtitles were timed with a local Whisper
+large-v3-turbo model (OpenAI, MIT license; 4-bit MLX copy
+`mlx-community/whisper-large-v3-turbo-q4`) and set in IBM Plex Sans Regular and
+SemiBold (SIL OFL, see Fonts). The rendering, subtitle timing and audio
+processing ran on the owner's machine; the owner uploaded the finished video to
+YouTube. None of these tools is part of the app.
+
 Consent: the owner's private dated record of 2026-10-28, with an addendum for
 the studio photo, covers model analysis, possible Meta training (Contributor
 mode) and the public demo. It is kept private and is not published.

@@ -6,7 +6,7 @@ Built by Tom (GitHub TRock270), solo, for the Meta AI Developer Hackathon (Indie
 
 - Repository: https://github.com/TRock270/dreambike
 - Live site: https://dreambike-pied.vercel.app (opens without login; see "Live AI edits" below)
-- Demo video: https://youtu.be/Cvz3Yg3ld2M (2:54, unlisted on YouTube)
+- Demo video: https://youtu.be/BC1Q0AY_HWk (2:56, English subtitles, on YouTube)
 
 ## Why
 
@@ -128,7 +128,7 @@ Times are US Eastern, taken from `git log`. The commit history is the evidence.
 | From Nov 1 | SEC3 input-validation follow-ups, SEC4 prompt-injection follow-ups in part lookup, fit check and history export | Yes |
 | Media | The owner's own bike photos and one permitted studio photo, see CREDITS.md | Disclosed separately |
 
-Disclosure: DreamBike was built during the hackathon, from Oct 27, 2026. The code was written with Claude Code (Anthropic) as the coding agent under the owner's direction; commits carry `Co-Authored-By` lines. It uses Meta's SAM 3.1, Muse Image and Muse Spark through the Meta Model API, plus the open-source libraries listed in CREDITS.md. The bike photos are the owner's own, except one studio photo of another motorcycle (not the owner's R nineT) that is used with the rights holder's permission; it is private and not published. Photos sent to Meta in tests were the owner's own right-side photo and its patched copy, two wheel crops of that studio photo, and, in two owner tests of the part lookup on Oct 31, a product photo from a listed shop as the reference image for two renders (the renders are not published). Other AI models, including OpenAI Codex, NVIDIA Nemotron and Google Gemini, reviewed plans and code, but did not write project code.
+Disclosure: DreamBike was built during the hackathon, from Oct 27, 2026. The code was written with Claude Code (Anthropic) as the coding agent under the owner's direction; commits carry `Co-Authored-By` lines. It uses Meta's SAM 3.1, Muse Image and Muse Spark through the Meta Model API, plus the open-source libraries listed in CREDITS.md. The bike photos are the owner's own, except one studio photo of another motorcycle (not the owner's R nineT) that is used with the rights holder's permission; it is private and not published. Photos sent to Meta in tests were the owner's own right-side photo and its patched copy, two wheel crops of that studio photo, and, in two owner tests of the part lookup on Oct 31, a product photo from a listed shop as the reference image for two renders (the renders are not published). Other AI models, including OpenAI Codex, NVIDIA Nemotron and Google Gemini, reviewed plans and code, but did not write project code. OpenAI Codex also post-produced the demo video (subtitles, zooms, audio levelling, end card) from the owner's iMovie cut; see CREDITS.md.
 
 ## Rights and credits
 

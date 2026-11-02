@@ -6,7 +6,7 @@ Working file for the submission. T15 added the repository, video and README fiel
 
 - Repository: https://github.com/TRock270/dreambike (public)
 - Live site: https://dreambike-pied.vercel.app
-- Demo video: https://youtu.be/Cvz3Yg3ld2M (2:54, unlisted on YouTube)
+- Demo video: https://youtu.be/BC1Q0AY_HWk (2:56, English subtitles, on YouTube)
 - Official participant page: https://cerebralvalley.ai/e/meta-ai-developer-hackathon/details
 
 ## CV form values
@@ -48,7 +48,7 @@ Meta models to name: SAM 3.1, Muse Spark (`muse-spark-1.3-contributor`), Muse Im
 - [x] README: what it does, why, Meta models and where, setup, architecture diagram, rights, limitations, provenance table and disclosure. Written in T15. Its steps were run on 2026-10-30 in a clean export of the repository without any env file: `npm ci`, `npm run build`, `npm start`; health reported demo_only, the demo page and files loaded, and a POST was refused (403).
 - [x] MIT LICENSE for our code only; dependencies attributed (`LICENSE`, `CREDITS.md`).
 - [x] CREDITS.md lists every photo used, with date and consent coverage.
-- [x] Video at most 3:00, shows only event-built work, about half on build sheet, check and quote, link tested in a private window. Done (T16): 2:54; the lead's frame check (one frame every 6 s) shows build sheet, fit, fees, estimate and PDF from about 0:54 to 2:24; the YouTube oEmbed for the link answered 200 without a login on 2026-11-01 20:34 ET. After the lead asked for a private-window check, the owner replied on 2026-11-01: "video link klappt" (the link works).
+- [ ] Video at most 3:00, shows only event-built work, about half on build sheet, check and quote, link tested in a private window. Open for the current cut: the owner's private-window check of the new link and the owner's listening check (1:24–1:32, "19% VAT"). History (T16): the first cut (2:54, https://youtu.be/Cvz3Yg3ld2M) was checked on 2026-11-01; the owner replied "video link klappt" (the link works) after the lead asked for a private-window check. Current cut (2:56, https://youtu.be/BC1Q0AY_HWk, uploaded by the owner on 2026-11-02): the same recording and voice, post-produced by OpenAI Codex (subtitles, zooms, audio levelling, end card). Duration 2:56.04 (ffprobe). In the lead's frame check (one frame every 3 s) the chapter labels show build sheet, fit, fees, estimate and PDF from about 0:40 to 2:23, and no person, readable plate, shop product photo or studio photo. The YouTube oEmbed for the new link answered 200 without a login on 2026-11-02 08:35 ET.
 - [ ] Live URL works without login on a second laptop. Partly done: checked 2026-10-30 in private windows on Chrome macOS and Safari iPhone; the second-laptop check is not recorded. The demo project is loaded and the spend cap is on.
 - [ ] Spend checked against the caps (Billing total $0.77 on 2026-10-30, see `docs/api-evidence.md`); the Billing spend limit is set by the owner. Final spend check pending.
 - [ ] Indie Developer track and Build for Your World selected, all fields filled, Tom listed as the Representative. Pending (T18); values are above.
