@@ -155,6 +155,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 ## T16 — Record the three-minute demo and backup
 
 - Priority: MVP. Estimate: 3h, Nov 3. Depends on: T15 and owner's recording time.
+- Status: DONE 2026-11-01: 2:54 video unlisted at https://youtu.be/Cvz3Yg3ld2M, owner confirmed "video link klappt" after a private-window check was requested; full-length backups on the owner's Google Drive and archive drive. See log.
 - Files: docs/demo-script.md/submission.md; video/backup outside repo unless explicitly cleared; small screenshots only with asset rights.
 - Work: rehearse PLAN 12 sequence with actual bike and actual checks; record screen and voice-over; show at least 90 seconds of sheet/paperwork/estimate; label cached/manual actions; avoid people and retailer photos; show only shipped event-built features.
 - Done when: owner reviews a <=3:00 video, has a successful full-length backup, and verifies the uploaded public video link in a private window; script names only models actually used. If search/voice/reference was cut, remove it from the script and model count. No application change is required solely to match an earlier storyboard.
@@ -1735,3 +1736,9 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - `/review-changes` quick (release, general): green, 2 minors (evidence for the time span and the oEmbed check; both recorded here, the item was left unticked).
 - Backups: main video, Hackathon folder (zip without .env files, node_modules, .next, .venv) and the iMovie library on the owner's Google Drive, md5 checked; first video cut and iMovie library also on the owner's archive drive.
 - T16 remains open only for the owner's private-window check.
+
+### T16 done — 2026-11-01 (lead)
+
+- After the lead asked for a private-window check, the owner replied "video link klappt" (the link works); the submission checklist item is ticked and T16 is marked DONE.
+- Live check after the push of 4e8f56e: `.venv/bin/python spike/deployment.py --origin https://dreambike-pied.vercel.app` 30 passed, 0 failed, 0 skipped (secret scan 0 value hits, 0 name hits); it may have hit the previous deployment while the docs-only build ran. `media/dreambike-renders-16x9.mp4` answers 200 on GitHub.
+- Committed without a push of its own (a docs-only push would trigger another deploy).
