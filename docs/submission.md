@@ -59,7 +59,7 @@ Meta models to name: SAM 3.1, Muse Spark (`muse-spark-1.3-contributor`), Muse Im
 1. Done 2026-11-02: required fields filled on the CV page; rubric answer recorded in the checklist (weights not verified by the lead).
 2. Done 2026-11-02 (T16): video recorded, URL checked in a private window, in README and here.
 3. Done: T15 pushed (later pushes up to e6f3b74 on 2026-11-02).
-4. Confirm the Claude Code disclosure wording in the README provenance section and the video ending.
+4. Done 2026-11-02: asked to confirm the Claude Code disclosure wording in the README provenance section and on the video end card, the owner replied "ja".
 5. Nov 5: check that `GET /api/budget` on the live site reports `liveEnabled` true. Nov 10: check that it reports false again.
 6. Decide on the personal details already in the public Git history: older commits of TASKS.md and PLAN.md name the shop on the studio photo and the family relation (for example commit 27638c4), and every commit carries the owner's university email as author. Decided by the owner on 2026-10-30: history stays unchanged (it is the dated evidence of the build); current files no longer name the shop or the family relation (README, PLAN.md, TASKS.md and one sentence in each of the two review answers in `review/planning/`, marked as removed).
 7. Done 2026-11-02 with a second device instead of a second laptop: private Safari window on the iPhone, about 9:00 ET (see checklist).
