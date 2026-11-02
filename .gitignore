@@ -51,3 +51,7 @@ spike/out/
 
 # Open security findings, kept local until fixed (owner, 2026-10-31)
 security-notes.md
+
+# Video drafts stay local; only the plate-blurred 16:9 render clip is public (owner, 2026-11-01)
+media/*
+!media/dreambike-renders-16x9.mp4

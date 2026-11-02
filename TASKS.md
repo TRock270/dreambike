@@ -1718,3 +1718,11 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Deploy identified without Vercel CLI: the new history.md bare-link escape is present in a live JS chunk.
 - `.venv/bin/python spike/deployment.py --origin https://dreambike-pied.vercel.app`: 30 passed, 0 failed, 0 skipped (403/413 probes on all 10 POST routes, secret scan of 10 JS files: 0 value hits, 0 name hits).
 - This log entry is committed locally only (a push for it alone would trigger another deploy); it goes out with the next push.
+
+### T16 media: public render clip — 2026-11-01, about 20:00–20:40 ET (lead, inline; review-changes wf_31a5cc0f-16f)
+
+- Owner's Canva clip of the renders (1440×1440 with a white band on top) cropped to 1440×810 (16:9, rows 630–1439) with ffmpeg; nothing else changed (30 fps, 24 s, no audio).
+- The model had drawn plate-like text onto the covered plates in some renders (camper "…W 10", van "GRW·CE…"). Both plate areas are blurred from 6.3 s to the end; lead checked the areas at 4 frames per second, no readable text. The main demo video's renders (project 37a86f23) have blank plates.
+- New `media/dreambike-renders-16x9.mp4` (13 MB) is the only tracked file in `media/`; the uncropped and unblurred drafts stay gitignored (`git check-ignore` checked). Owner cleared the file on 2026-11-01; CREDITS.md row and video-tools note added.
+- `/review-changes` quick (security, release, general): green, 3 minors; the tools note was added, the UTC date in the file metadata and the frame check are covered above.
+- T16 is still open: the main demo video (2:54, checked) waits for its YouTube link; README and submission.md get the link afterwards.
