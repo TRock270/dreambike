@@ -6,7 +6,7 @@ Built by Tom (GitHub TRock270), solo, for the Meta AI Developer Hackathon (Indie
 
 - Repository: https://github.com/TRock270/dreambike
 - Live site: https://dreambike-pied.vercel.app (opens without login; see "Live AI edits" below)
-- Demo video: https://youtu.be/BC1Q0AY_HWk (2:56, English subtitles, on YouTube)
+- Demo video: https://youtu.be/BC1Q0AY_HWk (2:56, English subtitles, unlisted on YouTube)
 
 ## Why
 

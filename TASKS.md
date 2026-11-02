@@ -155,7 +155,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 ## T16 — Record the three-minute demo and backup
 
 - Priority: MVP. Estimate: 3h, Nov 3. Depends on: T15 and owner's recording time.
-- Status: DONE 2026-11-01 for the first cut; reopened 2026-11-02 for the new cut until the owner's checks are logged. First cut: 2:54 video unlisted at https://youtu.be/Cvz3Yg3ld2M, owner confirmed "video link klappt" after a private-window check was requested; full-length backups on the owner's Google Drive and archive drive. See log. Superseded on 2026-11-02 by the post-produced 2:56 cut at https://youtu.be/BC1Q0AY_HWk (see "T16 video v2"); its private-window and listening checks are open.
+- Status: DONE 2026-11-02: current cut 2:56, unlisted at https://youtu.be/BC1Q0AY_HWk; the owner confirmed the private-window check, the unlisted setting and the listening check. First cut (DONE 2026-11-01): 2:54 video unlisted at https://youtu.be/Cvz3Yg3ld2M, owner confirmed "video link klappt" after a private-window check was requested; full-length backups on the owner's Google Drive and archive drive. See log. Superseded on 2026-11-02 by the post-produced cut (see "T16 video v2").
 - Files: docs/demo-script.md/submission.md; video/backup outside repo unless explicitly cleared; small screenshots only with asset rights.
 - Work: rehearse PLAN 12 sequence with actual bike and actual checks; record screen and voice-over; show at least 90 seconds of sheet/paperwork/estimate; label cached/manual actions; avoid people and retailer photos; show only shipped event-built features.
 - Done when: owner reviews a <=3:00 video, has a successful full-length backup, and verifies the uploaded public video link in a private window; script names only models actually used. If search/voice/reference was cut, remove it from the script and model count. No application change is required solely to match an earlier storyboard.
@@ -1752,3 +1752,8 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Rights sweep of the uploaded file (lead, one frame every 3 s, 59 frames, `ffmpeg fps=1/3,tile=3x4`): no person, readable plate or VIN, address, paper, shop product photo or studio photo; the zooms show only app UI with example product links; the renders are project 37a86f23 (blank plates) and the cleared public demo. Duration 176.04 s (ffprobe). Chapter labels: 02 Review from about 0:40, 05 Cached demo from about 2:23, end card from about 2:47.
 - `/review-changes` quick (release, general; wf_1d964a64-2a3): 1 unverified major (no rights sweep of v2), now done above; minors addressed: checklist item unticked until the owner's checks, CREDITS upload sentence narrowed to what is known, T16 card points to the new cut.
 - Open: the owner's private-window check of the new link and the listening check.
+
+### T16 v2 done — 2026-11-02 (lead)
+
+- Owner, asked for the private-window check, the listening check at 1:24–1:32 and the unlisted setting, replied: "Ja, alles bestätigt, pushe." Recorded as the owner's checks; no agent listened to the audio.
+- docs/submission.md video item ticked again; README and submission say "unlisted"; T16 status DONE for the current cut. Push authorised by the owner on 2026-11-02; the push result is in the next entry.
