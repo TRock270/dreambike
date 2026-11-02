@@ -1757,3 +1757,9 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 
 - Owner, asked for the private-window check, the listening check at 1:24–1:32 and the unlisted setting, replied: "Ja, alles bestätigt, pushe." Recorded as the owner's checks; no agent listened to the audio.
 - docs/submission.md video item ticked again; README and submission say "unlisted"; T16 status DONE for the current cut. Push authorised by the owner on 2026-11-02; the push result is in the next entry.
+
+### T16 push — 2026-11-02 (lead)
+
+- Pushed 4e8f56e..e6f3b74 (4905cc8, c7e9104, e6f3b74). README on GitHub (raw main) shows https://youtu.be/BC1Q0AY_HWk.
+- Live check after the push: `.venv/bin/python spike/deployment.py --origin https://dreambike-pied.vercel.app` 30 passed, 0 failed, 0 skipped (secret scan 0 value hits, 0 name hits); it may have hit the previous deployment while the docs-only build ran.
+- This entry is committed locally only; it goes out with the next push.
