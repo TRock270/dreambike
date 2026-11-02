@@ -173,6 +173,7 @@ Critical path: T0 → T1 → T2 → T3 → T4 → T5 → T6 → T8 → T9 → T1
 - Files: docs/submission.md, README final links, TASKS.md.
 - Work: owner verifies public repo/video/live URL, rights/provenance, spend and Billing cap, Indie/Build for Your World fields, representative details; submit by 6:00 PM ET (official deadline 9:00 PM ET).
 - Done when: the owner records actual submission confirmation and timestamp, all artifact links work unauthenticated, and no final claim exceeds shipped behavior. An automated agent does not invent confirmation or submit on the owner's behalf without authorization.
+- Status: DONE 2026-11-02 by the owner's report ("alles submitted", about 09:10 ET); no receipt seen by the lead. See log.
 
 ## T19 — Optional PCM WAV voice input
 
@@ -1763,3 +1764,11 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - Pushed 4e8f56e..e6f3b74 (4905cc8, c7e9104, e6f3b74). README on GitHub (raw main) shows https://youtu.be/BC1Q0AY_HWk.
 - Live check after the push: `.venv/bin/python spike/deployment.py --origin https://dreambike-pied.vercel.app` 30 passed, 0 failed, 0 skipped (secret scan 0 value hits, 0 name hits); it may have hit the previous deployment while the docs-only build ran.
 - This entry is committed locally only; it goes out with the next push.
+
+### T18 submission — 2026-11-02, about 08:50–09:15 ET (lead, inline)
+
+- Owner filled the CV form with the lead watching via screenshots: team Tom Sickert (solo, TRock270), Indie Developer track, Build for Your World, repo https://github.com/TRock270/dreambike, video https://youtu.be/BC1Q0AY_HWk. The project description, the Meta-use text and the "why Meta's models" text were drafted by the lead from README/submission facts and pasted by the owner. The optional survey answers were the owner's; the lead pointed out that the search-cost note belonged under "Something else", not under "Muse Code capability missing" (the owner then confirmed: "ja habe das feld geändert").
+- Owner: "alles submitted" at about 09:10 ET. No receipt was shown to the lead.
+- Owner checks recorded: rubric reply "bewertungstabelle ist so, wie du sie gefunden hast" (lead's reading: same weights as PLAN.md; not verified by the lead); Meta Billing total $1.69 (owner's reading; not reconciled with the ledger in docs/api-evidence.md, which ends at 2026-10-31); private Safari window on the iPhone at about 9:00 ET (banner, demo steps, demo PDF, Try editing). No second laptop.
+- Lead check without login at 09:10 ET: GitHub repo 200, live site 200, YouTube oEmbed 200, `/api/budget` 200 with `liveEnabled: false` (outside the Nov 5–9 window, as intended).
+- Still open (owner item 5): Nov 5 check that `/api/budget` reports `liveEnabled` true; Nov 10 check that it is false again.
