@@ -1726,3 +1726,12 @@ For each completed ticket append actual date/time ET, files changed, checks and 
 - New `media/dreambike-renders-16x9.mp4` (13 MB) is the only tracked file in `media/`; the uncropped and unblurred drafts stay gitignored (`git check-ignore` checked). Owner cleared the file on 2026-11-01; CREDITS.md row and video-tools note added.
 - `/review-changes` quick (security, release, general): green, 3 minors; the tools note was added, the UTC date in the file metadata and the frame check are covered above.
 - T16 is still open: the main demo video (2:54, checked) waits for its YouTube link; README and submission.md get the link afterwards.
+
+### T16 video link — 2026-11-01, about 20:30–20:45 ET (lead, inline; review-changes wf_3d02006c-3e3)
+
+- Owner uploaded the main demo video (`DreamBike Demo.mp4`, 2:54, 1920×1080) unlisted: https://youtu.be/Cvz3Yg3ld2M. `curl` on the YouTube oEmbed endpoint without a login at 20:34 ET: HTTP 200, title "DreamBike Demo", author Tom Sickert.
+- Lead frame check of the final cut (one frame every 6 s, then per second around the fixes): build sheet, fit details (exhaust "Fit problem"), fees, estimate (gross €9,333.44, VAT not on the official fee) and PDF from about 0:54 to 2:24; the browser error page before the public site was cut by the owner; no shop photo, readable plate, person or secret seen. Audio mean −28.8 dB, peak −4.3 dB.
+- README and docs/submission.md carry the link. The checklist item stays open until the owner's private-window check is recorded.
+- `/review-changes` quick (release, general): green, 2 minors (evidence for the time span and the oEmbed check; both recorded here, the item was left unticked).
+- Backups: main video, Hackathon folder (zip without .env files, node_modules, .next, .venv) and the iMovie library on the owner's Google Drive, md5 checked; first video cut and iMovie library also on the owner's archive drive.
+- T16 remains open only for the owner's private-window check.
